@@ -49,7 +49,11 @@ export function handle(fn: Handler): Handler {
       if (code === '23503') return json({ error: 'That refers to something that no longer exists.' }, 409);
       if (code === '22P02' || code === '23514') return json({ error: 'One of the values was not valid.' }, 400);
       console.error('Unhandled function error', e);
-      return json({ error: 'Something went wrong on our side. Please try again.' }, 500);
+      // Only a short code is returned (never the message or query), so failures can be diagnosed
+      // from the screen. 42P01 = a table is missing, 28P01/08006 = database connection problems.
+      const name = e instanceof Error ? e.name : 'Error';
+      const tag = code ? `code ${code}` : name;
+      return json({ error: `Something went wrong on our side (${tag}). Please try again.` }, 500);
     }
   };
 }
