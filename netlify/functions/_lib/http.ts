@@ -44,7 +44,9 @@ export function handle(fn: Handler): Handler {
       return await fn(req, ctx);
     } catch (e) {
       if (e instanceof HttpError) return json({ error: e.message }, e.status);
-      const code = (e as { code?: string } | null)?.code;
+      // The database library wraps the real Postgres error in `cause`, so look there too.
+      const wrapped = e as { code?: string; cause?: { code?: string; message?: string } } | null;
+      const code = wrapped?.code ?? wrapped?.cause?.code;
       if (code === '23505') return json({ error: 'That already exists.' }, 409);
       if (code === '23503') return json({ error: 'That refers to something that no longer exists.' }, 409);
       if (code === '22P02' || code === '23514') return json({ error: 'One of the values was not valid.' }, 400);
@@ -54,8 +56,12 @@ export function handle(fn: Handler): Handler {
       // Errors without a database code (setup or connection problems) also include their own short
       // text, cut to 160 characters. Database errors never include their text, since it can quote queries.
       const name = e instanceof Error ? e.name : 'Error';
-      const text = e instanceof Error ? e.message.replace(/\s+/g, ' ').slice(0, 160) : '';
-      const tag = code ? `code ${code}` : text ? `${name}: ${text}` : name;
+      // Postgres's own message (for example: relation "projects" does not exist) is short and safe;
+      // the wrapper's message quotes the whole query, so it is only used when there is no inner error.
+      const inner = wrapped?.cause?.message;
+      const raw = inner ?? (e instanceof Error ? e.message : '');
+      const text = raw.replace(/\s+/g, ' ').slice(0, 160);
+      const tag = code ? `code ${code}${inner ? `: ${text}` : ''}` : text ? `${name}: ${text}` : name;
       return json({ error: `Something went wrong on our side (${tag}). Please try again.` }, 500);
     }
   };
