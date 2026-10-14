@@ -35,7 +35,8 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
         setScans(res);
         const found = discover(res);
         // Tags are pre-selected; short letter-only codes only if already in the library.
-        setInc(new Set(found.filter((r) => r.kind === 'tag' || byCode.has(r.code.toUpperCase())).map((r) => r.code)));
+        // Tags are pre-ticked. Short codes only if already in the library. Room numbers are never pre-ticked.
+        setInc(new Set(found.filter((r) => r.kind === 'tag' || (r.kind === 'short' && byCode.has(r.code.toUpperCase()))).map((r) => r.code)));
         setPhase('pick');
       } catch (e) {
         if (!off && !(e instanceof DOMException)) setError(e instanceof Error ? e.message : 'The scan failed.');
@@ -65,13 +66,16 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
         });
         resolved.set(r.code, item);
       }
+      // Items for codes that were found but not ticked: their earlier unreviewed auto counts get removed.
+      const excludedIds = new Set<string>();
+      for (const r of rows) if (!inc.has(r.code)) for (const it of byCode.get(r.code.toUpperCase()) ?? []) excludedIds.add(it.id);
       // 2. Write each sheet's detections.
       let total = 0;
       let i = 0;
       for (const sc of scans) {
         i++;
         setStatus(`Saving counts: sheet ${i} of ${scans.length}…`);
-        total += await writeSheet(sc, resolved, inc, ambiguous);
+        total += await writeSheet(sc, resolved, inc, ambiguous, excludedIds);
       }
       onDone(`Counted ${plural(total, 'item')} across ${plural(scans.length, 'sheet')}.${ambiguous.size ? ` ${[...ambiguous].join(', ')} ${ambiguous.size === 1 ? 'has' : 'have'} several variants: review those and move each to the right item.` : ''} Counts are unreviewed until you confirm them.`);
     } catch (e) {
@@ -111,7 +115,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
                   return (
                     <tr key={r.code}>
                       <td><Check checked={inc.has(r.code)} disabled={phase === 'write'} onChange={(v) => setInc((cur) => { const n = new Set(cur); if (v) n.add(r.code); else n.delete(r.code); return n; })}><span className="sr-only">Count {r.code}</span></Check></td>
-                      <td style={{ fontWeight: 500 }}>{r.code}{r.kind === 'short' && <span className="tag tag-outline" style={{ marginLeft: 8 }} title="Short letter-only codes can match ordinary text. They are flagged for review.">Short code</span>}</td>
+                      <td style={{ fontWeight: 500 }}>{r.code}{r.kind === 'short' && <span className="tag tag-outline" style={{ marginLeft: 8 }} title="Short letter-only codes can match ordinary text. They are flagged for review.">Short code</span>}{r.kind === 'room' && <span className="tag tag-neutral" style={{ marginLeft: 8 }} title="A room name sits just above it and it appears once. Tick it only if it is really a device.">Looks like a room number</span>}</td>
                       <td>{lib ? <span className="muted">{lib[0].name}{lib.length > 1 ? ` (+${lib.length - 1} variant${lib.length === 2 ? '' : 's'}: flagged for review)` : ''}</span> : <input className="input" style={{ minHeight: 30, padding: '3px 8px' }} placeholder="Description (optional)" aria-label={`Description for ${r.code}`} value={names[r.code] ?? ''} disabled={phase === 'write'} onChange={(e) => setNames({ ...names, [r.code]: e.target.value })} />}</td>
                       <td className="right num">{r.total}</td>
                     </tr>
