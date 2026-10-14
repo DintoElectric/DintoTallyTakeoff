@@ -12,7 +12,8 @@ import { navigate, paths } from '../app/router.ts';
 import { useFetch } from '../app/useFetch.ts';
 import { DrawingView, type DrawingViewHandle, type ItemStyle, type MarkerData, type Tool } from '../viewer/DrawingView.tsx';
 import { loadFilePdf } from '../viewer/pdf.ts';
-import { useSheetStore } from './sheetStore.ts';
+import { getStore, useSheetStore } from './sheetStore.ts';
+import AutoCountDialog from './AutoCountDialog.tsx';
 import { ItemDialog } from './ItemDialog.tsx';
 import ExportDialog from './ExportDialog.tsx';
 
@@ -46,6 +47,9 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [zoomPct, setZoomPct] = useState(100);
   const [showItemDialog, setShowItemDialog] = useState(false);
   const [showExport, setShowExport] = useState(false);
+  const [showAuto, setShowAuto] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
+  const [reviewId, setReviewId] = useState<string | null>(null);
   const viewRef = useRef<DrawingViewHandle>(null);
 
   // ----- load the sheet's detections, and refresh counts after each saved batch -----
@@ -181,6 +185,40 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
     } catch (e) { toast(e instanceof ApiError ? e.message : 'Could not update the sheet.'); }
   }
 
+  // ----- review queue: unreviewed counts, lowest confidence first -----
+  const queue = useMemo(
+    () => snap.dets.filter((d) => d.status === 'unreviewed')
+      .sort((a, b) => (a.confidence ?? 1) - (b.confidence ?? 1) || a.y - b.y || a.x - b.x),
+    [snap.dets],
+  );
+  const reviewIndex = reviewId ? queue.findIndex((d) => d.id === reviewId) : -1;
+  const current = reviewIndex >= 0 ? queue[reviewIndex] : null;
+
+  const focusDet = useCallback((id: string | null) => {
+    setReviewId(id);
+    const d = id ? snap.dets.find((x) => x.id === id) : null;
+    if (d) { setSelected(new Set([d.id])); viewRef.current?.centerOn(d.x, d.y, 6); }
+  }, [snap.dets]);
+
+  const startReview = () => {
+    if (queue.length === 0) return toast('Nothing to review on this sheet.');
+    setReviewing(true);
+    focusDet(queue[0].id);
+  };
+  const stepAfter = (nextId: string | undefined) => { if (nextId) focusDet(nextId); else { setReviewing(false); setReviewId(null); setSelected(new Set()); toast('Review finished for this sheet.'); } };
+  const reviewAct = (kind: 'confirm' | 'reject') => {
+    if (!current || !store) return;
+    const next = queue[reviewIndex + 1]?.id ?? queue.find((d) => d.id !== current.id)?.id;
+    if (kind === 'confirm') store.setStatus([current.id], 'confirmed'); else store.setStatus([current.id], 'rejected');
+    stepAfter(next);
+  };
+  const confirmAllShown = () => {
+    if (!store || queue.length === 0) return;
+    store.setStatus(queue.map((d) => d.id), 'confirmed');
+    setReviewing(false); setReviewId(null);
+    toast(`Confirmed ${plural(queue.length, 'count')} on this sheet.`);
+  };
+
   // ----- keyboard -----
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
@@ -191,6 +229,10 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); if (!readOnly) store?.redo(); return; }
       if (mod) return;
       const k = e.key.toLowerCase();
+      if (reviewing && current && !readOnly) {
+        if (k === 'y') { reviewAct('confirm'); return; }
+        if (k === 'n') { reviewAct('reject'); return; }
+      }
       if (k === 'v') setTool('select');
       else if (k === 'a' && !readOnly) setTool('add');
       else if (k === 'b') setTool('box');
@@ -200,7 +242,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
     };
     window.addEventListener('keydown', on);
     return () => window.removeEventListener('keydown', on);
-  }, [store, readOnly, deleteSelected]);
+  }, [store, readOnly, deleteSelected, reviewing, current]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ----- missing sheet -----
   if (sheetsQ.data && !sheet) {
@@ -226,7 +268,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       <TopBar crumbs={[{ label: 'Projects', to: paths.projects() }, { label: project.data?.project.name ?? '…', to: paths.project(projectId) }, { label: sheetLabel }]}>
         {editorHint && <span className="save-state">{editorHint}</span>}
         {saveText && <span className={`save-state${snap.save.kind === 'error' ? ' err' : ''}`} role="status">{saveText}</span>}
-        <button className="btn btn-secondary" disabled title="Auto-detect arrives in a later stage. Count manually for now."><MagicWand size={14} /> Auto-detect sheet</button>
+        {!readOnly && <button className="btn btn-secondary" onClick={() => setShowAuto(true)} disabled={!sheet || !file}><MagicWand size={14} /> Auto-count sheet</button>}
         <button className="btn btn-primary" onClick={() => setShowExport(true)}><Export size={14} /> Export</button>
       </TopBar>
 
@@ -346,8 +388,25 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             {items.length > 0 && !readOnly && <div style={{ padding: '8px 4px' }}><button className="btn btn-ghost" onClick={() => setShowItemDialog(true)}><Plus size={14} /> Add item type</button></div>}
           </div>
           <div className="foot">
-            <div className="row" style={{ gap: 8 }}><WarningCircle size={16} /><span>{plural(flaggedShown, 'low-confidence detection')}</span></div>
-            <button className="btn btn-secondary btn-block" disabled title="Review stepping arrives with auto-detect (a later stage). Manual counts are never flagged.">Review flagged items</button>
+            <div className="row" style={{ gap: 8 }}><WarningCircle size={16} /><span>{plural(flaggedShown, 'low-confidence detection')} · {plural(queue.length, 'unreviewed count')} on this sheet</span></div>
+            {reviewing && current ? (
+              <div className="stack" style={{ gap: 8 }}>
+                <div className="hint" role="status">Reviewing {reviewIndex + 1} of {queue.length}: <b>{itemById.get(current.item_type_id)?.code ?? '?'}</b>{current.confidence !== null ? ` (${Math.round(current.confidence * 100)}% sure)` : ''}</div>
+                <div className="row" style={{ gap: 6 }}>
+                  <button className="btn btn-primary" style={{ flex: 1 }} onClick={() => reviewAct('confirm')}>Confirm (Y)</button>
+                  <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => reviewAct('reject')}>Not a device (N)</button>
+                </div>
+                <select className="input" aria-label="Change type (C)" value="" onChange={(e) => { if (e.target.value && current) { store?.retype([current.id], e.target.value); store?.setStatus([current.id], 'confirmed'); stepAfter(queue[reviewIndex + 1]?.id); } }}>
+                  <option value="">Change type…</option>{items.map((i) => <option key={i.id} value={i.id}>{i.code} · {i.name}</option>)}
+                </select>
+                <button className="btn btn-ghost" onClick={() => { setReviewing(false); setReviewId(null); }}>Stop reviewing</button>
+              </div>
+            ) : (
+              <div className="row" style={{ gap: 6 }}>
+                <button className="btn btn-secondary" style={{ flex: 1 }} disabled={queue.length === 0 || readOnly} onClick={startReview}>Review items</button>
+                <button className="btn btn-secondary" style={{ flex: 1 }} disabled={queue.length === 0 || readOnly} onClick={confirmAllShown} title="Mark every unreviewed count on this sheet as confirmed">Confirm all</button>
+              </div>
+            )}
             {!readOnly && sheet && (
               sheet.count_status === 'reviewed'
                 ? <button className="btn btn-secondary btn-block" onClick={() => setReviewed(false)}>Reopen sheet</button>
@@ -359,6 +418,10 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
 
       {showItemDialog && (
         <ItemDialog categories={categories} onClose={() => setShowItemDialog(false)} onCreated={(it) => { setShowItemDialog(false); setActiveItemId(it.id); void itemsQ.reload(); }} />
+      )}
+      {showAuto && sheet && (
+        <AutoCountDialog projectId={projectId} sheets={[sheet]} items={items} onClose={() => setShowAuto(false)}
+          onDone={(msg) => { setShowAuto(false); toast(msg); void itemsQ.reload(); void countsQ.reload(); void sheetsQ.reload(); void getStore(sheetId).load(true); }} />
       )}
       {showExport && project.data && <ExportDialog projectId={projectId} projectName={project.data.project.name} sheets={sheets} currentSheetId={sheetId} onClose={() => setShowExport(false)} onGoReview={() => setShowExport(false)} />}
     </>

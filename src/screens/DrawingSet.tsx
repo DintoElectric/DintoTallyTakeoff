@@ -8,6 +8,7 @@ import { navigate, paths } from '../app/router.ts';
 import { useFetch } from '../app/useFetch.ts';
 import { cancelUpload, dismissUpload, startUpload, useUploads } from '../upload/uploads.ts';
 import { FLOOR_OPTIONS } from '../upload/titleBlock.ts';
+import AutoCountDialog from './AutoCountDialog.tsx';
 
 const KIND_LABEL: Record<SheetKind, string> = { floor_plan: 'Floor plan', legend: 'Legend', site_plan: 'Site plan', schedule: 'Schedule', other: 'Other' };
 const STATUS_LABEL = { not_counted: 'Not counted', needs_review: 'Needs review', reviewed: 'Reviewed' } as const;
@@ -45,6 +46,7 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
   const [view, setView] = useState<'grid' | 'list'>('grid');
   const [sheets, setSheets] = useState<SheetRow[]>([]);
   const [confirmDelete, setConfirmDelete] = useState<DrawingFileRow | null>(null);
+  const [autoOpen, setAutoOpen] = useState(false);
   const picker = useRef<HTMLInputElement>(null);
   const jobs = useUploads(projectId);
 
@@ -61,7 +63,6 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
 
   const proj = project.data?.project;
   const enabled = sheets.filter((s) => s.count_enabled);
-  const hasSamples = (items.data?.items ?? []).some((i) => i.sample_count > 0);
   const libCount = items.data?.items.length ?? 0;
   const platesOk = sheets.length > 0 && sheets.filter((s) => s.kind === 'floor_plan').every((s) => s.number && s.floor);
 
@@ -97,9 +98,8 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
       <TopBar crumbs={[{ label: 'Projects', to: paths.projects() }, { label: proj?.name ?? '…', to: paths.project(projectId) }, { label: 'Drawing set' }]}>
         {canEdit && <button className="btn btn-secondary" onClick={() => picker.current?.click()}><UploadSimple size={14} /> Add drawings</button>}
         <input ref={picker} type="file" accept="application/pdf,.pdf" hidden onChange={(e) => { addFile(e.target.files?.[0]); e.target.value = ''; }} />
-        <button className="btn btn-primary" onClick={openWorkspace} disabled={sheets.length === 0}>
-          {hasSamples ? `Auto-detect ${enabled.length} sheets` : 'Open workspace'}
-        </button>
+        <button className="btn btn-secondary" onClick={openWorkspace} disabled={sheets.length === 0}>Open workspace</button>
+        {canEdit && <button className="btn btn-primary" onClick={() => setAutoOpen(true)} disabled={enabled.length === 0} title={enabled.length === 0 ? 'Tick Count on at least one sheet first.' : undefined}>Auto-count {enabled.length} sheet{enabled.length === 1 ? '' : 's'}</button>}
       </TopBar>
       <div className="two-col">
         <main className="sheet-main">
@@ -229,6 +229,10 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
         </aside>
       </div>
 
+      {autoOpen && (
+        <AutoCountDialog projectId={projectId} sheets={enabled} items={items.data?.items ?? []} onClose={() => setAutoOpen(false)}
+          onDone={(msg) => { setAutoOpen(false); toast(msg); void sheetsQ.reload(); void items.reload(); void project.reload(); const first = enabled[0]; if (first) navigate(paths.sheet(projectId, first.id)); }} />
+      )}
       {confirmDelete && (
         <Dialog title="Delete drawing set" onClose={() => setConfirmDelete(null)}>
           <div className="dialog-title">Delete “{confirmDelete.file_name}”?</div>
