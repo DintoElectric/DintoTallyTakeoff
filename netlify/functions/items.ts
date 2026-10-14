@@ -14,7 +14,7 @@ async function listItems(id: string | null) {
            (select count(*) from detections d where d.item_type_id = i.id and d.status <> 'rejected')::int as detection_count
       from item_types i
      where (${id}::uuid is null or i.id = ${id}::uuid)
-     order by i.code`;
+     order by i.code, i.created_at, i.id`;
 }
 
 function glyph(v: unknown): string | null {
