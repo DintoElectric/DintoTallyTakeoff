@@ -135,3 +135,57 @@ test('tag scan: title block and notes column are outside the count region', () =
   const hits = scanTags([pr('B13', 0.4, 0.5), pr('B13', 0.9, 0.5), pr('B13', 0.4, 0.99)]);
   assert.equal(hits.length, 1);
 });
+
+import { classify, signatureInBox, signatureAt as sigAt, similarity as sim } from '../src/detect/shapeMatch.ts';
+import type { Prim } from '../src/detect/primitives.ts';
+const prim = (x0: number, y0: number, x1: number, y1: number, n: number, fill: boolean, lum = 0): Prim => ({ x0, y0, x1, y1, n, fill, lum });
+// A 36x3 fixture drawn as doubled lines; the EM/OPEN variant adds a filled wedge and a triangle outline.
+const fixture = (ox: number, oy: number, vertical = false): Prim[] => {
+  const r = (x0: number, y0: number, x1: number, y1: number, n: number, f: boolean) => (vertical ? prim(oy + y0, ox + x0, oy + y1, ox + x1, n, f) : prim(ox + x0, oy + y0, ox + x1, oy + y1, n, f));
+  return [r(0, 0, 36, 0, 2, false), r(0, 3, 36, 3, 2, false), r(0, 0, 0, 3, 2, false), r(36, 0, 36, 3, 2, false)];
+};
+const wedge = (ox: number, oy: number, vertical = false): Prim[] => (vertical
+  ? [prim(oy, ox, oy + 3, ox + 34.6, 4, true), prim(oy, ox, oy + 3, ox + 34.6, 3, false)]
+  : [prim(ox, oy, ox + 34.6, oy + 3, 4, true), prim(ox, oy, ox + 34.6, oy + 3, 3, false)]);
+
+test('shape match: wedge variant vs plain, learned from boxed examples', () => {
+  const page = [...fixture(100, 100), ...fixture(300, 100), ...wedge(300, 100), ...fixture(500, 200), ...wedge(500, 200), ...fixture(700, 200)];
+  const plain = { id: 'plain', sig: signatureInBox(page, { x0: 96, y0: 96, x1: 140, y1: 106 }) };
+  const em = { id: 'em', sig: signatureInBox(page, { x0: 296, y0: 96, x1: 340, y1: 106 }) };
+  const at = (x: number, y: number) => sigAt(page, x, y);
+  assert.equal(classify(at(520, 215), [plain, em])?.id, 'em');     // another wedge fixture, different place
+  assert.equal(classify(at(720, 215), [plain, em])?.id, 'plain');
+  assert.equal(classify(at(720, 215), [plain, em])?.certain, false); // plain is decided by absence, so it is flagged
+  assert.equal(classify(at(520, 215), [plain, em])?.certain, true);
+});
+
+test('shape match: a rotated (vertical) wedge fixture is still recognised', () => {
+  const page = [...fixture(300, 100), ...wedge(300, 100), ...fixture(100, 100), ...fixture(500, 300, true), ...wedge(500, 300, true)];
+  const plain = { id: 'plain', sig: signatureInBox(page, { x0: 96, y0: 96, x1: 140, y1: 106 }) };
+  const em = { id: 'em', sig: signatureInBox(page, { x0: 296, y0: 96, x1: 340, y1: 106 }) };
+  // the vertical fixture occupies x 300..303, y 500..536; its tag sits beside it
+  assert.equal(classify(sigAt(page, 320, 518), [plain, em])?.id, 'em');
+});
+
+test('shape match: gray hatching and long walls are ignored', () => {
+  const noise = [prim(0, 0, 500, 0, 2, false, 0), prim(0, 0, 30, 30, 2, false, 0.67), prim(10, 10, 20, 20, 4, true, 0.9)];
+  assert.equal(sigAt(noise, 20, 20).length, 0);
+  assert.equal(sim([], []), 1);
+});
+
+import { markRoomNumbers } from '../src/detect/tagScan.ts';
+const hit = (code: string, x: number, y: number) => ({ code, x, y, kind: 'tag' as const, h: 0.0044 });
+test('room numbers: a name directly above a one-off code marks it as a room', () => {
+  const runs = [pr('SHAFT', 0.4, 0.4, 0.02), pr('X06', 0.4, 0.405, 0.015)];
+  const out = markRoomNumbers([hit('X06', 0.4, 0.405)], runs);
+  assert.equal(out[0].kind, 'room');
+});
+test('room numbers: repeated codes and codes with no name above stay fixtures', () => {
+  const runs = [pr('SHAFT', 0.4, 0.4, 0.02)];
+  const rep = markRoomNumbers([hit('B13', 0.4, 0.405), hit('B13', 0.2, 0.2), hit('B13', 0.6, 0.6)], runs);
+  assert.ok(rep.every((h) => h.kind === 'tag'));
+  assert.equal(markRoomNumbers([hit('D2', 0.8, 0.8)], runs)[0].kind, 'tag');
+});
+test('room numbers: a leading zero in the digits marks a room (X06)', () => {
+  assert.equal(markRoomNumbers([hit('X07', 0.1, 0.1)], [])[0].kind, 'room');
+});
