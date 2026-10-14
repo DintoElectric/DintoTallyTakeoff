@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import {
-  ArrowCounterClockwise, ArrowClockwise, Cursor, Eraser, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus,
+  ArrowCounterClockwise, ArrowClockwise, Cursor, Eraser, Eye, EyeSlash, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus,
   PlusCircle, Plus, Selection, Stack, WarningCircle,
 } from '@phosphor-icons/react';
 import type { CategoryRow, CountRow, DrawingFileRow, ItemTypeRow, ProjectRow, SheetRow } from '../../shared/types.ts';
@@ -43,6 +43,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [activeItemId, setActiveItemId] = useState<string | null>(null);
   const [scope, setScope] = useState<'sheet' | 'all'>('sheet');
   const [onlyActive, setOnlyActive] = useState(false);
+  const [hideMarkers, setHideMarkers] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [zoomPct, setZoomPct] = useState(100);
   const [showItemDialog, setShowItemDialog] = useState(false);
@@ -113,10 +114,10 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const styles = useMemo(() => new Map<string, ItemStyle>(items.map((i) => [i.id, { shape: i.marker_shape, glyph: i.marker_glyph }])), [items]);
 
   const markers: MarkerData[] = useMemo(
-    () => snap.dets
+    () => (hideMarkers ? [] : snap.dets)
       .filter((d) => !onlyActive || d.item_type_id === activeItemId)
       .map((d) => ({ id: d.id, x: d.x, y: d.y, itemId: d.item_type_id, flagged: d.status === 'unreviewed' && d.confidence !== null && d.confidence < threshold })),
-    [snap.dets, onlyActive, activeItemId, threshold],
+    [snap.dets, onlyActive, activeItemId, threshold, hideMarkers],
   );
 
   // Counts are always derived from detections (never stored constants).
@@ -237,6 +238,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       else if (k === 'a' && !readOnly) setTool('add');
       else if (k === 'b') setTool('box');
       else if (k === 'e' && !readOnly) setTool('erase');
+      else if (k === 'h') setHideMarkers((v) => !v);
       else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelected(); }
       else if (e.key === 'Escape') setSelected(new Set());
     };
@@ -310,6 +312,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             <button className="tool" onClick={() => viewRef.current?.zoomBy(1 / 1.3)} aria-label="Zoom out"><MagnifyingGlassMinus size={18} /></button>
             <button className="btn btn-ghost" style={{ minWidth: 52 }} onClick={() => viewRef.current?.fit()} title="Fit to screen">{zoomPct}%</button>
             <button className="tool" onClick={() => viewRef.current?.zoomBy(1.3)} aria-label="Zoom in"><MagnifyingGlassPlus size={18} /></button>
+            <button className={`tool${hideMarkers ? ' on' : ''}`} onClick={() => setHideMarkers(!hideMarkers)} aria-pressed={hideMarkers} aria-label="Hide markers (H)" title="Hide or show markers (H)">{hideMarkers ? <EyeSlash size={18} /> : <Eye size={18} />}</button>
             <button className={`btn btn-secondary`} onClick={() => setOnlyActive(!onlyActive)} aria-pressed={onlyActive} title="Show all markers, or only the active item's">
               <Stack size={14} /> {onlyActive && activeItem ? `Only ${activeItem.code}` : 'All items'}
             </button>
