@@ -98,3 +98,40 @@ test('aggregate: counts come only from detections, totals reconcile', () => {
   const sel = aggregate(data, { sheetIds: new Set(['s2']) });
   assert.equal(sel.grandTotal, 6);
 });
+
+import { scanTags, splitRepeats, summarize } from '../src/detect/tagScan.ts';
+import type { PageRun } from '../src/detect/pageRuns.ts';
+const pr = (str: string, cx = 0.4, cy = 0.5, w = 0.03): PageRun => ({ str, cx, cy, w, h: 0.005, rotated: false });
+
+test('tag scan: single tags, joined repeats, spaced mixes', () => {
+  const hits = scanTags([pr('B13'), pr('B13B13B13B13', 0.5), pr('B13 B7B7', 0.6), pr('A17A17', 0.3)]);
+  const c = Object.fromEntries(summarize(hits).map((t) => [t.code, t.count]));
+  assert.deepEqual(c, { B13: 6, B7: 2, A17: 2 });
+  assert.deepEqual(splitRepeats('B13B13'), { unit: 'B13', n: 2 });
+  assert.deepEqual(splitRepeats('XL4XL4XL4'), { unit: 'XL4', n: 3 });
+  assert.equal(splitRepeats('B13'), null);
+});
+
+test('tag scan: sub-token positions spread along a joined run', () => {
+  const hits = scanTags([pr('B13B13B13', 0.5, 0.5, 0.09)]);
+  const xs = hits.map((h) => h.x).sort();
+  assert.equal(hits.length, 3);
+  assert.ok(xs[0] < 0.5 && xs[2] > 0.5 && Math.abs(xs[1] - 0.5) < 1e-9);
+});
+
+test('tag scan: sentences and look-alikes are not tags', () => {
+  const hits = scanTags([pr('REFER TO SHEET EL101.6 FOR TUNNEL LIGHTING CONTROLS.'), pr('EHLP/1B1/5'), pr('P-18.5'), pr('EL101.1'), pr('S113'), pr('r1, r2e'), pr('1/8" = 1\'-0"')]);
+  assert.equal(hits.length, 0);
+});
+
+test('tag scan: short letter codes only when the whole run is the code, and marked short', () => {
+  const hits = scanTags([pr('OS'), pr('S'), pr('OF THE PLAN'), pr('TO')]);
+  const m = Object.fromEntries(summarize(hits).map((t) => [t.code, t.kind]));
+  assert.equal(m.OS, 'short'); assert.equal(m.S, 'short');
+  assert.ok(!('OF' in m));
+});
+
+test('tag scan: title block and notes column are outside the count region', () => {
+  const hits = scanTags([pr('B13', 0.4, 0.5), pr('B13', 0.9, 0.5), pr('B13', 0.4, 0.99)]);
+  assert.equal(hits.length, 1);
+});
