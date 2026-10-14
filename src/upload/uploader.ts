@@ -72,7 +72,7 @@ async function thumbnail(page: PDFPageProxy): Promise<Blob | null> {
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.floor(vp.width));
   canvas.height = Math.max(1, Math.floor(vp.height));
-  await page.render({ canvas, viewport: vp }).promise;
+  await page.render({ canvas, viewport: vp, annotationMode: 0 }).promise;
   const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/jpeg', 0.72));
   canvas.width = canvas.height = 0; // release the bitmap
   return blob;
