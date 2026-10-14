@@ -17,7 +17,12 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
   const [status, setStatus] = useState('');
   const abort = useRef(new AbortController());
 
-  const byCode = useMemo(() => new Map(items.map((i) => [i.code.toUpperCase(), i])), [items]);
+  // Several library items can share a code (variants), so each code maps to a list.
+  const byCode = useMemo(() => {
+    const m = new Map<string, ItemTypeRow[]>();
+    for (const i of items) m.set(i.code.toUpperCase(), [...(m.get(i.code.toUpperCase()) ?? []), i]);
+    return m;
+  }, [items]);
   const rows: CodeRow[] = useMemo(() => discover(scans), [scans]);
 
   useEffect(() => {
@@ -44,18 +49,21 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
     setPhase('write');
     setError(null);
     try {
-      // 1. Create library items for new tags.
-      const map = new Map<string, ItemTypeRow>(items.map((i) => [i.code, i]));
-      const wanted = rows.filter((r) => inc.has(r.code));
-      for (const r of wanted) {
-        if (map.has(r.code)) continue;
-        const ci = [...byCode.keys()].find((k) => k === r.code.toUpperCase());
-        if (ci) { map.set(r.code, byCode.get(ci)!); continue; }
+      // 1. Resolve each chosen tag to a library item, creating items for new tags.
+      const resolved = new Map<string, ItemTypeRow>();
+      const ambiguous = new Set<string>();
+      for (const r of rows.filter((x) => inc.has(x.code))) {
+        const lib = byCode.get(r.code.toUpperCase());
+        if (lib?.length) {
+          resolved.set(r.code, lib[0]); // the first item with this code is the default
+          if (lib.length > 1) ambiguous.add(r.code);
+          continue;
+        }
         setStatus(`Adding ${r.code} to the library…`);
         const { item } = await api<{ item: ItemTypeRow }>('/items', {
           body: { code: r.code, name: (names[r.code] ?? '').trim() || r.code, marker_shape: r.kind === 'short' ? 'square' : 'circle', marker_glyph: r.code.slice(0, 2) },
         });
-        map.set(r.code, item);
+        resolved.set(r.code, item);
       }
       // 2. Write each sheet's detections.
       let total = 0;
@@ -63,9 +71,9 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
       for (const sc of scans) {
         i++;
         setStatus(`Saving counts: sheet ${i} of ${scans.length}…`);
-        total += await writeSheet(sc, map, inc);
+        total += await writeSheet(sc, resolved, inc, ambiguous);
       }
-      onDone(`Counted ${plural(total, 'item')} across ${plural(scans.length, 'sheet')}. They are marked unreviewed until you confirm them.`);
+      onDone(`Counted ${plural(total, 'item')} across ${plural(scans.length, 'sheet')}.${ambiguous.size ? ` ${[...ambiguous].join(', ')} ${ambiguous.size === 1 ? 'has' : 'have'} several variants: review those and move each to the right item.` : ''} Counts are unreviewed until you confirm them.`);
     } catch (e) {
       setError(e instanceof ApiError || e instanceof Error ? e.message : 'Saving the counts failed.');
       setPhase('pick');
@@ -104,7 +112,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
                     <tr key={r.code}>
                       <td><Check checked={inc.has(r.code)} disabled={phase === 'write'} onChange={(v) => setInc((cur) => { const n = new Set(cur); if (v) n.add(r.code); else n.delete(r.code); return n; })}><span className="sr-only">Count {r.code}</span></Check></td>
                       <td style={{ fontWeight: 500 }}>{r.code}{r.kind === 'short' && <span className="tag tag-outline" style={{ marginLeft: 8 }} title="Short letter-only codes can match ordinary text. They are flagged for review.">Short code</span>}</td>
-                      <td>{lib ? <span className="muted">{lib.name}</span> : <input className="input" style={{ minHeight: 30, padding: '3px 8px' }} placeholder="Description (optional)" aria-label={`Description for ${r.code}`} value={names[r.code] ?? ''} disabled={phase === 'write'} onChange={(e) => setNames({ ...names, [r.code]: e.target.value })} />}</td>
+                      <td>{lib ? <span className="muted">{lib[0].name}{lib.length > 1 ? ` (+${lib.length - 1} variant${lib.length === 2 ? '' : 's'}: flagged for review)` : ''}</span> : <input className="input" style={{ minHeight: 30, padding: '3px 8px' }} placeholder="Description (optional)" aria-label={`Description for ${r.code}`} value={names[r.code] ?? ''} disabled={phase === 'write'} onChange={(e) => setNames({ ...names, [r.code]: e.target.value })} />}</td>
                       <td className="right num">{r.total}</td>
                     </tr>
                   );

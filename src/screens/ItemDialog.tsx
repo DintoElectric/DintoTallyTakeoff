@@ -29,7 +29,7 @@ export function ItemDialog({ categories, defaultCategoryId, onClose, onCreated }
       });
       onCreated(item);
     } catch (e) {
-      setErr(e instanceof ApiError ? (e.status === 409 ? 'An item with that code already exists.' : e.message) : 'Could not save the item.');
+      setErr(e instanceof ApiError ? (e.status === 409 ? 'An item with that code and description already exists. To add a variant, use a different description.' : e.message) : 'Could not save the item.');
       setBusy(false);
     }
   }
