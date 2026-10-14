@@ -8,7 +8,7 @@ import { appPalette, drawMarker, type Palette } from './markerDraw.ts';
 export type Tool = 'select' | 'add' | 'box' | 'erase';
 export interface MarkerData { id: string; x: number; y: number; itemId: string; flagged: boolean }
 export interface ItemStyle { shape: MarkerShape; glyph: string | null }
-export interface DrawingViewHandle { zoomBy(factor: number): void; fit(): void }
+export interface DrawingViewHandle { zoomBy(factor: number): void; fit(): void; centerOn(x: number, y: number, zoomFactor?: number): void }
 
 interface Props {
   page: PDFPageProxy | null;
@@ -126,7 +126,7 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
     canvas.height = Math.ceil(rh * scale);
     try {
       const vp = pg.getViewport({ scale });
-      const task = pg.render({ canvas, viewport: vp, transform: [1, 0, 0, 1, -x0 * scale, -y0 * scale] });
+      const task = pg.render({ canvas, viewport: vp, annotationMode: 0, transform: [1, 0, 0, 1, -x0 * scale, -y0 * scale] });
       detailTask.current = task;
       await task.promise;
     } catch (e) {
@@ -175,10 +175,19 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
     apply();
   }, [apply]);
 
+  // Centers a normalized page point; zoomFactor is relative to "fit" (e.g. 6 = six times the fit zoom).
+  const centerOn = useCallback((nx: number, ny: number, zoomFactor?: number) => {
+    const z = zoomFactor ? clamp(fitZ.current * zoomFactor, fitZ.current * 0.3, Math.max(8, fitZ.current * 30)) : view.current.z;
+    const { w, h } = size.current;
+    view.current = { z, tx: w / 2 - nx * pageW * z, ty: h / 2 - ny * pageH * z };
+    apply();
+  }, [pageW, pageH, apply]);
+
   useImperativeHandle(ref, () => ({
     zoomBy: (f: number) => zoomAt(size.current.w / 2, size.current.h / 2, f),
     fit,
-  }), [zoomAt, fit]);
+    centerOn,
+  }), [zoomAt, fit, centerOn]);
 
   /* ---------- size + page lifecycle ---------- */
   useEffect(() => {
@@ -211,7 +220,7 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
       canvas.width = Math.ceil(pageW * scale);
       canvas.height = Math.ceil(pageH * scale);
       try {
-        task = page.render({ canvas, viewport: page.getViewport({ scale }) });
+        task = page.render({ canvas, viewport: page.getViewport({ scale }), annotationMode: 0 }); // 0 = hide markups
         await task.promise;
       } catch (e) {
         if ((e as { name?: string })?.name !== 'RenderingCancelledException') {

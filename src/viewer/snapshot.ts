@@ -18,7 +18,7 @@ export async function renderSnapshot(
   const canvas = document.createElement('canvas');
   canvas.width = Math.ceil(vp.width);
   canvas.height = Math.ceil(vp.height);
-  await page.render({ canvas, viewport: vp }).promise;
+  await page.render({ canvas, viewport: vp, annotationMode: 0 }).promise;
   const ctx = canvas.getContext('2d')!;
   const size = Math.max(14, Math.round(canvas.width / 150)); // readable at the printed size
   for (const m of markers) {
