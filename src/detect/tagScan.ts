@@ -12,8 +12,8 @@ export interface Region { x0: number; y0: number; x1: number; y1: number }
 /** Plan area: leaves out the title block and notes column on the right, and the drawing border. */
 export const DEFAULT_COUNT_REGION: Region = { x0: 0.02, y0: 0.03, x1: 0.82, y1: 0.97 };
 
-export type TagKind = 'tag' | 'short';
-export interface TagHit { code: string; x: number; y: number; kind: TagKind }
+export type TagKind = 'tag' | 'short' | 'room';
+export interface TagHit { code: string; x: number; y: number; kind: TagKind; h?: number }
 
 /** "B13B13B13" is 3 hits of B13. Returns the repeated unit and its count, or null. */
 export function splitRepeats(s: string): { unit: string; n: number } | null {
@@ -55,11 +55,11 @@ export function scanTags(runs: PageRun[], region: Region = DEFAULT_COUNT_REGION)
       x: r.rotated ? r.cx : r.cx - r.w / 2 + ((offset + len / 2) / s.length) * r.w,
       y: r.rotated ? r.cy - (r.w * 0) : r.cy,
     });
-    if (TAG_RE.test(s)) { hits.push({ code: s, x: r.cx, y: r.cy, kind: 'tag' }); continue; }
-    if (SHORT_RE.test(s)) { hits.push({ code: s, x: r.cx, y: r.cy, kind: 'short' }); continue; }
+    if (TAG_RE.test(s)) { hits.push({ code: s, x: r.cx, y: r.cy, kind: 'tag', h: r.h }); continue; }
+    if (SHORT_RE.test(s)) { hits.push({ code: s, x: r.cx, y: r.cy, kind: 'short', h: r.h }); continue; }
     const rep = splitRepeats(s);
     if (rep) {
-      for (let i = 0; i < rep.n; i++) hits.push({ code: rep.unit, ...along(i * rep.unit.length, rep.unit.length), kind: 'tag' });
+      for (let i = 0; i < rep.n; i++) hits.push({ code: rep.unit, ...along(i * rep.unit.length, rep.unit.length), kind: 'tag', h: r.h });
       continue;
     }
     // Runs like "B13 B13B13B13" or "A17 A17": split on spaces, then repeat/known-split each part.
@@ -67,18 +67,44 @@ export function scanTags(runs: PageRun[], region: Region = DEFAULT_COUNT_REGION)
     for (const part of s.split(/(\s+)/)) {
       const p = part;
       if (p.trim() && !/\s/.test(p)) {
-        if (TAG_RE.test(p)) hits.push({ code: p, ...along(offset, p.length), kind: 'tag' });
+        if (TAG_RE.test(p)) hits.push({ code: p, ...along(offset, p.length), kind: 'tag', h: r.h });
         else {
           const rp = splitRepeats(p);
-          if (rp) for (let i = 0; i < rp.n; i++) hits.push({ code: rp.unit, ...along(offset + i * rp.unit.length, rp.unit.length), kind: 'tag' });
+          if (rp) for (let i = 0; i < rp.n; i++) hits.push({ code: rp.unit, ...along(offset + i * rp.unit.length, rp.unit.length), kind: 'tag', h: r.h });
           else if (/^[A-Z0-9*]+$/.test(p) && /\d/.test(p)) {
             const sp = splitByKnown(p, known);
-            if (sp) { let o = offset; for (const c of sp) { hits.push({ code: c, ...along(o, c.length), kind: 'tag' }); o += c.length; } }
+            if (sp) { let o = offset; for (const c of sp) { hits.push({ code: c, ...along(o, c.length), kind: 'tag', h: r.h }); o += c.length; } }
           }
         }
       }
       offset += p.length;
     }
+  }
+  return markRoomNumbers(hits, live);
+}
+
+const ROOM_NAME_WORD = /[A-Z]{4,}/;
+
+/**
+ * Room callouts ("SHAFT" over "X06") look just like fixture tags. They differ in two ways: a room name sits
+ * directly above, and the number appears once on the sheet (each room has one), while fixture tags repeat.
+ * Digits with a leading zero (X06, X07) are another giveaway. Such hits are marked 'room', not dropped.
+ */
+export function markRoomNumbers(hits: TagHit[], runs: PageRun[]): TagHit[] {
+  const perCode = new Map<string, number>();
+  for (const h of hits) perCode.set(h.code, (perCode.get(h.code) ?? 0) + 1);
+  for (const h of hits) {
+    if (h.kind !== 'tag') continue;
+    const rare = (perCode.get(h.code) ?? 0) <= 2;
+    const leadingZero = /^[A-Z]{1,3}0\d/.test(h.code);
+    const gh = h.h ?? 0.0044;
+    const nameAbove = runs.some((r) => {
+      const t = r.str.trim();
+      if (t.length > 32 || !ROOM_NAME_WORD.test(t) || TAG_RE.test(t)) return false;
+      const dy = h.y - r.cy;
+      return dy > 0 && dy <= gh * 4.2 && Math.abs(r.cx - h.x) <= 0.004 + 0.15 * r.w;
+    });
+    if ((rare && nameAbove) || leadingZero) h.kind = 'room';
   }
   return hits;
 }
@@ -89,6 +115,7 @@ export function summarize(hits: TagHit[]): TagSummary[] {
   for (const h of hits) {
     const e = m.get(h.code) ?? { code: h.code, kind: h.kind, count: 0 };
     e.count++;
+    if (h.kind !== 'room') e.kind = h.kind === 'tag' || e.kind === 'room' ? h.kind : e.kind; // one real tag makes the code a tag
     m.set(h.code, e);
   }
   return [...m.values()].sort((a, b) => b.count - a.count || a.code.localeCompare(b.code));
