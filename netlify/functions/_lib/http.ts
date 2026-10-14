@@ -51,8 +51,11 @@ export function handle(fn: Handler): Handler {
       console.error('Unhandled function error', e);
       // Only a short code is returned (never the message or query), so failures can be diagnosed
       // from the screen. 42P01 = a table is missing, 28P01/08006 = database connection problems.
+      // Errors without a database code (setup or connection problems) also include their own short
+      // text, cut to 160 characters. Database errors never include their text, since it can quote queries.
       const name = e instanceof Error ? e.name : 'Error';
-      const tag = code ? `code ${code}` : name;
+      const text = e instanceof Error ? e.message.replace(/\s+/g, ' ').slice(0, 160) : '';
+      const tag = code ? `code ${code}` : text ? `${name}: ${text}` : name;
       return json({ error: `Something went wrong on our side (${tag}). Please try again.` }, 500);
     }
   };
