@@ -8,6 +8,7 @@ import { scanTags, type TagHit, type TagKind } from './tagScan.ts';
 
 export const CONF_TAG = 0.98;   // exact tag text: not flagged
 export const CONF_SHORT = 0.7;  // short letter-only codes: always flagged for review
+export const CONF_AMBIGUOUS = 0.6; // the code belongs to several library items (variants): flagged so you choose
 
 export interface SheetScan { sheet: SheetRow; hits: TagHit[]; error?: string }
 
@@ -57,7 +58,7 @@ const NEAR = 0.004; // existing confirmed counts within this distance block a du
  * Writes the scan for one sheet. Re-running replaces earlier unreviewed auto results for the same items,
  * and never touches manual or confirmed counts (a hit next to one of those is skipped, not doubled).
  */
-export async function writeSheet(scan: SheetScan, itemByCode: Map<string, ItemTypeRow>, include: Set<string>): Promise<number> {
+export async function writeSheet(scan: SheetScan, itemByCode: Map<string, ItemTypeRow>, include: Set<string>, ambiguous: Set<string> = new Set()): Promise<number> {
   const mine = scan.hits.filter((h) => include.has(h.code) && itemByCode.has(h.code));
   const items = new Set(mine.map((h) => itemByCode.get(h.code)!.id));
   const existing = await api<{ detections: Detection[] }>(`/sheets/${scan.sheet.id}/detections`);
@@ -73,7 +74,7 @@ export async function writeSheet(scan: SheetScan, itemByCode: Map<string, ItemTy
     if (keep.some((d) => d.item_type_id === item.id && Math.abs(d.x - h.x) < NEAR * 3 && Math.abs(d.y - h.y) < NEAR * 3)) continue;
     ops.push({ op: 'add', detection: {
       id: crypto.randomUUID(), item_type_id: item.id, x: Math.min(1, Math.max(0, h.x)), y: Math.min(1, Math.max(0, h.y)),
-      bbox: null, confidence: h.kind === 'tag' ? CONF_TAG : CONF_SHORT, source: 'auto', status: 'unreviewed',
+      bbox: null, confidence: ambiguous.has(h.code) ? CONF_AMBIGUOUS : h.kind === 'tag' ? CONF_TAG : CONF_SHORT, source: 'auto', status: 'unreviewed',
     } });
     added++;
   }
