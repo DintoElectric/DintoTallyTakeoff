@@ -44,4 +44,8 @@ await db.query(`delete from projects where id = $1`, [p.id]);
 assert.equal((await db.query(`select count(*)::int n from detections`)).rows[0].n, 0);
 // coordinate check constraint
 await assert.rejects(db.query(`insert into detections (id,sheet_id,item_type_id,x,y,source,created_by) values (gen_random_uuid(),gen_random_uuid(),gen_random_uuid(),2,0,'manual','u')`));
+// items may share a code when the description differs; code + description stays unique
+await db.query(`insert into item_types (code,name,created_by) values ('D9','4'' SURFACE/WET','u1')`);
+await db.query(`insert into item_types (code,name,created_by) values ('D9','4'' SURFACE/WET/EM/OPEN','u1')`);
+await assert.rejects(db.query(`insert into item_types (code,name,created_by) values ('d9','4'' surface/wet','u1')`), /unique|duplicate/i);
 console.log('db.test OK');
