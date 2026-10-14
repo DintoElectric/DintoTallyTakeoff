@@ -15,22 +15,24 @@ export interface Palette {
 export function appPalette(): Palette {
   const cs = getComputedStyle(document.documentElement);
   const v = (n: string, d: string) => cs.getPropertyValue(n).trim() || d;
+  // The drawing is a white page, so markers use darker strokes and see-through tints:
+  // the tag or symbol underneath must stay readable.
   return {
-    base: v('--color-neutral-400', '#b2b6ca'),
-    baseFill: v('--color-neutral-900', '#292b31'),
-    active: v('--color-accent', '#9184d9'),
-    activeFill: v('--color-accent-900', '#2b2741'),
-    glyph: v('--color-neutral-300', '#cfd3e5'),
-    glyphActive: v('--color-accent-200', '#e7e5fe'),
-    flag: v('--color-accent-300', '#d2cefd'),
-    select: v('--color-text', '#e9e9ed'),
-    glow: 'rgba(145,132,217,0.45)',
+    base: v('--color-neutral-700', '#595d6c'),
+    baseFill: 'rgba(89,93,108,0.10)',
+    active: v('--color-accent-600', '#796cbf'),
+    activeFill: 'rgba(121,108,191,0.16)',
+    glyph: v('--color-neutral-700', '#595d6c'),
+    glyphActive: v('--color-accent-700', '#5d5294'),
+    flag: v('--color-accent-700', '#5d5294'),
+    select: v('--color-bg', '#161826'),
+    glow: 'rgba(121,108,191,0.35)',
   };
 }
 
-/** For marked-up sheet snapshots printed on paper: dark ink and accent on white. */
+/** For marked-up sheet snapshots printed on paper: dark ink and accent on white, see-through. */
 export const paperPalette: Palette = {
-  base: '#3f424d', baseFill: 'rgba(255,255,255,0.85)', active: '#5d5294', activeFill: 'rgba(210,206,253,0.75)',
+  base: '#3f424d', baseFill: 'rgba(63,66,77,0.10)', active: '#5d5294', activeFill: 'rgba(93,82,148,0.16)',
   glyph: '#292b31', glyphActive: '#2b2741', flag: '#5d5294', select: '#292b31', glow: 'rgba(0,0,0,0)',
 };
 
@@ -49,7 +51,7 @@ function shapePath(ctx: CanvasRenderingContext2D, shape: MarkerShape, x: number,
 /** Draws one marker at screen position (x, y). Size is constant on screen at any zoom (spec 2.10). */
 export function drawMarker(
   ctx: CanvasRenderingContext2D, p: Palette, shape: MarkerShape, glyph: string | null,
-  x: number, y: number, opts: { size?: number; active?: boolean; selected?: boolean; flagged?: boolean },
+  x: number, y: number, opts: { size?: number; active?: boolean; selected?: boolean; flagged?: boolean; glyph?: boolean },
 ) {
   const s = opts.size ?? 16;
   ctx.save();
@@ -61,7 +63,7 @@ export function drawMarker(
   ctx.lineWidth = 1.5;
   ctx.strokeStyle = opts.active ? p.active : p.base;
   ctx.stroke();
-  if (glyph) {
+  if (glyph && opts.glyph) { // off by default: letters would cover the tag underneath
     ctx.fillStyle = opts.active ? p.glyphActive : p.glyph;
     ctx.font = `600 ${Math.round(s * 0.5)}px Inter, system-ui, sans-serif`;
     ctx.textAlign = 'center';
