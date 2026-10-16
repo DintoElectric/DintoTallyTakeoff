@@ -234,3 +234,42 @@ test('schedule: names and categories', () => {
   assert.equal(shortName('THERMOPLASTIC LED EXIT SIGN. PROVIDE MOUNTING, FACES AND CHEVRONS AS INDICATED ON DRAWINGS.', false), 'THERMOPLASTIC LED EXIT SIGN.');
   assert.equal(categoryFor('REC/SURF'), 'Recessed'); assert.equal(categoryFor('PEND'), 'Pendant'); assert.equal(categoryFor(''), 'Other');
 });
+
+import { findMatchlines, isPastMatchline } from '../src/detect/matchlines.ts';
+import { findHexNotes } from '../src/detect/notes.ts';
+// Page 1000 x 1000 pt, so normalized = pt / 1000.
+const word = (str: string, x: number, y: number, rotated = false): PageRun => ({ str, cx: x / 1000, cy: y / 1000, w: 0.06, h: 0.01, rotated });
+test('matchlines: the neighbour sheet number shows which side is past the line', () => {
+  // Line at y=100. EL101.2 (neighbour) sits above it, EL101.1 (this sheet) below it, at both ends.
+  const runs = [word('MATCHLINE', 100, 100), word('EL101.2', 100, 87), word('EL101.1', 100, 113), word('MATCHLINE', 700, 100), word('EL101.2', 700, 87), word('EL101.1', 700, 113)];
+  const lines = findMatchlines(runs, 'EL101.1');
+  assert.equal(lines.length, 1);
+  assert.equal(lines[0].exclude, 'above'); assert.equal(lines[0].neighbour, 'EL101.2');
+  assert.equal(isPastMatchline(0.4, 0.05, lines), true);   // above the line, within its span
+  assert.equal(isPastMatchline(0.4, 0.5, lines), false);   // the sheet's own side
+  assert.equal(isPastMatchline(0.4, 0.099, lines), false); // right on the line is kept
+  assert.equal(isPastMatchline(0.95, 0.05, lines), false); // beyond the line's ends
+  // The same labels read from the neighbour's point of view flip the side.
+  assert.equal(findMatchlines(runs, 'EL101.2')[0].exclude, 'below');
+});
+test('matchlines: a vertical line, an unknown own sheet, and detail references are handled', () => {
+  const v = [word('MATCHLINE', 130, 200, true), word('EL102.3', 117, 200, true), word('EL102.1', 143, 200, true), word('MATCHLINE', 130, 600, true), word('EL102.3', 117, 600, true), word('EL102.1', 143, 600, true)];
+  const lines = findMatchlines(v, 'EL102.1');
+  assert.equal(lines[0].orientation, 'v'); assert.equal(lines[0].exclude, 'left');
+  assert.equal(isPastMatchline(0.05, 0.4, lines), true); assert.equal(isPastMatchline(0.5, 0.4, lines), false);
+  assert.deepEqual(findMatchlines(v, null), []);
+  assert.deepEqual(findMatchlines([word('MATCHLINE', 100, 100), word('1/EL102.1', 100, 87), word('2/EL102.1', 100, 113)], 'EL102.1'), []);
+});
+// A hexagon drawn as six separate line segments (side 8pt), as the CAD export does it.
+function hexSegments(cx: number, cy: number, s = 8): Prim[] {
+  const h = (s * Math.sqrt(3)) / 2, hs = s / 2;
+  const seg = (x0: number, y0: number, x1: number, y1: number) => prim(Math.min(x0, x1), Math.min(y0, y1), Math.max(x0, x1), Math.max(y0, y1), 2, false);
+  return [seg(cx - hs, cy - h, cx + hs, cy - h), seg(cx - hs, cy + h, cx + hs, cy + h), seg(cx - s, cy, cx - hs, cy - h), seg(cx - s, cy, cx - hs, cy + h), seg(cx + hs, cy - h, cx + s, cy), seg(cx + hs, cy + h, cx + s, cy)];
+}
+test('drawing notes: finds hexagons and reads the label inside; ignores a plain circle and an empty hexagon', () => {
+  const prims = [...hexSegments(200, 300), ...hexSegments(400, 300), ...hexSegments(600, 300), prim(790, 290, 810, 310, 13, false)];
+  const run = (str: string, x: number, y: number): PageRun => ({ str, cx: x / 1000, cy: y / 1000, w: 0.01, h: 0.01, rotated: false });
+  const notes = findHexNotes(prims, [run('1A', 200, 300), run('EM2', 400, 302), run('7', 790, 300)], 1000, 1000);
+  assert.deepEqual(notes.map((n) => n.label).sort(), ['1A', 'EM2']); // the empty hexagon and the circle with "7" are not notes
+  assert.ok(Math.abs(notes[0].x - 0.2) < 0.002 || Math.abs(notes[0].x - 0.4) < 0.002);
+});
