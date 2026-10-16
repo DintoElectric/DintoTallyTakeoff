@@ -19,7 +19,7 @@ const cluster = (vals: number[], tol: number): number[] => {
   return out;
 };
 
-function findTables(prims: Prim[], pageW: number): Table[] {
+export function findTables(prims: Prim[], pageW: number): Table[] {
   const minWidth = pageW * 0.12; // a schedule table is at least about an eighth of the sheet wide
   const horiz = prims.filter((p) => !p.fill && p.n === 2 && p.y1 - p.y0 < 1.5 && p.x1 - p.x0 > 300 && p.lum < 0.5);
   const vert = prims.filter((p) => !p.fill && p.n === 2 && p.x1 - p.x0 < 1.5 && p.y1 - p.y0 > 100 && p.lum < 0.5);
