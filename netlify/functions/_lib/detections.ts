@@ -70,8 +70,15 @@ export async function applyBatch(req: Request, sheetId: string, actor: Actor) {
 
   const version = await transaction(async (q) => {
     // Lock the sheet row so concurrent batches serialize and versions stay ordered.
-    const locked = await q(`select id from sheets where id = $1 for update`, [sheetId]);
+    const locked = await q(`select id, project_id from sheets where id = $1 for update`, [sheetId]);
     if (!locked.rows[0]) throw notFound('That sheet');
+    const projectId = locked.rows[0].project_id as string;
+    // Each project counts with its own library: an item from another project cannot be placed here.
+    const ownItem = async (itemId: string) => {
+      const r = await q(`select 1 from item_types where id = $1 and project_id = $2`, [itemId, projectId]);
+      if (!r.rows[0]) throw new HttpError(400, "That item belongs to another project's library.");
+      return itemId;
+    };
 
     let autoAdded = false;
     let manualAdded = false;
@@ -93,7 +100,7 @@ export async function applyBatch(req: Request, sheetId: string, actor: Actor) {
           [
             uuid(d.id, 'detection id'),
             sheetId,
-            uuid(d.item_type_id, 'item id'),
+            await ownItem(uuid(d.item_type_id, 'item id')),
             num(d.x, 'x', 0, 1),
             num(d.y, 'y', 0, 1),
             validBbox(d.bbox) ? JSON.stringify(validBbox(d.bbox)) : null,
@@ -118,7 +125,7 @@ export async function applyBatch(req: Request, sheetId: string, actor: Actor) {
           params.push(val);
           sets.push(`${col} = $${params.length}`);
         };
-        if ('item_type_id' in f) add('item_type_id', uuid(f.item_type_id, 'item id'));
+        if ('item_type_id' in f) add('item_type_id', await ownItem(uuid(f.item_type_id, 'item id')));
         if ('x' in f) add('x', num(f.x, 'x', 0, 1));
         if ('y' in f) add('y', num(f.y, 'y', 0, 1));
         if ('status' in f) {
