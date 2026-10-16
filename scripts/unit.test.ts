@@ -382,3 +382,17 @@ test('short codes: earlier automatic counts of a dropped item are removed (any s
   assert.deepEqual(plan.ops.filter((o) => o.op === 'delete').map((o: any) => o.id).sort(), ['s-conf', 's-unrev']);
   assert.equal(plan.removedDropped, 2);
 });
+
+test('start fresh: erases earlier automatic counts of every status (and every item); hand-placed counts stay unless asked', () => {
+  const existing = [det('a-unrev', 'itB13', 0.5, 'auto', 'unreviewed', 0.1), det('a-conf', 'itB13', 0.5, 'auto', 'confirmed', 0.2), det('a-other-item', 'itOther', 0.5, 'auto', 'confirmed', 0.3), det('m1', 'itB13', 0.5, 'manual', 'confirmed', 0.8)];
+  const hits = [{ code: 'B13', x: 0.1, y: 0.5, kind: 'tag' as const }, { code: 'B13', x: 0.8, y: 0.5, kind: 'tag' as const }];
+  const auto = planSheetWrite({ ...base, ignorePast: true, hits, existing, reset: 'auto' });
+  assert.deepEqual(auto.ops.filter((o) => o.op === 'delete').map((o: any) => o.id).sort(), ['a-conf', 'a-other-item', 'a-unrev']);
+  assert.equal(auto.erased, 3);
+  assert.equal(auto.added, 1); // the B13 at x=0.1 is re-added; the one at x=0.8 sits on the hand-placed count, so it is not doubled
+  const all = planSheetWrite({ ...base, ignorePast: true, hits, existing, reset: 'all' });
+  assert.equal(all.erased, 4); assert.equal(all.added, 2);
+  const none = planSheetWrite({ ...base, ignorePast: true, hits, existing, reset: false });
+  assert.equal(none.erased, 0); // without the option the old behaviour is unchanged: confirmed counts stay
+  assert.ok(!none.ops.some((o: any) => o.op === 'delete' && o.id === 'a-conf'));
+});
