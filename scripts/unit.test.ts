@@ -517,3 +517,94 @@ test('labelled title block: a title that ends in NORTH keeps it; a block without
   assert.equal(readLabeledTitle(runs), 'ELECTRICAL LEVEL 1 LIGHTING PLAN - NORTH');
   assert.equal(readLabeledTitle([T('E1.01A', 0.925, 0.925, 0.02), T('LIGHTING PLAN', 0.9, 0.9)]), null);
 });
+
+import { readTextTables } from '../src/detect/scheduleText.ts';
+import { textTablesToRows, initials, parseTextSchedules } from '../src/detect/scheduleDevices.ts';
+// A position-laid-out schedule: header cells with a short line segment under each column, rows as plain text lines.
+function textPage() {
+  const W = 3000, H = 2000;
+  const run = (str: string, x0: number, x1: number, y: number): PageRun => ({ str, cx: (x0 + x1) / 2 / W, cy: y / H, w: (x1 - x0) / W, h: 9 / H, rotated: false });
+  const seg = (x0: number, x1: number, y: number): PrimT => ({ x0, y0: y, x1, y1: y, n: 2, fill: false, lum: 0 });
+  const prims: PrimT[] = [], runs: PageRun[] = [];
+  const table = (ox: number, oy: number, title: string, rows: string[][]) => {
+    const xs = [ox, ox + 250, ox + 350, ox + 450, ox + 600];
+    for (const y of [oy + 40, oy + 60, oy + 80]) for (let i = 0; i < 4; i++) prims.push(seg(xs[i], xs[i + 1], y));
+    runs.push(run(title, ox + 100, ox + 480, oy), run('OUTLET TYPE', ox + 60, ox + 160, oy + 30), run('SUBSCRIPT', ox + 260, ox + 330, oy + 30), run('DEVICE QUANTITY', ox + 355, ox + 445, oy + 30), run('DATA CABLES', ox + 470, ox + 560, oy + 30));
+    rows.forEach((r, k) => r.forEach((txt, c) => { if (txt) runs.push(run(txt, xs[c] + 5, xs[c] + 5 + txt.length * 4.2, oy + 52 + k * 20)); }));
+  };
+  table(100, 100, 'COMMUNICATIONS OUTLET COUNT SCHEDULE - TSER ROOM', [
+    ['STANDARD 1-PORT IP CAMERA OUTLET - CEILING MOUNTED', 'IPC', '25', '25'], ['STANDARD 1-PORT IP CAMERA OUTLET - WALL MOUNTED', 'IPC', '14', '14'],
+    ['STANDARD 4-PORT TELECOM ABOVE CEILING OUTLET 4AC', '', '2', '8'], ['Grand total: 41', '', '41', '47'],
+  ]);
+  table(900, 100, 'COMMUNICATIONS OUTLET COUNT SCHEDULE - TDR ROOM', [['STANDARD 1-PORT IP CAMERA OUTLET - CEILING MOUNTED', 'IPC', '17', '17'], ['STANDARD 1-PORT INTERCOM OUTLET', 'IC', '1', '1'], ['Grand total: 18', '', '18', '18']]);
+  table(100, 600, 'COMMUNICATIONS BD PARATA OUTLET COUNT SCHEDULE - TSER ROOM', [['STANDARD 2-PORT BD PARATA NETWORK OUTLET', '2', '2', '4'], ['Grand total: 2', '', '2', '4']]);
+  return { runs, prims, W, H };
+}
+test('position-laid-out schedules: side-by-side and stacked tables stay apart, totals are not rows', () => {
+  const { runs, prims, W, H } = textPage();
+  const t = readTextTables(runs, prims, W, H);
+  assert.equal(t.length, 3);
+  assert.deepEqual(t.map((x) => x.rows.length).sort(), [1, 2, 3]);
+  const tser = t.find((x) => /TSER ROOM$/.test(x.title) && x.rows.length === 3)!;
+  assert.deepEqual(tser.headers, ['OUTLET TYPE', 'SUBSCRIPT', 'DEVICE QUANTITY', 'DATA CABLES']);
+});
+test('outlet schedule to library items: same code with different names stays separate, quantities add up across tables, 4AC is split off', () => {
+  const { runs, prims, W, H } = textPage();
+  const rows = parseTextSchedules(runs, prims, W, H);
+  const by = (code: string) => rows.filter((r) => r.code === code);
+  assert.equal(by('IPC').length, 2);                                                        // ceiling and wall mounted
+  assert.equal(by('IPC').find((r) => /CEILING/.test(r.name))!.count, 42);                    // 25 + 17
+  const ac = by('4AC')[0];
+  assert.equal(ac.name, 'STANDARD 4-PORT TELECOM ABOVE CEILING OUTLET'); assert.equal(ac.spec, '4-port outlet');
+  assert.equal(rows.length, 5);
+  assert.equal(new Set(rows.map((r) => r.key)).size, 5);
+  assert.ok(rows.every((r) => r.category));
+});
+test('security device lists: model becomes the code, one item per type+mounting+model, door lists make none', () => {
+  const T = (title: string, headers: string[], rows: string[][]) => ({ title, headers, xs: [], rows, headerY: 0 });
+  const rows = textTablesToRows([
+    T('SECURITY CCTV VIDEO SURVEILLANCE CAMERA SCHEDULE', ['SEQUENTIAL #', 'HEAD-END ROOM', 'CAMERA TYPE', 'CAMERA MOUNTING TYPE', 'BOD MODEL #', 'FRAME RATE + MOTION', 'INSTALLER NOTES'], [
+      ['01-01', 'TDR ROOM 1054', '360° FISHEYE INTERIOR', 'CEILING MOUNTED', 'HANWHA XNF-A8014RV', '15 FPS @ 50% MOTION', ''],
+      ['01-02', 'TDR ROOM 1054', '360° FISHEYE INTERIOR', 'CEILING MOUNTED', 'HANWHA XNF-A8014RV', '15 FPS @ 50% MOTION', ''],
+      ['01-03', 'TDR ROOM 1054', '360° FISHEYE INTERIOR', 'PENDANT MOUNTED', 'HANWHA XNF-A8014RV', '15 FPS @ 50% MOTION', '']]),
+    T('SECURITY VIDEO INTERCOM SCHEDULE', ['SEQUENTIAL #', 'HEAD-END ROOM', 'DEVICE TYPE', 'BOD MODEL #', 'RELEASE DOOR(S)', 'INSTALLER NOTES'], [['01-01', 'TDR', 'VIDEO INTERCOM MASTER', '', '1000', ''], ['01-02', 'TDR', 'VIDEO INTERCOM WITH INTEGRATED CARD READER', '', '1001', '']]),
+    T('SECURITY EMERGENCY PHONE SCHEDULE', ['SEQUENTIAL #', 'HEAD-END ROOM', 'DEVICE TYPE', 'BOD MODEL #', 'CALL ROUTING', 'INSTALLER NOTES'], [['01-01', 'TSER', 'BLUE LIGHT - TOWER', 'TALKAPHONE', 'OFFICE', '']]),
+    T('SECURITY DURESS ALARM SCHEDULE', ['SEQUENTIAL #', 'HEAD-END ROOM', 'DEVICE LOCATION', 'ALARM OUTPUT', 'INSTALLER NOTES'], [['01-01', 'TDR', 'LOBBY', 'OFFICE', 'MOUNTED UNDER DESK'], ['01-02', 'TDR', 'PICK-UP', 'OFFICE', 'MOUNTED UNDER DESK']]),
+    T('ACCESS CONTROL DOOR SCHEDULE', ['DOOR OPENING', 'HEAD-END ROOM', 'CARD READER', 'DETAIL NUMBER', 'DOOR HW SET #', 'INSTALLER NOTES'], [['1050.1', 'TDR', '1', '3/SE5.01', '2.0', '']]),
+  ]);
+  assert.equal(rows.length, 6);                                                                // 2 cameras + 2 intercoms + 1 phone + 1 duress; no door items
+  const cams = rows.filter((r) => r.category === 'Cameras');
+  assert.deepEqual(cams.map((r) => [r.code, r.name, r.count]), [['XNF-A8014RV', '360° FISHEYE INTERIOR, CEILING MOUNTED', 2], ['XNF-A8014RV', '360° FISHEYE INTERIOR, PENDANT MOUNTED', 1]]);
+  assert.equal(cams[0].spec, 'HANWHA XNF-A8014RV · 15 FPS @ 50% MOTION');
+  assert.deepEqual(rows.filter((r) => r.category === 'Intercoms').map((r) => r.code), ['VIM', 'VICR']);
+  assert.equal(rows.find((r) => r.category === 'Emergency phones')!.spec, 'TALKAPHONE');
+  const duress = rows.find((r) => r.name === 'DURESS ALARM')!;
+  assert.equal(duress.code, 'DA'); assert.equal(duress.count, 2); assert.equal(duress.spec, 'MOUNTED UNDER DESK');
+  assert.equal(initials('MASTER DOOR RELEASE'), 'MDR');
+});
+// A ruled schedule whose first column is a numbered SYMBOL, with one catalog column per maker.
+test('ruled schedule with a SYMBOL column: numbered types, NEMA in the name, first maker as catalog, the rest as alternates', () => {
+  const W = 3000, H = 2000;
+  const run = (str: string, x0: number, x1: number, y: number): PageRun => ({ str, cx: (x0 + x1) / 2 / W, cy: y / H, w: (x1 - x0) / W, h: 9 / H, rotated: false });
+  const hl = (x0: number, x1: number, y: number): PrimT => ({ x0, y0: y, x1, y1: y, n: 2, fill: false, lum: 0 });
+  const vl = (x: number, y0: number, y1: number): PrimT => ({ x0: x, y0, x1: x, y1, n: 2, fill: false, lum: 0 });
+  const xs = [100, 160, 220, 420, 520, 620, 700];  // SYMBOL | NEMA | DESCRIPTION | HUBBELL | COOPER | C.B.
+  const ys = [100, 150, 190, 230, 270];
+  const prims: PrimT[] = [...ys.map((y) => hl(100, 700, y)), ...xs.map((x) => vl(x, 100, 270))];
+  const runs = [run('SYMBOL', 105, 150, 125), run('NEMA', 170, 205, 125), run('DESCRIPTION', 280, 360, 125), run('HUBBELL CAT. No.', 425, 510, 125), run('COOPER CAT. No.', 525, 610, 125), run('C.B.', 640, 670, 125),
+    run('1', 120, 130, 170), run('5-20R', 170, 210, 170), run('20A - 125V, 2P, 3W', 230, 330, 170), run('HBL5361', 430, 480, 170), run('5361', 530, 560, 170), run('20A, 1P', 630, 680, 170),
+    run('2', 120, 130, 210), run('5-30R', 170, 210, 210), run('30A - 125V, 2P, 3W', 230, 330, 210), run('HBL9308', 430, 480, 210), run('---', 530, 550, 210), run('30A, 1P', 630, 680, 210),
+    run('3', 120, 130, 250), run('L5-20R', 170, 215, 250), run('20A - 125V, TWIST LOCK', 230, 340, 250), run('---', 430, 450, 250), run('AHCL520R', 530, 580, 250), run('20A, 1P', 630, 680, 250)];
+  const rows = parseRuledSchedule(runs, prims, W, H);
+  assert.deepEqual(rows.map((r) => r.code), ['1', '2', '3']);
+  assert.equal(rows[0].name, 'NEMA 5-20R, 20A - 125V, 2P, 3W'); assert.equal(rows[0].category, 'Special purpose receptacles');
+  assert.equal(rows[0].manufacturer, 'HUBBELL'); assert.equal(rows[0].catalog, 'HBL5361'); assert.deepEqual(rows[0].alternates, ['COOPER 5361']);
+  assert.deepEqual(rows[1].alternates, []);                      // a "---" is no catalog number
+  assert.equal(rows[2].manufacturer, 'COOPER');                  // the first maker that has one
+  assert.equal(specLine(rows[0]), 'HUBBELL HBL5361 · 20A, 1P');
+});
+test('a legend with a DEVICE TYPE column is not a schedule: no items from it', () => {
+  const legend = { title: 'NURSE CALL LEGEND', headers: ['SYMBOL', 'DEVICE TYPE', 'BACKBOX SIZE'], xs: [], headerY: 0, rows: [['T', 'WALL MOUNTED CORRIDOR DOME LIGHT', '4-11/16"']] };
+  assert.deepEqual(textTablesToRows([legend]), []);
+  assert.deepEqual(textTablesToRows([{ ...legend, title: '' }]), []);
+});
