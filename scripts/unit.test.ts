@@ -422,3 +422,81 @@ test('areas: two polygons with the same name add up, across sheets too; a count 
   const twice = assignAreas([{ sheet_id: 's1', item_type_id: 'x', x: 0.5, y: 0.5 }], [A('1', 's1', 'A', 0, 0, 0.6, 0.6), A('2', 's1', 'A', 0.4, 0.4, 1, 1)]);
   assert.equal(twice.length, 1); assert.equal(twice[0].n, 1);
 });
+
+import { parseRuledSchedule, mountingFromDescription } from '../src/detect/scheduleRuled.ts';
+import type { Prim as PrimT } from '../src/detect/primitives.ts';
+// A ruled schedule like E0.3: row lines and column lines, a header row, and a second table with no header beside it.
+function ruledPage(): { runs: PageRun[]; prims: PrimT[] } {
+  const W = 3000, H = 2000;
+  const run = (str: string, x0: number, x1: number, y: number): PageRun => ({ str, cx: (x0 + x1) / 2 / W, cy: y / H, w: (x1 - x0) / W, h: 9 / H, rotated: false });
+  const hl = (x0: number, x1: number, y: number): PrimT => ({ x0, y0: y, x1, y1: y, n: 2, fill: false, lum: 0 });
+  const vl = (x: number, y0: number, y1: number): PrimT => ({ x0: x, y0, x1: x, y1, n: 2, fill: false, lum: 0 });
+  const cols = [100, 150, 250, 400, 500, 560]; // TYPE | LOCATION | DESCRIPTION | MANUFACTURER | CATALOG
+  const colsR = cols.map((c) => c + 700);
+  const rowsL = [100, 140, 260, 330], rowsR = [100, 190, 300];
+  const prims: PrimT[] = [];
+  for (const y of rowsL) prims.push(hl(100, 560, y));
+  for (const x of cols) prims.push(vl(x, 100, 330));
+  for (const y of rowsR) prims.push(hl(800, 1260, y));
+  for (const x of colsR) prims.push(vl(x, 100, 300));
+  const runs: PageRun[] = [
+    run('TYPE', 105, 140, 120), run('LOCATION', 160, 240, 120), run('DESCRIPTION', 300, 350, 120), run('MANUFACTURER', 410, 490, 120), run('CATALOG NUMBER', 505, 555, 120),
+    // left table: the tag sits in the MIDDLE of a tall row (y=200 in a row spanning 140-260)
+    run('EX-1', 105, 130, 200), run('BOH, HALL,', 155, 235, 200), run('SURFACE MOUNTED LED STRIPLIGHT, WHITE', 255, 395, 170), run('INTEGRAL DRIVER.', 255, 330, 183),
+    run('LITHONIA', 410, 460, 200), run('OR APPROVED EQUAL', 410, 495, 213), run('ABC-100-', 505, 550, 190), run('MVOLT-WH', 505, 550, 203),
+    run('BC-14', 105, 130, 295), run('CORRIDOR', 155, 215, 295), run('RECESSED 2X2 FLAT PANEL', 255, 395, 295), run('EUREKA', 410, 450, 295), run('XYZ-1', 505, 540, 295),
+    // right table has no header of its own
+    run('RL-2X', 805, 835, 145), run('LOBBY', 855, 900, 145), run('RECESSED LINEAR LIGHTSLOT', 955, 1095, 145), run('MARK', 1110, 1150, 145), run('S4RD-LOP-', 1205, 1255, 140), run('LENGTH', 1205, 1240, 153),
+    run('XW-1', 805, 830, 250), run('EXTERIOR', 855, 905, 250), run('SURFACE MOUNTED WET LOCATION WALLPACK', 955, 1095, 250), run('LITHONIA', 1110, 1160, 250), run('WDGE2', 1205, 1245, 250),
+    run('WALK-IN', 160, 200, 210), // looks like a tag but sits in the LOCATION column: not a type
+  ];
+  return { runs, prims };
+}
+test('ruled schedule: tags centred in tall rows, wrapped catalog numbers, a headerless second table', () => {
+  const { runs, prims } = ruledPage();
+  const rows = parseRuledSchedule(runs, prims, 3000, 2000);
+  assert.deepEqual(rows.map((r) => r.code), ['EX-1', 'BC-14', 'RL-2X', 'XW-1']);
+  const ex = rows[0];
+  assert.equal(ex.manufacturer, 'LITHONIA'); assert.deepEqual(ex.alternates, []); // "OR APPROVED EQUAL" is not an alternate
+  assert.equal(ex.catalog, 'ABC-100-MVOLT-WH');   // a line ending in "-" continues with no space
+  assert.match(ex.description, /^SURFACE MOUNTED LED STRIPLIGHT, WHITE INTEGRAL DRIVER\.$/);
+  assert.equal(rows[2].catalog, 'S4RD-LOP-LENGTH'); assert.equal(rows[2].manufacturer, 'MARK');
+  assert.equal(rows[2].location, 'LOBBY'); assert.equal(rows[3].mounting, 'WALL');
+});
+test('ruled schedule: a page without row and column lines, or without a header, gives nothing', () => {
+  const { runs, prims } = ruledPage();
+  assert.deepEqual(parseRuledSchedule(runs, [], 3000, 2000), []);
+  assert.deepEqual(parseRuledSchedule(runs.filter((r) => r.str !== 'DESCRIPTION'), prims, 3000, 2000), []);
+  assert.equal(mountingFromDescription('PENDANT MOUNTED, DIRECT/INDIRECT LINEAR'), 'PEND');
+  assert.equal(mountingFromDescription('UNIVERSAL MOUNT, EDGELIT LED EXIT SIGN'), 'EXIT');
+  assert.equal(mountingFromDescription('SURFACE MOUNTED, WET LOCATION RATED LED WALLPACK'), 'WALL');
+});
+test('schedule names: a mounting phrase is not a name', () => {
+  assert.equal(shortName('PENDANT MOUNTED, DIRECT/INDIRECT LINEAR LED PENDANT WITH STANDARD DOWNLIGHT DISTRIBUTION AND BATWING UPLIGHT DISTRIBUTION', false).startsWith('PENDANT MOUNTED, DIRECT/INDIRECT'), true);
+  assert.match(shortName('SURFACE OR CHAIN MOUNTED, NOMINAL 3" X 3" X 4\'L LED STRIPLIGHT WITH WHITE STEEL HOUSING, DIFFUSING LENS AND INTEGRAL DRIVER. PROVIDE CHAIN MOUNT AS REQUIRED', false), /STRIPLIGHT WITH WHITE STEEL HOUSING$/);
+});
+
+test('hyphenated tags are counted only when they are in the library; grid labels and room words are not', () => {
+  const runs = [pr('BR-22', 0.3, 0.3), pr('BR-22', 0.4, 0.3), pr('P-9', 0.2, 0.2), pr('WALK-IN', 0.5, 0.5), pr('RL-2X', 0.6, 0.6)];
+  assert.equal(scanTags(runs).filter((h) => h.code.includes('-')).length, 0);                         // no library: nothing
+  const hits = scanTags(runs, undefined, new Set(['BR-22', 'RL-2X']));
+  assert.deepEqual(summarize(hits).map((t) => `${t.code}:${t.count}`).sort(), ['BR-22:2', 'RL-2X:1']); // P-9 and WALK-IN are ignored
+});
+test('a short word after a tag in the same run is kept as that tag\'s suffix', () => {
+  const [h] = scanTags([pr('BR-22 LS', 0.3, 0.3, 0.06)], undefined, new Set(['BR-22']));
+  assert.equal(h.code, 'BR-22'); assert.deepEqual(h.suffixes, ['LS']);
+});
+test('emergency suffix: a word right after the tag on its own line is found, one elsewhere is not', () => {
+  const tag = { code: 'BR-22', x: 0.3, y: 0.5, kind: 'tag' as const };
+  const runs = [{ str: 'LS', cx: 0.3 + 21 / 1000, cy: 0.5 }, { str: 'S', cx: 0.3 + 21 / 1000, cy: 0.5 + 30 / 1000 }, { str: 'VC', cx: 0.9, cy: 0.9 }];
+  attachLabels([tag], runs, 1000, 1000);
+  assert.deepEqual(tag.suffixes, ['LS']);
+});
+test('emergency suffix: proposed only when it repeats across fixture types, never pre-ticked, and named like the drawing', () => {
+  const fx = (code: string, w?: string) => ({ code, x: 0.1, y: 0.1, kind: 'tag' as const, labels: [] as string[], suffixes: w ? [w] : [] });
+  const hits = [...Array(4).fill(0).map(() => fx('BR-22', 'LS')), ...Array(3).fill(0).map(() => fx('SD-12', 'LS')), fx('BR-22'), fx('BC-14', 'NL')];
+  const c = discoverMarkers(hits);
+  assert.deepEqual(c.map((m) => [m.pattern, m.partner, m.count]), [['+LS', null, 7]]); // NL appears once: not proposed
+  assert.equal(isEmergency(hits[0], new Set(['+LS'])), true); assert.equal(isEmergency(hits[7], new Set(['+LS'])), false);
+  assert.equal(emergencyCode('BR-22', new Set(['+LS'])), 'BR-22LS'); assert.equal(emergencyCode('B13', new Set(['#es'])), 'B13E');
+});
