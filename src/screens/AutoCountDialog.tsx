@@ -67,7 +67,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
     (async () => {
       try {
         const files = await api<{ files: DrawingFileRow[] }>(`/files?project=${projectId}`);
-        const res = await scanSheets(sheets, files.files, (done, total, label) => { if (!off) setProgress({ done, total, label }); }, abort.current.signal);
+        const res = await scanSheets(sheets, files.files, (done, total, label) => { if (!off) setProgress({ done, total, label }); }, abort.current.signal, new Set(items.map((i) => i.code.toUpperCase())));
         if (off) return;
         setScans(res);
         const found = discover(res.map((sc) => ({ ...sc, hits: sc.hits.filter((h) => !h.past) })));
@@ -139,7 +139,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
       for (const r of rows.filter((x) => inc.has(x.code) && x.kind === 'tag' && splits(x.code))) {
         const base = resolved.get(r.code);
         if (!base) continue;
-        const emCode = emergencyCode(r.code);
+        const emCode = emergencyCode(r.code, activeMarkers);
         let emItem = byCode.get(emCode.toUpperCase())?.[0];
         if (!emItem) {
           setStatus(`Adding ${emCode} (emergency ${r.code}) to the library…`);
@@ -187,7 +187,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
       }
       // Sheets already open in this session must show the new counts, not a cached copy.
       await Promise.all(scans.map((sc) => getStore(sc.sheet.id).load(true)));
-      onDone(`Counted ${plural(total, 'item')} across ${plural(scans.length, 'sheet')}.${erased ? ` Erased ${plural(erased, 'earlier count')} first.` : ''}${skipped ? ` ${plural(skipped, 'sheet')} could not be read and was left as it was.` : ''}${removedPast ? ` Removed ${plural(removedPast, 'earlier count')} that lay past matchlines.` : ''}${removedShort ? ` Removed ${plural(removedShort, 'earlier short-code count')}.` : ''}${ambiguous.size ? ` ${[...ambiguous].join(', ')} ${ambiguous.size === 1 ? 'has' : 'have'} several variants: review those and move each to the right item.` : ''} ${emKeys.size ? ` Emergency fixtures were counted under their own items (${[...emKeys].map((k) => emergencyCode(k.replace(EMERGENCY_KEY, ''))).slice(0, 6).join(', ')}${emKeys.size > 6 ? '…' : ''}).` : ''} Counts are unreviewed until you confirm them.`);
+      onDone(`Counted ${plural(total, 'item')} across ${plural(scans.length, 'sheet')}.${erased ? ` Erased ${plural(erased, 'earlier count')} first.` : ''}${skipped ? ` ${plural(skipped, 'sheet')} could not be read and was left as it was.` : ''}${removedPast ? ` Removed ${plural(removedPast, 'earlier count')} that lay past matchlines.` : ''}${removedShort ? ` Removed ${plural(removedShort, 'earlier short-code count')}.` : ''}${ambiguous.size ? ` ${[...ambiguous].join(', ')} ${ambiguous.size === 1 ? 'has' : 'have'} several variants: review those and move each to the right item.` : ''} ${emKeys.size ? ` Emergency fixtures were counted under their own items (${[...emKeys].map((k) => emergencyCode(k.replace(EMERGENCY_KEY, ''), activeMarkers)).slice(0, 6).join(', ')}${emKeys.size > 6 ? '…' : ''}).` : ''} Counts are unreviewed until you confirm them.`);
     } catch (e) {
       setError(e instanceof ApiError || e instanceof Error ? e.message : 'Saving the counts failed.');
       setPhase('pick');
@@ -245,7 +245,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
             </div>
             {candidates.map((c) => (
               <Check key={c.pattern} checked={markers.has(c.pattern)} disabled={phase === 'write'} onChange={(v) => setMarkers((cur) => { const n = new Set(cur); if (v) n.add(c.pattern); else n.delete(c.pattern); return n; })}>
-                <span><b>{c.pattern}</b> <span className="dim">({c.count} fixtures, e.g. {c.examples.slice(0, 3).join(', ')}; {c.partner ? `normal: ${c.partner}` : 'possible: starts with E, no normal version found'})</span></span>
+                <span><b>{c.pattern.startsWith('+') ? `“${c.pattern.slice(1)}” after the tag` : c.pattern}</b> <span className="dim">({c.count} fixtures, e.g. {c.examples.slice(0, 3).join(', ')}; {c.partner ? `normal: ${c.partner}` : c.pattern.startsWith('+') ? 'possible: a word written after the tag; tick it only if it means emergency (not, for example, night light)' : 'possible: starts with E, no normal version found'})</span></span>
               </Check>
             ))}
             <input className="input" style={{ minHeight: 30, padding: '3px 8px' }} aria-label="Other emergency labels" placeholder="Other emergency labels, e.g. EM#, NL  (# stands for a number)" value={customText} disabled={phase === 'write'} onChange={(e) => setCustomText(e.target.value)} />
@@ -264,7 +264,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
                       <td style={{ fontWeight: 500 }}>{r.code}{r.kind === 'short' && <span className="tag tag-outline" style={{ marginLeft: 8 }} title="Short letter-only codes can match ordinary text. They are flagged for review.">Short code</span>}{r.kind === 'note' && <span className="tag tag-accent" style={{ marginLeft: 8 }} title="A number or letters inside a hexagon on the plan.">Drawing note</span>}{r.kind === 'room' && <span className="tag tag-neutral" style={{ marginLeft: 8 }} title="A room name sits just above it and it appears once. Tick it only if it is really a device.">Looks like a room number</span>}</td>
                       <td>{lib ? <span className="muted">{lib[0].name.length > 50 ? `${lib[0].name.slice(0, 50)}…` : lib[0].name}{lib.length > 1 ? ` (+${lib.length - 1} variant${lib.length === 2 ? '' : 's'}: flagged for review)` : ''}</span> : <input className="input" style={{ minHeight: 30, padding: '3px 8px' }} placeholder={r.kind === 'note' ? `Drawing note ${r.code}` : 'Description (optional)'} aria-label={`Description for ${r.code}`} value={names[r.code] ?? ''} disabled={phase === 'write'} onChange={(e) => setNames({ ...names, [r.code]: e.target.value })} />}</td>
                       <td>{r.kind === 'tag' && (emByCode.get(r.code) ?? 0) > 0 && !/^XL/i.test(r.code) && (byCode.get(r.code.toUpperCase())?.length ?? 0) <= 1 ? (
-                        <Check checked={!splitOff.has(r.code)} disabled={phase === 'write'} onChange={(v) => setSplitOff((cur) => { const n = new Set(cur); if (v) n.delete(r.code); else n.add(r.code); return n; })}>{emByCode.get(r.code)} as {emergencyCode(r.code)}</Check>
+                        <Check checked={!splitOff.has(r.code)} disabled={phase === 'write'} onChange={(v) => setSplitOff((cur) => { const n = new Set(cur); if (v) n.delete(r.code); else n.add(r.code); return n; })}>{emByCode.get(r.code)} as {emergencyCode(r.code, activeMarkers)}</Check>
                       ) : <span className="dim">{r.kind === 'tag' && /^XL/i.test(r.code) ? 'exit sign' : ''}</span>}</td>
                       <td className="right num">{r.total}</td>
                     </tr>

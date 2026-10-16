@@ -4,7 +4,9 @@ import { api, ApiError } from '../auth/api.ts';
 import { Check, Dialog, plural } from '../app/ui.tsx';
 import { extractRuns } from '../detect/pageRuns.ts';
 import { categoryFor, parseSchedulePage, resolveSimilar, specLine, type ScheduleRow } from '../detect/scheduleParse.ts';
-import { loadFilePdf } from '../viewer/pdf.ts';
+import { parseRuledSchedule } from '../detect/scheduleRuled.ts';
+import { extractPrims } from '../detect/primitives.ts';
+import { loadFilePdf, pdfjs } from '../viewer/pdf.ts';
 
 type Phase = 'pick' | 'read' | 'review' | 'write';
 const label = (s: SheetRow) => s.number ?? `page ${s.page}`;
@@ -45,7 +47,15 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
         const pdf = await loadFilePdf({ id: f.id, chunk_count: f.chunk_count });
         const page = await pdf.getPage(sh.page);
         const vp = page.getViewport({ scale: 1 });
-        all.push(...parseSchedulePage(await extractRuns(page), vp.width, vp.height));
+        const runs = await extractRuns(page);
+        // Schedules with a MTG. column (like PSEB) are read from the text alone; tables drawn with row and column
+        // lines (like E0.3) are read from the lines. A sheet that is neither gives no rows.
+        let found = parseSchedulePage(runs, vp.width, vp.height);
+        if (found.length === 0) {
+          const { prims } = await extractPrims(page, pdfjs.OPS);
+          found = parseRuledSchedule(runs, prims, vp.width, vp.height);
+        }
+        all.push(...found);
         page.cleanup();
         await new Promise((r) => setTimeout(r, 0));
       }
