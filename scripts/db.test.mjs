@@ -105,3 +105,84 @@ console.log('db.test OK');
   await d3.query(`delete from drawing_files where id = $1`, [fl.id]);
   console.log('sheet delete OK');
 }
+
+// ---- item libraries become per project: migrate legacy data, then the move/copy queries ----
+{
+  const { PGlite: P } = await import('@electric-sql/pglite');
+  const files = readdirSync(dir).sort();
+  const last = files.find((f) => /project_libraries/.test(f));
+  assert.ok(last, 'the project_libraries migration exists');
+  const seed = async (twoProjects) => {
+    const d = new P();
+    for (const f of files.filter((x) => x < last)) await d.exec(readFileSync(`${dir}/${f}`, 'utf8'));   // the database as it is today
+    const proj = async (n) => (await d.query(`insert into projects (name, created_by) values ($1,'u') returning id`, [n])).rows[0].id;
+    const pA = await proj('A'); const pB = twoProjects ? await proj('B') : null;
+    const sheet = async (p, page) => {
+      const fl = (await d.query(`insert into drawing_files (project_id,file_name,size_bytes,chunk_count,uploaded_by) values ($1,'f.pdf',1,1,'u') returning id`, [p])).rows[0].id;
+      return (await d.query(`insert into sheets (project_id,file_id,page,page_width_pt,page_height_pt) values ($1,$2,$3,100,100) returning id`, [p, fl, page])).rows[0].id;
+    };
+    const sA = await sheet(pA, 1); const sB = pB ? await sheet(pB, 1) : null;
+    const cat = (await d.query(`insert into item_categories (name, sort) values ('Recessed', 1) returning id`)).rows[0].id;
+    await d.query(`insert into item_categories (name, sort) values ('Unused cat', 2)`);
+    const item = async (code, name, c) => (await d.query(`insert into item_types (code,name,category_id,created_by) values ($1,$2,$3,'u') returning id`, [code, name, c])).rows[0].id;
+    const onlyA = await item('A1', 'only counted in A', cat), both = await item('B2', 'counted in both', cat), unused = await item('C3', 'never counted', cat), plain = await item('D4', 'no category', null);
+    const det = (s, i) => d.query(`insert into detections (id,sheet_id,item_type_id,x,y,source,status,created_by) values (gen_random_uuid(),$1,$2,0.5,0.5,'manual','confirmed','u')`, [s, i]);
+    await det(sA, onlyA); await det(sA, both); if (sB) await det(sB, both);
+    return { d, pA, pB, sA, sB, ids: { onlyA, both, unused, plain } };
+  };
+
+  // two projects
+  const t = await seed(true);
+  await t.d.exec(readFileSync(`${dir}/${last}`, 'utf8'));
+  const items = (await t.d.query(`select id, code, project_id, category_id from item_types order by code, project_id`)).rows;
+  const byCode = (c) => items.filter((i) => i.code === c);
+  assert.equal(byCode('A1').length, 1); assert.equal(byCode('A1')[0].project_id, t.pA);                 // used in A only: goes to A
+  assert.equal(byCode('B2').length, 2);                                                                  // used in both: one copy each
+  assert.deepEqual(byCode('B2').map((i) => i.project_id).sort(), [t.pA, t.pB].sort());
+  assert.equal(byCode('C3')[0].project_id, null); assert.equal(byCode('D4')[0].project_id, null);       // unused: unassigned, not lost
+  // every count still points at an item of its own project
+  const bad = await t.d.query(`select d.id from detections d join sheets s on s.id = d.sheet_id join item_types i on i.id = d.item_type_id where i.project_id is distinct from s.project_id`);
+  assert.equal(bad.rows.length, 0, 'counts follow their project');
+  assert.equal((await t.d.query(`select count(*)::int n from detections`)).rows[0].n, 3, 'no count lost');
+  // categories: each project has its own "Recessed", used by its items
+  const cats = (await t.d.query(`select id, name, project_id from item_categories where name = 'Recessed' order by project_id nulls last`)).rows;
+  assert.equal(cats.filter((c) => c.project_id).length, 2);
+  const a1 = byCode('A1')[0]; assert.equal(cats.find((c) => c.id === a1.category_id).project_id, t.pA);
+  assert.equal(byCode('B2').filter((i) => cats.find((c) => c.id === i.category_id)?.project_id === i.project_id).length, 2);
+  // the same code and description can now exist in two projects, but not twice in one
+  await t.d.query(`insert into item_types (code,name,created_by,project_id) values ('A1','only counted in A','u',$1)`, [t.pB]);
+  await assert.rejects(t.d.query(`insert into item_types (code,name,created_by,project_id) values ('a1','ONLY COUNTED IN A','u',$1)`, [t.pA]));
+  await t.d.query(`insert into item_categories (name, sort, project_id) values ('Recessed', 9, $1)`.replace('$1', `'${t.pB}'`)).then(() => assert.fail('duplicate category name in one project')).catch(() => {});
+
+  // claiming the unassigned items, and copying a library
+  const { claimItems, copyLibrary } = await import('../netlify/functions/_lib/library.ts');
+  const q = (text, params) => t.d.query(text, params);
+  const claimed = await claimItems(q, t.pB, null);
+  assert.deepEqual(claimed, { moved: 2, skipped: 0 });
+  assert.equal((await t.d.query(`select count(*)::int n from item_types where project_id is null`)).rows[0].n, 0);
+  const c3 = (await t.d.query(`select i.project_id, c.name as cat, c.project_id as cat_project from item_types i join item_categories c on c.id = i.category_id where i.code = 'C3'`)).rows[0];
+  assert.equal(c3.project_id, t.pB); assert.equal(c3.cat, 'Recessed'); assert.equal(c3.cat_project, t.pB);   // its category came along, in B's own list
+  const copied = await copyLibrary(q, t.pB, t.pA, 'u');
+  assert.ok(copied.copied >= 2 && copied.skipped >= 1, JSON.stringify(copied));                            // A already had A1 and B2: skipped
+  assert.deepEqual(await copyLibrary(q, t.pB, t.pA, 'u'), { copied: 0, skipped: copied.copied + copied.skipped });  // copying twice adds nothing
+  const dst = (await t.d.query(`select i.code, c.project_id as cat_project from item_types i left join item_categories c on c.id = i.category_id where i.project_id = $1 and i.code = 'C3'`, [t.pA])).rows[0];
+  assert.equal(dst.cat_project, t.pA);
+
+  // one project: the whole library is its library
+  const one = await seed(false);
+  await one.d.exec(readFileSync(`${dir}/${last}`, 'utf8'));
+  assert.equal((await one.d.query(`select count(*)::int n from item_types where project_id is null`)).rows[0].n, 0);
+  assert.equal((await one.d.query(`select count(*)::int n from item_categories where project_id is null`)).rows[0].n, 0);
+  assert.equal((await one.d.query(`select count(*)::int n from item_types where project_id = $1`, [one.pA])).rows[0].n, 4);
+  // the list queries the items endpoint runs (with their casts), and the check that keeps counts inside their project
+  const LIST = `select i.id, i.code, i.project_id from item_types i
+     where ($1::uuid is null or i.id = $1::uuid) and ($2::uuid is null or i.project_id = $2::uuid) and ($3::boolean = false or i.project_id is null)
+     order by i.code, i.created_at, i.id`;
+  assert.equal((await one.d.query(LIST, [null, one.pA, false])).rows.length, 4);        // a project's library
+  assert.equal((await one.d.query(LIST, [one.ids.plain, null, false])).rows.length, 1);  // one item by id
+  assert.equal((await t.d.query(LIST, [null, null, true])).rows.length, 0);              // unassigned: none left after claiming
+  const own = (item, project) => one.d.query(`select 1 from item_types where id = $1 and project_id = $2`, [item, project]);
+  assert.equal((await own(one.ids.plain, one.pA)).rows.length, 1);
+  assert.equal((await own(t.ids.onlyA, t.pB)).rows.length, 0, "A's item cannot be used on B's sheets");
+  console.log('project libraries OK');
+}
