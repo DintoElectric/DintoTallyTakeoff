@@ -3,6 +3,7 @@ import type { CategoryRow, DrawingFileRow, ItemTypeRow, SheetRow } from '../../s
 import { api, ApiError } from '../auth/api.ts';
 import { Check, Dialog, plural } from '../app/ui.tsx';
 import { discover, scanSheets, writeSheet, type CodeRow, type SheetScan } from '../detect/autoCount.ts';
+import { getStore } from './sheetStore.ts';
 
 /** Scans sheets for tags, shows what was found, then counts the ones you choose. */
 export default function AutoCountDialog({ projectId, sheets, items, onClose, onDone }: {
@@ -90,18 +91,24 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
         });
         resolved.set(r.code, item);
       }
-      // Items for codes that were found but not ticked: their earlier unreviewed auto counts get removed.
-      const excludedIds = new Set<string>();
-      for (const r of rows) if (!inc.has(r.code)) for (const it of byCode.get(r.code.toUpperCase()) ?? []) excludedIds.add(it.id);
+      // Every library item whose code was found anywhere in the scan (ticked or not, past a matchline or not):
+      // their earlier unreviewed automatic counts are replaced by this run.
+      const clearIds = new Set<string>();
+      for (const sc of scans) for (const h of sc.hits) for (const it of byCode.get(h.code.toUpperCase()) ?? []) clearIds.add(it.id);
+      for (const it of resolved.values()) clearIds.add(it.id);
       // 2. Write each sheet's detections.
-      let total = 0;
+      let total = 0, removedPast = 0;
       let i = 0;
-      for (const sc of effective) {
+      for (const sc of scans) {
         i++;
-        setStatus(`Saving counts: sheet ${i} of ${effective.length}…`);
-        total += await writeSheet(sc, resolved, inc, ambiguous, excludedIds);
+        setStatus(`Saving counts: sheet ${i} of ${scans.length}…`);
+        const r = await writeSheet(sc, resolved, inc, { ambiguous, clearItemIds: clearIds, ignorePast });
+        total += r.added;
+        removedPast += r.removedPast;
       }
-      onDone(`Counted ${plural(total, 'item')} across ${plural(effective.length, 'sheet')}.${ambiguous.size ? ` ${[...ambiguous].join(', ')} ${ambiguous.size === 1 ? 'has' : 'have'} several variants: review those and move each to the right item.` : ''} Counts are unreviewed until you confirm them.`);
+      // Sheets already open in this session must show the new counts, not a cached copy.
+      await Promise.all(scans.map((sc) => getStore(sc.sheet.id).load(true)));
+      onDone(`Counted ${plural(total, 'item')} across ${plural(scans.length, 'sheet')}.${removedPast ? ` Removed ${plural(removedPast, 'earlier count')} that lay past matchlines.` : ''}${ambiguous.size ? ` ${[...ambiguous].join(', ')} ${ambiguous.size === 1 ? 'has' : 'have'} several variants: review those and move each to the right item.` : ''} Counts are unreviewed until you confirm them.`);
     } catch (e) {
       setError(e instanceof ApiError || e instanceof Error ? e.message : 'Saving the counts failed.');
       setPhase('pick');
