@@ -13,7 +13,7 @@ import type { TagHit, TagKind } from './tagScan.ts';
 export interface SheetScan { sheet: SheetRow; hits: TagHit[]; zones: Zone[]; error?: string }
 
 export async function scanSheets(
-  sheets: SheetRow[], files: DrawingFileRow[], onProgress: (done: number, total: number, label: string) => void, signal?: AbortSignal,
+  sheets: SheetRow[], files: DrawingFileRow[], onProgress: (done: number, total: number, label: string) => void, signal?: AbortSignal, knownCodes?: Set<string>,
 ): Promise<SheetScan[]> {
   const fileById = new Map(files.map((f) => [f.id, f]));
   const out: SheetScan[] = [];
@@ -26,7 +26,7 @@ export async function scanSheets(
       if (!f) throw new Error('drawing file missing');
       const pdf = await loadFilePdf({ id: f.id, chunk_count: f.chunk_count });
       const page = await pdf.getPage(sheet.page);
-      const { hits, zones } = await scanPage(page, pdfjs.OPS, sheet.number, sheet.exclusion_zones ?? null);
+      const { hits, zones } = await scanPage(page, pdfjs.OPS, sheet.number, sheet.exclusion_zones ?? null, knownCodes);
       page.cleanup();
       out.push({ sheet, hits, zones });
     } catch (e) {

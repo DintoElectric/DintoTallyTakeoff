@@ -18,9 +18,9 @@ const pageSize = async (page: { getViewport(o: { scale: number }): { width: numb
  * `sheetNumber` is this sheet's own number (needed to tell which side of a matchline is the neighbour's).
  * `handZones` are the estimator's own exclusion zones for the sheet; null means use the ones found from the matchlines.
  */
-export async function scanPage(page: PageForRuns & PageForPrims, OPS: OpsLike, sheetNumber: string | null, handZones: Zone[] | null = null): Promise<PageScan> {
+export async function scanPage(page: PageForRuns & PageForPrims, OPS: OpsLike, sheetNumber: string | null, handZones: Zone[] | null = null, knownCodes?: Set<string>): Promise<PageScan> {
   const runs = await extractRuns(page);
-  let hits = scanTags(runs);
+  let hits = scanTags(runs, undefined, knownCodes);
   // Drawing notes: hexagons with a label inside. A tag-looking label inside a hexagon (EM2, EX3) is a note, not a device.
   try {
     const { prims, width, height } = await extractPrims(page, OPS);

@@ -18,9 +18,19 @@ export const OWNER_RADIUS = 50; // points: a label belongs to the fixture tag ne
 export function attachLabels(hits: TagHit[], runs: { str: string; cx: number; cy: number }[], pageW: number, pageH: number): void {
   const tags = hits.filter((h) => h.kind === 'tag');
   const isTag = new Set(hits.map((h) => h.code));
-  for (const t of tags) t.labels = [];
+  for (const t of tags) { t.labels = []; t.suffixes ??= []; }
   for (const r of runs) {
     const s = r.str.trim();
+    // A short word standing right after a tag on the same line ("BR-22   LS") is a suffix of that tag.
+    if (/^[A-Z]{1,3}$/.test(s)) {
+      const lx = r.cx * pageW, ly = r.cy * pageH;
+      let best: TagHit | null = null, bd = Infinity;
+      for (const t of tags) {
+        const dx = lx - t.x * pageW, dy = ly - t.y * pageH;
+        if (dx > 8 && dx < 40 && Math.abs(dy) <= 4 && dx < bd) { bd = dx; best = t; }
+      }
+      if (best) { if (!best.suffixes!.includes(s)) best.suffixes!.push(s); continue; }
+    }
     if (!s || s.length > 14 || !/\d/.test(s) || isTag.has(s)) continue;
     if (/^(P-|EL\d|\d+\/\d+")/.test(s)) continue; // grid lines, sheet numbers, scales
     const lx = r.cx * pageW, ly = r.cy * pageH;
@@ -62,12 +72,25 @@ export function discoverMarkers(hits: TagHit[], minCount = 3): MarkerCandidate[]
     // A panel-style label starting with E (EPP/#B#/#) with no normal twin: offered as a possibility, never pre-ticked.
     else if (/^E[A-Z]{1,5}\//.test(p)) out.push({ pattern: p, partner: null, count: c, examples: [...(ex.get(p) ?? [])] });
   }
+  // Words written right after the tag on its own line ("BR-22 LS"): offered as possibilities, never pre-ticked,
+  // because the same place is used for other meanings too (NL = night light, CR = critical).
+  const sfx = new Map<string, { n: number; codes: Set<string>; ex: string[] }>();
+  for (const h of hits) {
+    if (h.kind !== 'tag') continue;
+    for (const w of h.suffixes ?? []) {
+      const e = sfx.get(w) ?? { n: 0, codes: new Set<string>(), ex: [] };
+      e.n++; e.codes.add(h.code);
+      if (e.ex.length < 3) e.ex.push(`${h.code} ${w}`);
+      sfx.set(w, e);
+    }
+  }
+  for (const [w, e] of sfx) if (e.n >= 5 && e.codes.size >= 2) out.push({ pattern: `+${w}`, partner: null, count: e.n, examples: e.ex });
   return out.sort((a, b) => Number(a.partner === null) - Number(b.partner === null) || b.count - a.count);
 }
 
 /** True if any label owned by this fixture matches a confirmed emergency marker. */
 export function isEmergency(h: TagHit, markers: Set<string>): boolean {
-  return !!h.labels?.some((raw) => labelPatterns(raw).some((p) => markers.has(p)));
+  return !!h.labels?.some((raw) => labelPatterns(raw).some((p) => markers.has(p))) || !!h.suffixes?.some((w) => markers.has(`+${w}`));
 }
 
 /** Parses the estimator's own markers: comma-separated, # stands for digits ("EM#, NL"). */
@@ -77,4 +100,8 @@ export function parseCustomMarkers(text: string): string[] {
 
 export const EMERGENCY_KEY = '\u0001EM';
 /** The tag an emergency version of a fixture is stored under: B13 -> B13E (the schedule's own convention). */
-export const emergencyCode = (code: string) => `${code}E`;
+export function emergencyCode(code: string, markers?: Set<string>): string {
+  // Drawings that write the marker after the tag (BR-22 LS) name the emergency version the same way: BR-22LS.
+  const suffix = markers && [...markers].find((m) => m.startsWith('+'));
+  return suffix ? `${code}${suffix.slice(1)}` : `${code}E`;
+}

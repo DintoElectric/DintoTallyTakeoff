@@ -14,11 +14,13 @@ export interface ScheduleRow {
   catalog: string;
   removed: boolean;
   similarTo: string | null; // "SIMILAR TO FIXTURE TYPE A1" -> "A1"
+  location?: string;        // where it is used (BOH, CORRIDOR), when the schedule has such a column
+  finish?: string;
 }
 
 interface Cell { s: string; x0: number; x1: number; cx: number; y: number; h: number }
 
-const clean = (s: string) => s.replace(/\s+/g, ' ').trim();
+export const clean = (s: string) => s.replace(/\s+/g, ' ').trim();
 
 /** First sentence of a description, without splitting on "U.L." style abbreviations. */
 export function firstSentence(text: string, max = 190): string {
@@ -32,14 +34,27 @@ export function firstSentence(text: string, max = 190): string {
   }
   return t.length <= max ? t : cut(t, max);
 }
-/** "LED 2X2 FLAT PANEL TROFFER" from a long description; "similar to" rows keep their first sentence. */
+const FIXTURE_NOUN = /(TROFFER|PENDANT|SLOT|DOWNLIGHT|STRIPLIGHT|STRIP|LIGHT|LUMINAIRE|SIGN|WALLWASHER|SCONCE|FLOOD|PACK|BAY|LINEAR|CYLINDER|PANEL|GRAZER|STEP|TRACK|MODULE|FIXTURE|ACCENT|LAMP|WALLPACK|WRAPAROUND|SYSTEM|TAPE|CANOPY)/i;
+
+/**
+ * A short name from a long description. "LED 2X2 FLAT PANEL TROFFER, NOMINAL 3 INCH ..." gives "LED 2X2 FLAT PANEL TROFFER".
+ * When the first clause is only a mounting phrase ("SURFACE OR CHAIN MOUNTED, NOMINAL 3" X 3" ... LED STRIPLIGHT ..."),
+ * the sentence is used instead, cut at a comma. "Similar to" rows keep their first sentence.
+ */
 export function shortName(desc: string, similar: boolean): string {
   const d = clean(desc);
   if (similar || d.length <= 60) return firstSentence(d, 120);
   const sentence = firstSentence(d, 120);
   if (sentence.length <= 60 && sentence.endsWith('.')) return sentence;
   const comma = d.indexOf(',');
-  return comma >= 12 && comma <= 80 ? d.slice(0, comma) : firstSentence(d, 90);
+  const lead = d.slice(0, comma);
+  // A leading phrase that only says how it mounts ("PENDANT MOUNTED", "SURFACE OR CHAIN MOUNTED") is not a name.
+  const onlyMounting = /\bMOUNT(ED|ING)?$/i.test(lead.trim());
+  if (comma >= 12 && comma <= 80 && FIXTURE_NOUN.test(lead) && !onlyMounting) return lead;
+  if (sentence.length <= 110) return sentence;
+  const head = sentence.slice(0, 110);
+  const lastComma = head.lastIndexOf(',');
+  return lastComma > 40 ? head.slice(0, lastComma) : cut(sentence, 110);
 }
 const cut = (s: string, max: number) => `${s.slice(0, max).replace(/\s+\S*$/, '')}…`;
 
@@ -156,7 +171,7 @@ export function specLine(r: ScheduleRow): string {
   return s.length <= 200 ? s : `${s.slice(0, 197)}…`;
 }
 
-const MOUNT_NAMES: Record<string, string> = { REC: 'Recessed', PEND: 'Pendant', SURF: 'Surface', WALL: 'Wall', TRACK: 'Track', SUSP: 'Suspended' };
+const MOUNT_NAMES: Record<string, string> = { EXIT: 'Exit signs', REC: 'Recessed', PEND: 'Pendant', SURF: 'Surface', WALL: 'Wall', TRACK: 'Track', SUSP: 'Suspended' };
 /** Category from the mounting column (REC/SURF counts as recessed). */
 export function categoryFor(mounting: string): string {
   const first = mounting.split('/')[0].trim().toUpperCase();

@@ -7,6 +7,9 @@ export const TAG_RE = /^[A-Z]{1,3}\d{1,2}[A-Z]{0,2}\*?$/;
 // Short letter-only device codes (OS, VS, S, J, LD ...). Ambiguous, so they are only counted when
 // the text run is exactly the code, and they are reported at lower confidence.
 export const SHORT_RE = /^[A-Z]{1,3}$/;
+// Hyphenated types (BC-14, RL-2X, EX-1). Grid labels and room numbers look the same (P-9, S-101), so these are only
+// counted when the code is already in the item library (for example from the fixture schedule).
+export const HYPHEN_RE = /^[A-Z]{1,4}-[A-Z0-9]{1,4}$/;
 
 export interface Region { x0: number; y0: number; x1: number; y1: number }
 /** Plan area: leaves out the title block and notes column on the right, and the drawing border. */
@@ -17,6 +20,7 @@ export interface TagHit {
   code: string; x: number; y: number; kind: TagKind; h?: number;
   past?: boolean;      // beyond a matchline
   labels?: string[];   // printed labels owned by this fixture tag (circuit, zone, panel)
+  suffixes?: string[]; // short words written after the tag on its own line ("BR-22 LS" -> LS)
   conf?: number;       // confidence override used when the count is saved
 }
 
@@ -43,7 +47,8 @@ function splitByKnown(s: string, known: string[]): string[] | null {
   return out;
 }
 
-export function scanTags(runs: PageRun[], region: Region = DEFAULT_COUNT_REGION): TagHit[] {
+export function scanTags(runs: PageRun[], region: Region = DEFAULT_COUNT_REGION, knownCodes?: Set<string>): TagHit[] {
+  const isKnown = (t: string) => !!knownCodes && HYPHEN_RE.test(t) && knownCodes.has(t.toUpperCase());
   const inside = (r: PageRun) => r.cx >= region.x0 && r.cx <= region.x1 && r.cy >= region.y0 && r.cy <= region.y1;
   const live = runs.filter(inside);
 
@@ -60,7 +65,7 @@ export function scanTags(runs: PageRun[], region: Region = DEFAULT_COUNT_REGION)
       x: r.rotated ? r.cx : r.cx - r.w / 2 + ((offset + len / 2) / s.length) * r.w,
       y: r.rotated ? r.cy - (r.w * 0) : r.cy,
     });
-    if (TAG_RE.test(s)) { hits.push({ code: s, x: r.cx, y: r.cy, kind: 'tag', h: r.h }); continue; }
+    if (TAG_RE.test(s) || isKnown(s)) { hits.push({ code: s, x: r.cx, y: r.cy, kind: 'tag', h: r.h }); continue; }
     if (SHORT_RE.test(s)) { hits.push({ code: s, x: r.cx, y: r.cy, kind: 'short', h: r.h }); continue; }
     const rep = splitRepeats(s);
     if (rep) {
@@ -72,7 +77,11 @@ export function scanTags(runs: PageRun[], region: Region = DEFAULT_COUNT_REGION)
     for (const part of s.split(/(\s+)/)) {
       const p = part;
       if (p.trim() && !/\s/.test(p)) {
-        if (TAG_RE.test(p)) hits.push({ code: p, ...along(offset, p.length), kind: 'tag', h: r.h });
+        if (TAG_RE.test(p) || isKnown(p)) hits.push({ code: p, ...along(offset, p.length), kind: 'tag', h: r.h });
+        else if (/^[A-Z]{1,3}$/.test(p) && hits.length && hits[hits.length - 1].kind === 'tag' && Math.abs(hits[hits.length - 1].y - r.cy) < 0.003) {
+          // "BR-22 LS": a short word after a tag in the same run belongs to that tag
+          (hits[hits.length - 1].suffixes ??= []).push(p);
+        }
         else {
           const rp = splitRepeats(p);
           if (rp) for (let i = 0; i < rp.n; i++) hits.push({ code: rp.unit, ...along(offset + i * rp.unit.length, rp.unit.length), kind: 'tag', h: r.h });
