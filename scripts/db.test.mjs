@@ -80,3 +80,28 @@ console.log('db.test OK');
   assert.equal(list.rows[0].points.length, 3);
   console.log('areas OK');
 }
+
+// removing one sheet: its counts and areas go, a "replaces" link is cleared, the other sheets of the file stay
+{
+  const { PGlite: P } = await import('@electric-sql/pglite');
+  const d3 = new P();
+  for (const f of readdirSync(dir).sort()) await d3.exec(readFileSync(`${dir}/${f}`, 'utf8'));
+  const pr = (await d3.query(`insert into projects (name, created_by) values ('P','u') returning id`)).rows[0];
+  const fl = (await d3.query(`insert into drawing_files (project_id,file_name,size_bytes,chunk_count,uploaded_by) values ($1,'a.pdf',1,1,'u') returning id`, [pr.id])).rows[0];
+  const mk = async (page) => (await d3.query(`insert into sheets (project_id,file_id,page,page_width_pt,page_height_pt) values ($1,$2,$3,100,100) returning id`, [pr.id, fl.id, page])).rows[0].id;
+  const s1 = await mk(1), s2 = await mk(2);
+  await d3.query(`update sheets set replaces_sheet_id = $1 where id = $2`, [s1, s2]);
+  const it = (await d3.query(`insert into item_types (code,name,unit,created_by) values ('X','x','EA','u') returning id`)).rows[0];
+  await d3.query(`insert into detections (id,sheet_id,item_type_id,x,y,source,status,created_by) values (gen_random_uuid(),$1,$2,0.5,0.5,'manual','confirmed','u')`, [s1, it.id]);
+  await d3.query(`insert into areas (sheet_id,name,polygon,created_by) values ($1,'A','[]'::jsonb,'u')`, [s1]);
+  // the same statements the endpoint runs
+  await d3.query(`update sheets set replaces_sheet_id = null where replaces_sheet_id = $1`, [s1]);
+  await d3.query(`delete from sheets where id = $1`, [s1]);
+  assert.equal((await d3.query(`select count(*)::int n from detections`)).rows[0].n, 0);
+  assert.equal((await d3.query(`select count(*)::int n from areas`)).rows[0].n, 0);
+  assert.equal((await d3.query(`select count(*)::int n from sheets where file_id = $1`, [fl.id])).rows[0].n, 1);
+  await d3.query(`delete from sheets where id = $1`, [s2]);
+  assert.equal((await d3.query(`select count(*)::int n from sheets where file_id = $1`, [fl.id])).rows[0].n, 0); // last sheet: the endpoint now removes the file
+  await d3.query(`delete from drawing_files where id = $1`, [fl.id]);
+  console.log('sheet delete OK');
+}

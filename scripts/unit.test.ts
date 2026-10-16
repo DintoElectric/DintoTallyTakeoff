@@ -608,3 +608,50 @@ test('a legend with a DEVICE TYPE column is not a schedule: no items from it', (
   assert.deepEqual(textTablesToRows([legend]), []);
   assert.deepEqual(textTablesToRows([{ ...legend, title: '' }]), []);
 });
+
+import { pageFingerprint, similarity as simil } from '../src/detect/fingerprint.ts';
+import { candidateGroups, defaultRemovals, findDuplicateGroups } from '../src/detect/duplicates.ts';
+import { classifySheet, scheduleHeadings } from '../src/detect/scheduleSheets.ts';
+const strs = (...s: string[]) => new Set(s);
+test('fingerprint: a different plot stamp does not matter, a changed note does, and an empty page is never "the same"', () => {
+  const run = (s: string) => ({ str: s, cx: 0, cy: 0, w: 0, h: 0, rotated: false });
+  const a = pageFingerprint(['BC-14', 'RECESSED 2X2 LIGHT', '9/3/2026 2:09:49 PM Autodesk Docs://25-098-00.rvt'].map(run));
+  const b = pageFingerprint(['BC-14', 'RECESSED 2X2 LIGHT', '9/4/2026 8:00:01 AM Autodesk Docs://25-098-00.rvt'].map(run));
+  assert.equal(simil(a, b), 1);
+  assert.ok(simil(pageFingerprint(['BC-14', 'RECESSED 2X2 LIGHT', 'NOTE ONE'].map(run)), pageFingerprint(['BC-14', 'RECESSED 2X2 LIGHT', 'NOTE TWO'].map(run))) < 0.99);
+  assert.equal(simil(new Set(), new Set()), 0);
+});
+test('duplicates: identical copies are found, the copy with counts is kept, a revised drawing is left alone', () => {
+  const page = (n: number) => Array.from({ length: 100 }, (_, i) => `TEXT ${n} ${i}`);
+  const sh = (id: string, number: string | null, file: string, pageNo: number, counts = 0) => ({ id, number, file_id: file, page: pageNo, detection_count: counts });
+  const revised = [...page(1).slice(0, 80), ...Array.from({ length: 20 }, (_, i) => `CHANGED ${i}`)]; // 80/120 strings in common = 67%
+  const sheets = [sh('a1', 'E0.0', 'f1', 1), sh('a2', 'e0.0', 'f2', 1, 7), sh('a3', 'E0.0 ', 'f3', 1),   // three copies; the middle one has counts
+    sh('b1', 'E2.01A', 'f1', 2), sh('b2', 'E2.01A', 'f2', 2),                                           // a different version
+    sh('c1', 'E9.9', 'f1', 3), sh('c2', 'E9.9', 'f2', 3),                                                // two unrelated drawings under one number
+    sh('d1', null, 'f1', 4), sh('d2', null, 'f2', 4), sh('e1', 'E5.5', 'f1', 5)];                       // no number / a number used once
+  const prints = new Map<string, Set<string>>([['a1', strs(...page(1))], ['a2', strs(...page(1))], ['a3', strs(...page(1))], ['b1', strs(...page(1))], ['b2', strs(...revised)],
+    ['c1', strs(...page(1))], ['c2', strs(...page(7))], ['e1', strs(...page(1))]]);
+  assert.equal(candidateGroups(sheets).length, 3);                        // E0.0 (any spacing/case), E2.01A, E9.9; null numbers and singletons are not compared
+  const groups = findDuplicateGroups(sheets, prints, new Map([['f1', 0], ['f2', 1], ['f3', 2]]));
+  assert.deepEqual(groups.map((g) => g.number), ['E0.0', 'E2.01A']);       // E9.9: different drawings, nothing to say
+  const e00 = groups[0];
+  assert.deepEqual(e00.clusters[0].members.map((m) => m.id), ['a2', 'a1', 'a3']);   // the one with counts first, then by file order
+  assert.equal(groups[1].clusters.length, 2); assert.ok(groups[1].clusters[1].sim > 0.6 && groups[1].clusters[1].sim < 0.99);
+  assert.deepEqual([...defaultRemovals(groups)].sort(), ['a1', 'a3']);       // extras of identical pages only; both versions of E2.01A stay
+});
+test('schedule sheets: titled ones are marked, plans with only a schedule on them are left to the estimator, non-counting sheets need nothing', () => {
+  const sh = (kind: string, title: string | null, count = true) => ({ id: 'x', number: 'E1', title, kind, count_enabled: count });
+  assert.deepEqual(classifySheet(sh('schedule', 'ELECTRICAL SCHEDULES')), { id: 'x', why: 'title', detail: 'ELECTRICAL SCHEDULES', preselect: true, setKind: true });
+  assert.equal(classifySheet(sh('schedule', 'ELECTRICAL SCHEDULES', false)), null);                    // already marked and not counting
+  assert.equal(classifySheet(sh('other', 'COMMUNICATIONS OUTLET COUNT SCHEDULES', false))!.setKind, true); // titled, but its kind is wrong: fix the kind
+  assert.equal(classifySheet(sh('legend', 'GENERAL NOTES, LEGEND, AND SCHEDULES'))!.setKind, false);   // a legend stays a legend
+  assert.equal(classifySheet(sh('floor_plan', 'LIGHTING PLAN AND FIXTURE SCHEDULE'))!.preselect, false);
+  assert.equal(classifySheet(sh('floor_plan', 'LIGHTING PLAN'), { tableTypes: 0, headings: [] }), null);
+  assert.equal(classifySheet(sh('floor_plan', 'LIGHTING PLAN', false), { tableTypes: 9, headings: [] }), null);  // not counting: nothing to turn off
+  const planWith = classifySheet(sh('floor_plan', 'SITE PLAN'), { tableTypes: 4, headings: [] })!;
+  assert.deepEqual([planWith.why, planWith.preselect, planWith.setKind], ['table', false, false]);
+  const other = classifySheet(sh('other', 'DETAILS'), { tableTypes: 4, headings: [] })!;
+  assert.deepEqual([other.preselect, other.setKind], [true, true]);
+  assert.deepEqual(scheduleHeadings(['SITE LIGHTING SCHEDULE', 'REFER TO DRY TYPE TRANSFORMER SCHEDULE', 'SCHEDULE', 'see schedule', 'AREA A EQUIPMENT SCHEDULE (by room)', 'IN SCHEDULE', 'SHOWN IN SCHEDULE', 'SITE LIGHTING SCHEDULE']),
+    ['SITE LIGHTING SCHEDULE', 'AREA A EQUIPMENT SCHEDULE (by room)']);
+});
