@@ -2,16 +2,17 @@
 import type { Detection, DrawingFileRow, ItemTypeRow, SheetRow } from '../../shared/types.ts';
 import { BATCH_MAX_OPS } from '../../shared/limits.ts';
 import { api } from '../auth/api.ts';
-import { loadFilePdf } from '../viewer/pdf.ts';
-import { extractRuns } from './pageRuns.ts';
-import { scanTags, type TagHit, type TagKind } from './tagScan.ts';
+import { loadFilePdf, pdfjs } from '../viewer/pdf.ts';
+import type { Matchline } from './matchlines.ts';
+import { scanPage } from './scanPage.ts';
+import type { TagHit, TagKind } from './tagScan.ts';
 
 export const CONF_TAG = 0.98;   // exact tag text: not flagged
 export const CONF_SHORT = 0.7;  // short letter-only codes: always flagged for review
 export const CONF_ROOMISH = 0.5;    // a single hit that looks like a room number inside an otherwise real tag
 export const CONF_AMBIGUOUS = 0.6; // the code belongs to several library items (variants): flagged so you choose
 
-export interface SheetScan { sheet: SheetRow; hits: TagHit[]; error?: string }
+export interface SheetScan { sheet: SheetRow; hits: TagHit[]; lines: Matchline[]; error?: string }
 
 export async function scanSheets(
   sheets: SheetRow[], files: DrawingFileRow[], onProgress: (done: number, total: number, label: string) => void, signal?: AbortSignal,
@@ -27,11 +28,11 @@ export async function scanSheets(
       if (!f) throw new Error('drawing file missing');
       const pdf = await loadFilePdf({ id: f.id, chunk_count: f.chunk_count });
       const page = await pdf.getPage(sheet.page);
-      const hits = scanTags(await extractRuns(page));
+      const { hits, lines } = await scanPage(page, pdfjs.OPS, sheet.number);
       page.cleanup();
-      out.push({ sheet, hits });
+      out.push({ sheet, hits, lines });
     } catch (e) {
-      out.push({ sheet, hits: [], error: e instanceof Error ? e.message : 'could not read this sheet' });
+      out.push({ sheet, hits: [], lines: [], error: e instanceof Error ? e.message : 'could not read this sheet' });
     }
     await new Promise((r) => setTimeout(r, 0)); // keep the page responsive
   }
@@ -40,21 +41,22 @@ export async function scanSheets(
 }
 
 export interface CodeRow { code: string; kind: TagKind; total: number; bySheet: Map<string, number> }
-const KIND_RANK: Record<TagKind, number> = { tag: 0, short: 1, room: 2 };
+const KIND_RANK: Record<TagKind, number> = { note: 0, tag: 1, short: 2, room: 3 };
 export function discover(scans: SheetScan[]): CodeRow[] {
-  const m = new Map<string, CodeRow & { rooms: number; real: number }>();
+  const m = new Map<string, CodeRow & { rooms: number; real: number; notes: number }>();
   for (const sc of scans) {
     for (const h of sc.hits) {
-      const r = m.get(h.code) ?? { code: h.code, kind: h.kind, total: 0, bySheet: new Map(), rooms: 0, real: 0 };
+      const r = m.get(h.code) ?? { code: h.code, kind: h.kind, total: 0, bySheet: new Map(), rooms: 0, real: 0, notes: 0 };
       r.total++;
       if (h.kind === 'room') r.rooms++;
       if (h.kind === 'tag') r.real++;
+      if (h.kind === 'note') r.notes++;
       r.bySheet.set(sc.sheet.id, (r.bySheet.get(sc.sheet.id) ?? 0) + 1);
       m.set(h.code, r);
     }
   }
   // A code is a room number only if EVERY occurrence looks like one (EM2 is a fixture even if one hit sits under a room name).
-  const rows = [...m.values()].map(({ rooms, real, ...r }) => ({ ...r, kind: (rooms === r.total ? 'room' : real > 0 ? 'tag' : 'short') as TagKind }));
+  const rows = [...m.values()].map(({ rooms, real, notes, ...r }) => ({ ...r, kind: (notes > 0 && notes >= r.total - rooms ? 'note' : rooms === r.total ? 'room' : real > 0 ? 'tag' : 'short') as TagKind }));
   return rows.sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || b.total - a.total || a.code.localeCompare(b.code));
 }
 

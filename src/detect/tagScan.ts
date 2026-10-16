@@ -12,8 +12,8 @@ export interface Region { x0: number; y0: number; x1: number; y1: number }
 /** Plan area: leaves out the title block and notes column on the right, and the drawing border. */
 export const DEFAULT_COUNT_REGION: Region = { x0: 0.02, y0: 0.03, x1: 0.82, y1: 0.97 };
 
-export type TagKind = 'tag' | 'short' | 'room';
-export interface TagHit { code: string; x: number; y: number; kind: TagKind; h?: number }
+export type TagKind = 'tag' | 'short' | 'room' | 'note';
+export interface TagHit { code: string; x: number; y: number; kind: TagKind; h?: number; past?: boolean } // past: beyond a matchline
 
 /** "B13B13B13" is 3 hits of B13. Returns the repeated unit and its count, or null. */
 export function splitRepeats(s: string): { unit: string; n: number } | null {

@@ -1,0 +1,32 @@
+// The per-page scan used by Auto-count: tags, drawing notes (hexagons), room numbers, and matchlines.
+import { extractRuns, type PageRun } from './pageRuns.ts';
+import { extractPrims, type OpsLike } from './primitives.ts';
+import { findHexNotes } from './notes.ts';
+import { findMatchlines, isPastMatchline, type Matchline } from './matchlines.ts';
+import { DEFAULT_COUNT_REGION, scanTags, type TagHit } from './tagScan.ts';
+
+type PageForRuns = Parameters<typeof extractRuns>[0];
+type PageForPrims = Parameters<typeof extractPrims>[0];
+
+export interface PageScan { hits: TagHit[]; lines: Matchline[]; runs: PageRun[] }
+
+/** `sheetNumber` is this sheet's own number (needed to tell which side of a matchline is the neighbour's). */
+export async function scanPage(page: PageForRuns & PageForPrims, OPS: OpsLike, sheetNumber: string | null): Promise<PageScan> {
+  const runs = await extractRuns(page);
+  let hits = scanTags(runs);
+  // Drawing notes: hexagons with a label inside. A tag-looking label inside a hexagon (EM2, EX3) is a note, not a device.
+  try {
+    const { prims, width, height } = await extractPrims(page, OPS);
+    const R = DEFAULT_COUNT_REGION;
+    const notes = findHexNotes(prims, runs, width, height).filter((n) => n.x >= R.x0 && n.x <= R.x1 && n.y >= R.y0 && n.y <= R.y1);
+    const insideHex = (h: TagHit) => notes.some((n) => Math.abs(h.x - n.x) <= (n.r * 1.05) / width && Math.abs(h.y - n.y) <= (n.r * 0.95) / height);
+    hits = hits.filter((h) => !insideHex(h));
+    for (const n of notes) hits.push({ code: n.label, x: n.x, y: n.y, kind: 'note' });
+  } catch (e) {
+    console.warn('Drawing-note detection failed for a sheet; counting tags only', e);
+  }
+  // Matchlines: everything past one belongs to the neighbouring sheet.
+  const lines = findMatchlines(runs, sheetNumber);
+  for (const h of hits) if (isPastMatchline(h.x, h.y, lines)) h.past = true;
+  return { hits, lines, runs };
+}
