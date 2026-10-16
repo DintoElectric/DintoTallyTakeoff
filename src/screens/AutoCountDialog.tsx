@@ -38,8 +38,11 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
   // Library matches first, then drawing notes, then other tags, then short codes, then room numbers.
   const rows: CodeRow[] = useMemo(() => {
     const rank = (r: CodeRow) => (r.kind === 'room' ? 4 : byCode.has(r.code.toUpperCase()) ? 0 : r.kind === 'note' ? 1 : r.kind === 'tag' ? 2 : 3);
-    return [...discover(effective)].sort((a, b) => rank(a) - rank(b) || b.total - a.total || a.code.localeCompare(b.code));
+    return [...discover(effective)].filter((r) => r.kind !== 'short').sort((a, b) => rank(a) - rank(b) || b.total - a.total || a.code.localeCompare(b.code));
   }, [effective, byCode]);
+  // Short letter-only codes (S, OS, VS ...) are never counted: they are too easily mixed up with other text.
+  const shortRows = useMemo(() => discover(effective).filter((r) => r.kind === 'short'), [effective]);
+  const shortMarks = shortRows.reduce((n, r) => n + r.total, 0);
 
   // Emergency markers: found from the labels beside fixtures, confirmed by the estimator.
   const candidates = useMemo(() => discoverMarkers(effective.flatMap((sc) => sc.hits)), [effective]);
@@ -67,7 +70,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
         // With a library (for example from a fixture schedule) only tags that match it are pre-ticked, so grid
         // labels and other look-alikes stay out. With no matches yet, every tag is pre-ticked to get you started.
         // Room numbers are never pre-ticked.
-        const lib = found.filter((r) => r.kind !== 'room' && r.kind !== 'note' && byCode.has(r.code.toUpperCase()));
+        const lib = found.filter((r) => r.kind !== 'room' && r.kind !== 'note' && r.kind !== 'short' && byCode.has(r.code.toUpperCase()));
         setLibraryDriven(lib.length > 0);
         const notes = found.filter((r) => r.kind === 'note'); // drawing notes are always counted
         setInc(new Set([...(lib.length > 0 ? lib : found.filter((r) => r.kind === 'tag')), ...notes].map((r) => r.code)));
@@ -140,9 +143,12 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
       const clearIds = new Set<string>();
       for (const sc of scans) for (const h of sc.hits) for (const it of byCode.get(h.code.toUpperCase()) ?? []) clearIds.add(it.id);
       for (const it of resolved.values()) clearIds.add(it.id);
+      // Library items for short codes found on these sheets: any earlier automatic counts of them are removed.
+      const dropIds = new Set<string>();
+      for (const r of discover(scans)) if (r.kind === 'short') for (const it of byCode.get(r.code.toUpperCase()) ?? []) dropIds.add(it.id);
       const writeInc = new Set([...inc, ...emKeys]);
       // 2. Write each sheet's detections.
-      let total = 0, removedPast = 0;
+      let total = 0, removedPast = 0, removedShort = 0;
       let i = 0;
       for (const sc of scans) {
         i++;
@@ -152,13 +158,14 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
           if (h.kind !== 'tag' || !inc.has(h.code) || !splits(h.code)) return h;
           return isEmergency(h, activeMarkers) ? { ...h, code: h.code + EMERGENCY_KEY, conf: CONF_EMERGENCY } : { ...h, conf: CONF_NORMAL_SPLIT };
         });
-        const r = await writeSheet({ ...sc, hits }, resolved, writeInc, { ambiguous, clearItemIds: clearIds, ignorePast });
+        const r = await writeSheet({ ...sc, hits }, resolved, writeInc, { ambiguous, clearItemIds: clearIds, dropItemIds: dropIds, ignorePast });
         total += r.added;
         removedPast += r.removedPast;
+        removedShort += r.removedDropped;
       }
       // Sheets already open in this session must show the new counts, not a cached copy.
       await Promise.all(scans.map((sc) => getStore(sc.sheet.id).load(true)));
-      onDone(`Counted ${plural(total, 'item')} across ${plural(scans.length, 'sheet')}.${removedPast ? ` Removed ${plural(removedPast, 'earlier count')} that lay past matchlines.` : ''}${ambiguous.size ? ` ${[...ambiguous].join(', ')} ${ambiguous.size === 1 ? 'has' : 'have'} several variants: review those and move each to the right item.` : ''} ${emKeys.size ? ` Emergency fixtures were counted under their own items (${[...emKeys].map((k) => emergencyCode(k.replace(EMERGENCY_KEY, ''))).slice(0, 6).join(', ')}${emKeys.size > 6 ? '…' : ''}).` : ''} Counts are unreviewed until you confirm them.`);
+      onDone(`Counted ${plural(total, 'item')} across ${plural(scans.length, 'sheet')}.${removedPast ? ` Removed ${plural(removedPast, 'earlier count')} that lay past matchlines.` : ''}${removedShort ? ` Removed ${plural(removedShort, 'earlier short-code count')}.` : ''}${ambiguous.size ? ` ${[...ambiguous].join(', ')} ${ambiguous.size === 1 ? 'has' : 'have'} several variants: review those and move each to the right item.` : ''} ${emKeys.size ? ` Emergency fixtures were counted under their own items (${[...emKeys].map((k) => emergencyCode(k.replace(EMERGENCY_KEY, ''))).slice(0, 6).join(', ')}${emKeys.size > 6 ? '…' : ''}).` : ''} Counts are unreviewed until you confirm them.`);
     } catch (e) {
       setError(e instanceof ApiError || e instanceof Error ? e.message : 'Saving the counts failed.');
       setPhase('pick');
@@ -205,6 +212,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
             ))}
             <input className="input" style={{ minHeight: 30, padding: '3px 8px' }} aria-label="Other emergency labels" placeholder="Other emergency labels, e.g. EM#, NL  (# stands for a number)" value={customText} disabled={phase === 'write'} onChange={(e) => setCustomText(e.target.value)} />
           </div>
+          {shortMarks > 0 && <div className="dim" style={{ fontSize: 12 }}>{plural(shortMarks, 'short letter-only mark')} ({shortRows.slice(0, 6).map((r) => r.code).join(', ')}{shortRows.length > 6 ? '…' : ''}) are not counted.</div>}
           {failed.length > 0 && <div className="err-text">{plural(failed.length, 'sheet')} couldn't be read: {failed.map((f) => f.sheet.number ?? `page ${f.sheet.page}`).join(', ')}.</div>}
           <div style={{ maxHeight: 340, overflow: 'auto' }}>
             <table className="table">
