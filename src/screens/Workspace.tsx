@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import {
-  ArrowCounterClockwise, ArrowClockwise, Cursor, Eraser, Eye, EyeSlash, Polygon, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus,
+  ArrowCounterClockwise, ArrowClockwise, Cursor, Eraser, Eye, EyeSlash, Polygon, Shapes, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus,
   PlusCircle, Plus, Selection, Stack, WarningCircle,
 } from '@phosphor-icons/react';
 import type { CategoryRow, CountRow, DrawingFileRow, ItemTypeRow, ProjectRow, SheetRow } from '../../shared/types.ts';
@@ -16,11 +16,16 @@ import { getStore, useSheetStore } from './sheetStore.ts';
 import { extractRuns } from '../detect/pageRuns.ts';
 import { findMatchlines, zonesFromMatchlines } from '../detect/matchlines.ts';
 import { inZones, type Zone, type ZonePoint } from '../../shared/zones.ts';
+import { areaKey, areaNames, assignAreas, type AreaCountRow, type AreaRow } from '../../shared/areas.ts';
+import AreaNameDialog from './AreaNameDialog.tsx';
 import AutoCountDialog from './AutoCountDialog.tsx';
 import { ItemDialog } from './ItemDialog.tsx';
 import ExportDialog from './ExportDialog.tsx';
 
 const STATUS_DOT = { not_counted: 'not_counted', needs_review: 'needs_review', reviewed: 'reviewed' } as const;
+const AREA_COLORS = ['#1f8a7e', '#d9480f', '#1c6aa8', '#8a3ffc', '#b7791f', '#2b8a3e', '#c2255c', '#5c677d'];
+/** The same name always gets the same colour. */
+const areaColor = (name: string) => { let h = 0; for (const c of areaKey(name)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return AREA_COLORS[h % AREA_COLORS.length]; };
 const fmtTime = (d: Date) => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
 export default function Workspace({ projectId, sheetId }: { projectId: string; sheetId: string }) {
@@ -34,6 +39,8 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const itemsQ = useFetch<{ items: ItemTypeRow[] }>('/items');
   const catsQ = useFetch<{ categories: CategoryRow[] }>('/categories');
   const countsQ = useFetch<{ counts: CountRow[] }>(`/projects/${projectId}/counts`);
+  const areasQ = useFetch<{ areas: AreaRow[] }>(`/sheets/${sheetId}/areas`);                              // this sheet's areas
+  const areaTotalsQ = useFetch<{ names: string[]; rows: AreaCountRow[] }>(`/projects/${projectId}/area-counts`); // names and counts, project-wide
 
   const sheets = sheetsQ.data?.sheets ?? [];
   const sheet = sheets.find((s) => s.id === sheetId) ?? null;
@@ -61,14 +68,15 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const refreshTimer = useRef<number>();
   const { reload: reloadCounts } = countsQ;
   const { reload: reloadSheets } = sheetsQ;
+  const { reload: reloadAreaTotals } = areaTotalsQ;
   useEffect(() => {
     if (!store) return;
     store.onSaved = () => {
       window.clearTimeout(refreshTimer.current);
-      refreshTimer.current = window.setTimeout(() => { void reloadCounts(); void reloadSheets(); }, 800);
+      refreshTimer.current = window.setTimeout(() => { void reloadCounts(); void reloadSheets(); void reloadAreaTotals(); }, 800);
     };
     return () => { store.onSaved = null; };
-  }, [store, reloadCounts, reloadSheets]);
+  }, [store, reloadCounts, reloadSheets, reloadAreaTotals]);
   useEffect(() => { setSelected(new Set()); }, [sheetId]);
 
   // Default the active item to the first library item.
@@ -88,6 +96,9 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [autoZones, setAutoZones] = useState<Zone[]>([]);   // worked out from the matchlines
   const [draft, setDraft] = useState<ZonePoint[]>([]);         // outline being drawn with the zone tool
   const [zonesOpen, setZonesOpen] = useState(false);
+  const [areasOpen, setAreasOpen] = useState(false);
+  const [pendingArea, setPendingArea] = useState<ZonePoint[] | null>(null); // outline waiting for a name
+  const [areaFilter, setAreaFilter] = useState('__all');                     // '__all', '__none', or an area name
 
   useEffect(() => {
     if (!file) return;
@@ -153,15 +164,33 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   }, [snap.dets, threshold]);
 
   const otherSheetCounts = useMemo(() => (countsQ.data?.counts ?? []).filter((c) => c.sheet_id !== sheetId), [countsQ.data, sheetId]);
+
+  // Named count areas: this sheet's own, and counts per area (this sheet worked out here, so edits show at once).
+  const sheetAreas = areasQ.data?.areas ?? [];
+  const allAreaNames = useMemo(() => areaNames([...(areaTotalsQ.data?.names ?? []).map((name) => ({ name })), ...sheetAreas]), [areaTotalsQ.data, sheetAreas]);
+  const localAreaRows = useMemo(
+    () => assignAreas(snap.dets.map((d) => ({ sheet_id: sheetId, item_type_id: d.item_type_id, x: d.x, y: d.y, flagged: d.status === 'unreviewed' && d.confidence !== null && d.confidence < threshold })), sheetAreas),
+    [snap.dets, sheetAreas, sheetId, threshold],
+  );
+  const otherAreaRows = useMemo(() => (areaTotalsQ.data?.rows ?? []).filter((r) => r.sheet_id !== sheetId), [areaTotalsQ.data, sheetId]);
+
   const shown = useMemo(() => {
     const m = new Map<string, { n: number; flagged: number }>();
+    const bump = (item: string, n: number, flagged: number) => { const e = m.get(item) ?? { n: 0, flagged: 0 }; e.n += n; e.flagged += flagged; m.set(item, e); };
+    if (areaFilter !== '__all') {
+      // Only the counts that fall inside the chosen area (or in no area at all).
+      const want = areaFilter === '__none' ? null : areaFilter;
+      const rows = scope === 'sheet' ? localAreaRows : [...otherAreaRows, ...localAreaRows];
+      for (const r of rows) if (want === null ? r.area === null : r.area !== null && areaKey(r.area) === areaKey(want)) bump(r.item_type_id, r.n, r.flagged);
+      return m;
+    }
     if (scope === 'sheet') localByItem.forEach((v, k) => m.set(k, { ...v }));
     else {
-      for (const c of otherSheetCounts) { const e = m.get(c.item_type_id) ?? { n: 0, flagged: 0 }; e.n += c.n; e.flagged += c.flagged; m.set(c.item_type_id, e); }
-      localByItem.forEach((v, k) => { const e = m.get(k) ?? { n: 0, flagged: 0 }; e.n += v.n; e.flagged += v.flagged; m.set(k, e); });
+      for (const c of otherSheetCounts) bump(c.item_type_id, c.n, c.flagged);
+      localByItem.forEach((v, k) => bump(k, v.n, v.flagged));
     }
     return m;
-  }, [scope, localByItem, otherSheetCounts]);
+  }, [scope, areaFilter, localByItem, otherSheetCounts, localAreaRows, otherAreaRows]);
   const totalShown = [...shown.values()].reduce((s, v) => s + v.n, 0);
   const flaggedShown = [...shown.values()].reduce((s, v) => s + v.flagged, 0);
 
@@ -251,10 +280,38 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   }
   const finishZone = useCallback(() => {
     if (draft.length < 3) return toast('Place at least 3 corner points first.');
+    if (tool === 'area') { setPendingArea(draft); setDraft([]); return; } // a count area needs a name first
     void saveZones([...zonesShown, { points: draft }], 'Zone saved. Auto-count will ignore everything inside it.');
     setDraft([]);
     setTool('select');
-  }, [draft, zonesShown]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [draft, zonesShown, tool]); // eslint-disable-line react-hooks/exhaustive-deps
+  async function saveArea(name: string) {
+    const pts = pendingArea;
+    if (!pts) return;
+    try {
+      await api(`/sheets/${sheetId}/areas`, { body: { name, points: pts } });
+      setPendingArea(null);
+      setTool('select');
+      await Promise.all([areasQ.reload(), areaTotalsQ.reload()]);
+      toast(`Area “${name}” saved.`);
+    } catch (e) { toast(e instanceof ApiError ? e.message : 'Could not save the area.'); }
+  }
+  async function deleteArea(name: string) {
+    try {
+      for (const a of sheetAreas.filter((x) => areaKey(x.name) === areaKey(name))) await api(`/sheets/${sheetId}/areas/${a.id}`, { method: 'DELETE' });
+      await Promise.all([areasQ.reload(), areaTotalsQ.reload()]);
+      if (areaFilter !== '__all' && areaKey(areaFilter) === areaKey(name)) setAreaFilter('__all');
+    } catch (e) { toast(e instanceof ApiError ? e.message : 'Could not delete the area.'); }
+  }
+  async function renameArea(oldName: string, newName: string) {
+    const first = sheetAreas.find((x) => areaKey(x.name) === areaKey(oldName));
+    if (!first || !newName.trim() || newName.trim() === oldName) return;
+    try {
+      await api(`/sheets/${sheetId}/areas/${first.id}`, { method: 'PATCH', body: { name: newName } });
+      await Promise.all([areasQ.reload(), areaTotalsQ.reload()]);
+      toast('Renamed everywhere in this project.');
+    } catch (e) { toast(e instanceof ApiError ? e.message : 'Could not rename the area.'); }
+  }
   const autoInZones = useMemo(() => snap.dets.filter((d) => d.source === 'auto' && inZones(d.x, d.y, zonesShown)), [snap.dets, zonesShown]);
   const clearCountsInZones = () => {
     if (!store || autoInZones.length === 0) return;
@@ -272,7 +329,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); if (!readOnly) store?.redo(); return; }
       if (mod) return;
       const k = e.key.toLowerCase();
-      if (tool === 'zone' && draft.length > 0) {
+      if ((tool === 'zone' || tool === 'area') && draft.length > 0) {
         if (e.key === 'Enter') { e.preventDefault(); finishZone(); return; }
         if (e.key === 'Escape') { setDraft([]); return; }
         if (e.key === 'Backspace') { e.preventDefault(); setDraft((d) => d.slice(0, -1)); return; }
@@ -285,6 +342,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       else if (k === 'a' && !readOnly) setTool('add');
       else if (k === 'b') setTool('box');
       else if (k === 'z' && !readOnly) setTool('zone');
+      else if (k === 'n' && !readOnly) setTool('area');
       else if (k === 'e' && !readOnly) setTool('erase');
       else if (k === 'h') setHideMarkers((v) => !v);
       else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelected(); }
@@ -350,6 +408,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             <button className={`tool${tool === 'add' ? ' on' : ''}`} onClick={() => setTool('add')} disabled={readOnly} aria-label="Add count (A)" title="Add count (A)"><PlusCircle size={18} /></button>
             <button className={`tool${tool === 'box' ? ' on' : ''}`} onClick={() => setTool('box')} aria-label="Box select (B)" title="Box select (B)"><Selection size={18} /></button>
             <button className={`tool${tool === 'zone' ? ' on' : ''}`} onClick={() => { setTool('zone'); setDraft([]); }} disabled={readOnly} aria-label="Outline an area to ignore (Z)" title="Outline an area to ignore (Z)"><Polygon size={18} /></button>
+            <button className={`tool${tool === 'area' ? ' on' : ''}`} onClick={() => { setTool('area'); setDraft([]); }} disabled={readOnly} aria-label="Outline a named count area (N)" title="Outline a named count area (N)"><Shapes size={18} /></button>
             <button className={`tool${tool === 'erase' ? ' on' : ''}`} onClick={() => setTool('erase')} disabled={readOnly} aria-label="Erase (E)" title="Erase (E)"><Eraser size={18} /></button>
             <span className="sep" />
             <button className="tool" onClick={() => store?.undo()} disabled={readOnly || !snap.canUndo} aria-label="Undo (Ctrl+Z)" title="Undo (Ctrl+Z)"><ArrowCounterClockwise size={18} /></button>
@@ -361,7 +420,8 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             <button className="tool" onClick={() => viewRef.current?.zoomBy(1 / 1.3)} aria-label="Zoom out"><MagnifyingGlassMinus size={18} /></button>
             <button className="btn btn-ghost" style={{ minWidth: 52 }} onClick={() => viewRef.current?.fit()} title="Fit to screen">{zoomPct}%</button>
             <button className="tool" onClick={() => viewRef.current?.zoomBy(1.3)} aria-label="Zoom in"><MagnifyingGlassPlus size={18} /></button>
-            <button className={`btn btn-secondary${zonesOpen ? ' on' : ''}`} onClick={() => setZonesOpen((v) => !v)} aria-expanded={zonesOpen} title="Areas whose counts are ignored (past a matchline, or outlined by you)">Ignored areas · {zonesShown.length}</button>
+            <button className={`btn btn-secondary${areasOpen ? ' on' : ''}`} onClick={() => { setAreasOpen((v) => !v); setZonesOpen(false); }} aria-expanded={areasOpen} title="Named areas that break the counts out (for example Lab A, Corridor)">Count areas · {allAreaNames.length}</button>
+            <button className={`btn btn-secondary${zonesOpen ? ' on' : ''}`} onClick={() => { setZonesOpen((v) => !v); setAreasOpen(false); }} aria-expanded={zonesOpen} title="Areas whose counts are ignored (past a matchline, or outlined by you)">Ignored areas · {zonesShown.length}</button>
             <button className={`tool${hideMarkers ? ' on' : ''}`} onClick={() => setHideMarkers(!hideMarkers)} aria-pressed={hideMarkers} aria-label="Hide markers (H)" title="Hide or show markers (H)">{hideMarkers ? <EyeSlash size={18} /> : <Eye size={18} />}</button>
             <button className={`btn btn-secondary`} onClick={() => setOnlyActive(!onlyActive)} aria-pressed={onlyActive} title="Show all markers, or only the active item's">
               <Stack size={14} /> {onlyActive && activeItem ? `Only ${activeItem.code}` : 'All items'}
@@ -379,6 +439,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                 onZoom={setZoomPct}
                 onError={(m) => setPdfError(m)}
                 zones={zonesShown}
+                areas={sheetAreas.map((a) => ({ name: a.name, points: a.points, color: areaColor(a.name) }))}
                 draft={draft}
                 onZonePoint={(x, y) => setDraft((d) => [...d, { x, y }])}
                 onZoneFinish={finishZone}
@@ -392,10 +453,41 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                 )}
               </div>
             )}
-            {tool === 'zone' && (
+            {(tool === 'zone' || tool === 'area') && (
               <div className="hint" style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', zIndex: 5, maxWidth: '80%' }} role="status">
-                <span style={{ flex: 1 }}>{draft.length === 0 ? 'Click the corners of the area to ignore.' : `${plural(draft.length, 'corner')} placed.`} Click the first point or press Enter to finish; Backspace undoes a point; Esc cancels.</span>
+                <span style={{ flex: 1 }}>{draft.length === 0 ? (tool === 'area' ? 'Click the corners of the area to name and count separately.' : 'Click the corners of the area to ignore.') : `${plural(draft.length, 'corner')} placed.`} Click the first point or press Enter to finish; Backspace undoes a point; Esc cancels.</span>
                 {draft.length >= 3 && <button className="btn btn-primary" style={{ minHeight: 28, padding: '2px 12px' }} onClick={finishZone}>Finish</button>}
+              </div>
+            )}
+            {areasOpen && (
+              <div className="menu" style={{ position: 'absolute', top: 8, right: 8, width: 350, zIndex: 6, maxHeight: '80%', overflow: 'auto' }} role="dialog" aria-label="Count areas">
+                <div className="row-between"><b>Count areas</b><button className="btn btn-ghost" onClick={() => setAreasOpen(false)}>Close</button></div>
+                <div className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
+                  Outline an area and name it to see its counts on their own. Areas with the same name are one area, so their counts add up, across sheets too.
+                </div>
+                {areaNames(sheetAreas).map((n) => {
+                  const inside = localAreaRows.filter((r) => r.area !== null && areaKey(r.area) === areaKey(n)).reduce((t, r) => t + r.n, 0);
+                  const polys = sheetAreas.filter((a) => areaKey(a.name) === areaKey(n)).length;
+                  return (
+                    <div key={n} className="row-between" style={{ padding: '5px 0', gap: 8 }}>
+                      <span className="row" style={{ gap: 8, minWidth: 0 }}>
+                        <span style={{ width: 10, height: 10, borderRadius: 2, background: areaColor(n), flex: 'none' }} />
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><b>{n}</b> <span className="dim" style={{ fontSize: 12 }}>{plural(inside, 'count')} here{polys > 1 ? `, ${polys} outlines` : ''}</span></span>
+                      </span>
+                      {!readOnly && (
+                        <span className="row" style={{ gap: 2 }}>
+                          <button className="btn btn-ghost" onClick={() => { const v = window.prompt(`Rename “${n}” (this renames it everywhere in the project):`, n); if (v) void renameArea(n, v); }}>Rename</button>
+                          <button className="btn btn-ghost" onClick={() => void deleteArea(n)}>Delete</button>
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+                {sheetAreas.length === 0 && <div className="dim" style={{ fontSize: 13 }}>No areas on this sheet yet.</div>}
+                {allAreaNames.filter((n) => !sheetAreas.some((a) => areaKey(a.name) === areaKey(n))).length > 0 && (
+                  <div className="dim" style={{ fontSize: 12, marginTop: 6 }}>Also in this project: {allAreaNames.filter((n) => !sheetAreas.some((a) => areaKey(a.name) === areaKey(n))).join(', ')}</div>
+                )}
+                {!readOnly && <button className="btn btn-secondary btn-block" style={{ marginTop: 8 }} onClick={() => { setTool('area'); setDraft([]); setAreasOpen(false); }}>Outline a new area</button>}
               </div>
             )}
             {zonesOpen && (
@@ -430,6 +522,13 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
           <div className="head">
             <div className="row-between"><h5 style={{ margin: 0 }}>Counts</h5><span className="muted num" style={{ fontSize: 13 }}>{plural(totalShown, 'item')}</span></div>
             <Seg name="scope" value={scope} onChange={setScope} options={[{ value: 'sheet', label: 'This sheet' }, { value: 'all', label: 'All sheets' }]} />
+            {allAreaNames.length > 0 && (
+              <select className="input" aria-label="Show counts for an area" value={areaFilter} onChange={(e) => setAreaFilter(e.target.value)}>
+                <option value="__all">All areas (everything)</option>
+                {allAreaNames.map((n) => <option key={n} value={n}>Area: {n}</option>)}
+                <option value="__none">Not in any area</option>
+              </select>
+            )}
             {selected.size > 0 && (
               <div className="hint" role="status">
                 <span style={{ flex: 1 }}>{plural(selected.size, 'marker')} selected</span>
@@ -502,6 +601,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
         </aside>
       </div>
 
+      {pendingArea && <AreaNameDialog names={allAreaNames} onSave={(n) => void saveArea(n)} onCancel={() => { setPendingArea(null); setTool('select'); }} />}
       {showItemDialog && (
         <ItemDialog categories={categories} onClose={() => setShowItemDialog(false)} onCreated={(it) => { setShowItemDialog(false); setActiveItemId(it.id); void itemsQ.reload(); }} />
       )}
