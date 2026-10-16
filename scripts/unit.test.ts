@@ -375,3 +375,10 @@ test('zones: the server rejects malformed zones', () => {
   assert.throws(() => validateZones([{ points: [{ x: 0, y: 0 }, { x: 'a', y: 0 }, { x: 1, y: 1 }] }]), /outside/);
   assert.throws(() => validateZones(Array.from({ length: 41 }, () => rectZone(0, 0, 1, 1))), /at most/);
 });
+
+test('short codes: earlier automatic counts of a dropped item are removed (any status), manual counts are kept', () => {
+  const existing = [det('s-unrev', 'itS', 0.5, 'auto', 'unreviewed'), det('s-conf', 'itS', 0.6, 'auto', 'confirmed'), det('s-manual', 'itS', 0.7, 'manual', 'confirmed'), det('b-keep', 'itB13', 0.5, 'auto', 'confirmed', 0.2)];
+  const plan = planSheetWrite({ ...base, ignorePast: true, hits: [], existing, dropItemIds: new Set(['itS']) });
+  assert.deepEqual(plan.ops.filter((o) => o.op === 'delete').map((o: any) => o.id).sort(), ['s-conf', 's-unrev']);
+  assert.equal(plan.removedDropped, 2);
+});
