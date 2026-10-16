@@ -396,3 +396,29 @@ test('start fresh: erases earlier automatic counts of every status (and every it
   assert.equal(none.erased, 0); // without the option the old behaviour is unchanged: confirmed counts stay
   assert.ok(!none.ops.some((o: any) => o.op === 'delete' && o.id === 'a-conf'));
 });
+
+import { areaNames, assignAreas, cleanAreaName } from '../shared/areas.ts';
+const A = (id: string, sheet: string, name: string, x0: number, y0: number, x1: number, y1: number) => ({ id, sheet_id: sheet, name, points: rectZone(x0, y0, x1, y1).points });
+test('areas: names are cleaned, and "Lab A" / "lab  a" are the same area', () => {
+  assert.equal(cleanAreaName('  Lab   A '), 'Lab A');
+  assert.throws(() => cleanAreaName('   '), /name/); assert.throws(() => cleanAreaName('x'.repeat(61)), /60/); assert.throws(() => cleanAreaName(5), /name/);
+  assert.deepEqual(areaNames([{ name: 'Lab A' }, { name: 'lab a' }, { name: 'B2' }, { name: 'B10' }]), ['B2', 'B10', 'Lab A']);
+});
+test('areas: two polygons with the same name add up, across sheets too; a count in no area is reported separately', () => {
+  const areas = [A('1', 's1', 'A', 0, 0, 0.5, 0.5), A('2', 's1', 'a', 0.5, 0.5, 1, 1), A('3', 's2', 'A', 0, 0, 1, 1), A('4', 's1', 'B', 0.4, 0, 1, 0.5)];
+  const dets = [
+    { sheet_id: 's1', item_type_id: 'x', x: 0.1, y: 0.1 },   // in the first A polygon
+    { sheet_id: 's1', item_type_id: 'x', x: 0.7, y: 0.7 },   // in the second A polygon (named "a")
+    { sheet_id: 's1', item_type_id: 'x', x: 0.45, y: 0.1 },  // inside A and B at once: counted in both
+    { sheet_id: 's1', item_type_id: 'x', x: 0.2, y: 0.9 },   // in no area
+    { sheet_id: 's2', item_type_id: 'x', x: 0.3, y: 0.3 },
+  ];
+  const rows = assignAreas(dets, areas);
+  const total = (area: string | null) => rows.filter((r) => r.area === area).reduce((n, r) => n + r.n, 0);
+  assert.equal(total('A'), 4);  // 2 polygons on sheet 1 plus the overlap plus the one on sheet 2
+  assert.equal(total('B'), 1);
+  assert.equal(total(null), 1);
+  // a count inside two polygons of the SAME name is counted once for that name
+  const twice = assignAreas([{ sheet_id: 's1', item_type_id: 'x', x: 0.5, y: 0.5 }], [A('1', 's1', 'A', 0, 0, 0.6, 0.6), A('2', 's1', 'A', 0.4, 0.4, 1, 1)]);
+  assert.equal(twice.length, 1); assert.equal(twice[0].n, 1);
+});

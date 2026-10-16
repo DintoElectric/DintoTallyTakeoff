@@ -58,3 +58,25 @@ assert.equal((await db.query(`select exclusion_zones from sheets where id = $1`,
 await db.query(`update sheets set exclusion_zones = $2::jsonb where id = $1`, [zs.id, null]);
 assert.equal((await db.query(`select exclusion_zones from sheets where id = $1`, [zs.id])).rows[0].exclusion_zones, null);
 console.log('db.test OK');
+
+// named areas use the areas table from the first migration
+{
+  const { PGlite: P } = await import('@electric-sql/pglite');
+  const d2 = new P();
+  for (const f of readdirSync(dir).sort()) await d2.exec(readFileSync(`${dir}/${f}`, 'utf8'));
+  const pr = (await d2.query(`insert into projects (name, created_by) values ('P','u') returning id`)).rows[0];
+  const fl = (await d2.query(`insert into drawing_files (project_id,file_name,size_bytes,chunk_count,uploaded_by) values ($1,'a.pdf',1,1,'u') returning id`, [pr.id])).rows[0];
+  const s1 = (await d2.query(`insert into sheets (project_id,file_id,page,page_width_pt,page_height_pt) values ($1,$2,1,100,100) returning id`, [pr.id, fl.id])).rows[0];
+  const s2 = (await d2.query(`insert into sheets (project_id,file_id,page,page_width_pt,page_height_pt) values ($1,$2,2,100,100) returning id`, [pr.id, fl.id])).rows[0];
+  const pts = JSON.stringify([{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }]);
+  await d2.query(`insert into areas (sheet_id, name, polygon, created_by) values ($1,'Lab A',$3::jsonb,'u'), ($2,'lab a',$3::jsonb,'u')`, [s1.id, s2.id, pts]);
+  // canonical spelling lookup, as the endpoint does it
+  const can = await d2.query(`select a.name from areas a join sheets s on s.id = a.sheet_id where s.project_id = $1 and lower(a.name) = lower($2) order by a.name limit 1`, [pr.id, 'LAB A']);
+  assert.equal(can.rows[0].name, 'Lab A');
+  // renaming by name changes every polygon of that name in the project
+  await d2.query(`update areas set name = $3 where lower(name) = lower($2) and sheet_id in (select id from sheets where project_id = $1)`, [pr.id, 'Lab A', 'Laboratory A']);
+  assert.equal((await d2.query(`select count(*)::int n from areas where name = 'Laboratory A'`)).rows[0].n, 2);
+  const list = await d2.query(`select id, sheet_id, name, polygon as points from areas where sheet_id = $1 order by lower(name), id`, [s1.id]);
+  assert.equal(list.rows[0].points.length, 3);
+  console.log('areas OK');
+}

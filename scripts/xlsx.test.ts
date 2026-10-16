@@ -53,3 +53,40 @@ test('word export builds a valid .docx (zip) with and without unreviewed items',
   assert.ok(bytes.length > 2000);
   assert.equal(String.fromCharCode(bytes[0], bytes[1]), 'PK'); // a .docx is a zip file
 });
+
+test('excel and word exports add a by-area breakdown, additive by name', async () => {
+  const withAreas: any = {
+    ...data,
+    areas: [
+      { id: 'a1', sheet_id: 's1', name: 'Lab A', points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 0.6 }, { x: 0, y: 0.6 }] },
+      { id: 'a2', sheet_id: 's2', name: 'lab a', points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }] },
+    ],
+    // s1 has two B13 (one inside Lab A, one below it), s2 has one B13 and one D9, both inside "lab a"
+    detections: [
+      { id: '1', sheet_id: 's1', item_type_id: 'a', x: 0.5, y: 0.2, confidence: null, source: 'manual', status: 'confirmed' },
+      { id: '2', sheet_id: 's1', item_type_id: 'a', x: 0.5, y: 0.9, confidence: null, source: 'manual', status: 'confirmed' },
+      { id: '3', sheet_id: 's2', item_type_id: 'a', x: 0.5, y: 0.5, confidence: null, source: 'manual', status: 'confirmed' },
+      { id: '4', sheet_id: 's2', item_type_id: 'b', x: 0.4, y: 0.4, confidence: null, source: 'manual', status: 'confirmed' },
+    ],
+    counts: [{ sheet_id: 's1', item_type_id: 'a', n: 2, flagged: 0 }, { sheet_id: 's2', item_type_id: 'a', n: 1, flagged: 0 }, { sheet_id: 's2', item_type_id: 'b', n: 1, flagged: 0 }],
+  };
+  const agg = aggregate(withAreas, { sheetIds: null });
+  assert.deepEqual(agg.areas.names, ['Lab A']);
+  const b13 = agg.areas.rows.find((r) => r.item.code === 'B13')!;
+  assert.equal(b13.byArea.get('Lab A'), 2); assert.equal(b13.unassigned, 1); assert.equal(b13.total, 3);
+  const blob = await buildXlsx(withAreas, agg, { sheetIds: null, groupBy: 'floor', perSheetColumns: true, subtotals: true, detectionLog: false, snapshots: false, preparedBy: 'J' });
+  const ExcelJS: any = (await import('exceljs')).default;
+  const wb = new ExcelJS.Workbook();
+  await wb.xlsx.load(Buffer.from(await blob.arrayBuffer()));
+  const ws = wb.getWorksheet('By area');
+  assert.ok(ws, 'a By area tab exists');
+  let found = false;
+  ws.eachRow((row: any) => { if (row.getCell(1).value === 'B13') { found = true; assert.equal(Number(row.getCell(4).value), 2); assert.equal(Number(row.getCell(5).value), 1); assert.equal(Number(row.getCell(6).value), 3); } });
+  assert.ok(found);
+  const docBlob = await buildDocx(withAreas, agg, { sheetIds: null, groupBy: 'floor', perSheetColumns: true, subtotals: true, detectionLog: false, snapshots: false, preparedBy: 'J' });
+  assert.equal(String.fromCharCode(...new Uint8Array(await docBlob.arrayBuffer()).slice(0, 2)), 'PK');
+  // without areas nothing changes: no extra tab
+  const plain = await buildXlsx(data, aggregate(data, { sheetIds: null }), { sheetIds: null, groupBy: 'floor', perSheetColumns: true, subtotals: true, detectionLog: false, snapshots: false, preparedBy: 'J' });
+  const wb2 = new ExcelJS.Workbook(); await wb2.xlsx.load(Buffer.from(await plain.arrayBuffer()));
+  assert.equal(wb2.getWorksheet('By area'), undefined);
+});
