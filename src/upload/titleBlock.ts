@@ -43,6 +43,31 @@ function toLines(runs: TextRun[]): Line[] {
   });
 }
 
+const TITLE_LABEL = /^(content|title|sheet title|drawing title|sheet name|drawing name)\s*:?$/i;
+
+/**
+ * Title blocks that print a labelled field ("CONTENT:" then the sheet title) are read by the label: the lines under it,
+ * up to the next label. Far more reliable than guessing from the lines nearest the sheet number, which in these blocks
+ * are the copyright line and the project address.
+ */
+export function readLabeledTitle(runs: TextRun[]): string | null {
+  const label = runs.find((r) => TITLE_LABEL.test(r.str.trim()));
+  if (!label) return null;
+  const under = runs.filter((r) => r !== label && r.str.trim() && r.x >= label.x - 0.004 && r.x < label.x + 0.05 && r.y > label.y + label.h * 0.5 && r.y < label.y + 0.08);
+  const out: string[] = [];
+  let prev = label.y;
+  for (const l of toLines(under)) {
+    // the next field starts ("DRAWN BY:"); "NORTH" at the end of a title is part of the title, not a label
+    if (/:\s*$/.test(l.text) || (LABEL_WORDS.test(l.text) && !/^north\b/i.test(l.text))) break;
+    if (out.length && l.y - prev > Math.max(l.h, label.h) * 3.2) break;           // a gap: no longer the same field
+    out.push(l.text);
+    prev = l.y;
+    if (out.length >= 4) break;
+  }
+  const t = out.join(' ').replace(/\s+/g, ' ').trim();
+  return /[A-Za-z]{3}/.test(t) ? t.slice(0, 200) : null;
+}
+
 export interface TitleRead {
   number: string | null;
   title: string | null;
@@ -81,8 +106,10 @@ export function readTitleBlock(all: TextRun[], region: Region = DEFAULT_TITLE_RE
     .sort((a, b) => Math.abs(a.y - numY) - Math.abs(b.y - numY))
     .slice(0, 2)
     .sort((a, b) => a.y - b.y);
-  const title = candidates.length ? candidates.map((c) => c.text).join(' ').slice(0, 200) : null;
+  const labeled = readLabeledTitle(runs);
+  const title = labeled ?? (candidates.length ? candidates.map((c) => c.text).join(' ').slice(0, 200) : null);
   if (!title) unsure = true;
+  if (labeled) unsure = biggest.length > 1 && new Set(biggest.map((b) => b.s)).size > 1; // a labelled title is trusted
   return { number, title, unsure };
 }
 
