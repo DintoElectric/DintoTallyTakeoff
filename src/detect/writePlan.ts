@@ -21,21 +21,27 @@ export interface PlanInput {
   ambiguous: Set<string>;
   /** Every library item whose code was found on the scan, ticked or not: their unreviewed auto counts are replaced. */
   clearItemIds: Set<string>;
+  /** Items that are no longer counted at all (short codes): every earlier automatic count of them is removed. */
+  dropItemIds?: Set<string>;
   ignorePast: boolean;
   newId: () => string;
 }
 export type Op = { op: 'delete'; id: string } | { op: 'add'; detection: Record<string, unknown> };
-export interface Plan { ops: Op[]; added: number; removedPast: number }
+export interface Plan { ops: Op[]; added: number; removedPast: number; removedDropped: number }
 
 export function planSheetWrite(p: PlanInput): Plan {
   const ops: Op[] = [];
-  let removedPast = 0;
+  let removedPast = 0, removedDropped = 0;
   const live = p.hits.filter((h) => !(p.ignorePast && h.past) && p.itemIdByCode.has(h.code));
   const tickedItems = new Set(p.itemIdByCode.values());
   const keep: Detection[] = [];
   for (const d of p.existing) {
     const pastNow = p.ignorePast && d.source === 'auto' && d.status !== 'rejected' && inZones(d.x, d.y, p.zones);
-    if (pastNow) {
+    if (p.dropItemIds?.has(d.item_type_id) && d.source === 'auto' && d.status !== 'rejected') {
+      // Short codes are not counted any more; earlier automatic counts of them go. Manual counts are never touched.
+      ops.push({ op: 'delete', id: d.id });
+      removedDropped++;
+    } else if (pastNow) {
       // An earlier automatic count inside an exclusion zone (past a matchline, or outlined by hand), even a confirmed one. Manual counts are never touched.
       ops.push({ op: 'delete', id: d.id });
       removedPast++;
@@ -56,5 +62,5 @@ export function planSheetWrite(p: PlanInput): Plan {
     } });
     added++;
   }
-  return { ops, added, removedPast };
+  return { ops, added, removedPast, removedDropped };
 }
