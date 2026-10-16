@@ -1,5 +1,7 @@
 import type { Zone } from './zones.ts';
+import type { AreaRow } from './areas.ts';
 export type { Zone } from './zones.ts';
+export type { AreaRow, AreaCountRow } from './areas.ts';
 
 export type Role = 'viewer' | 'estimator' | 'admin';
 export type SheetKind = 'floor_plan' | 'legend' | 'site_plan' | 'schedule' | 'other';
@@ -110,4 +112,5 @@ export interface ExportData {
   categories: CategoryRow[];
   counts: CountRow[];
   detections: (Detection & { sheet_id: string })[];
+  areas?: AreaRow[]; // named count areas (absent on older servers)
 }
