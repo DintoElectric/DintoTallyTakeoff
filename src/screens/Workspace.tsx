@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import {
-  ArrowCounterClockwise, ArrowClockwise, Cursor, Eraser, Eye, EyeSlash, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus,
+  ArrowCounterClockwise, ArrowClockwise, Cursor, Eraser, Eye, EyeSlash, Polygon, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus,
   PlusCircle, Plus, Selection, Stack, WarningCircle,
 } from '@phosphor-icons/react';
 import type { CategoryRow, CountRow, DrawingFileRow, ItemTypeRow, ProjectRow, SheetRow } from '../../shared/types.ts';
@@ -14,7 +14,8 @@ import { DrawingView, type DrawingViewHandle, type ItemStyle, type MarkerData, t
 import { loadFilePdf } from '../viewer/pdf.ts';
 import { getStore, useSheetStore } from './sheetStore.ts';
 import { extractRuns } from '../detect/pageRuns.ts';
-import { findMatchlines } from '../detect/matchlines.ts';
+import { findMatchlines, zonesFromMatchlines } from '../detect/matchlines.ts';
+import { inZones, type Zone, type ZonePoint } from '../../shared/zones.ts';
 import AutoCountDialog from './AutoCountDialog.tsx';
 import { ItemDialog } from './ItemDialog.tsx';
 import ExportDialog from './ExportDialog.tsx';
@@ -84,7 +85,9 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [page, setPage] = useState<PDFPageProxy | null>(null);
   const [pageDims, setPageDims] = useState<{ w: number; h: number } | null>(null);
   const [attempt, setAttempt] = useState(0);
-  const [zones, setZones] = useState<{ x0: number; y0: number; x1: number; y1: number }[]>([]);
+  const [autoZones, setAutoZones] = useState<Zone[]>([]);   // worked out from the matchlines
+  const [draft, setDraft] = useState<ZonePoint[]>([]);         // outline being drawn with the zone tool
+  const [zonesOpen, setZonesOpen] = useState(false);
 
   useEffect(() => {
     if (!file) return;
@@ -112,22 +115,19 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
     return () => { off = true; };
   }, [pdf, sheet?.page, sheet?.id]);
 
-  // Dim the part of the sheet that lies past a matchline (it belongs to the neighbouring sheet).
+  // Automatic zones: the part of the sheet past each matchline (it belongs to the neighbouring sheet).
   useEffect(() => {
-    setZones([]);
+    setAutoZones([]);
     if (!page || !sheet) return;
     let off = false;
-    extractRuns(page).then((runs) => {
-      if (off) return;
-      const pad = 0.03;
-      setZones(findMatchlines(runs, sheet.number).map((l) => {
-        const a = Math.max(0, l.from - pad), b = Math.min(1, l.to + pad);
-        if (l.orientation === 'h') return l.exclude === 'above' ? { x0: a, y0: 0, x1: b, y1: l.pos } : { x0: a, y0: l.pos, x1: b, y1: 1 };
-        return l.exclude === 'left' ? { x0: 0, y0: a, x1: l.pos, y1: b } : { x0: l.pos, y0: a, x1: 1, y1: b };
-      }));
-    }).catch(() => undefined);
+    extractRuns(page).then((runs) => { if (!off) setAutoZones(zonesFromMatchlines(findMatchlines(runs, sheet.number))); }).catch(() => undefined);
     return () => { off = true; };
   }, [page, sheet?.id, sheet?.number]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The zones in force: the estimator's own if they have set any, otherwise the automatic ones.
+  const zonesShown: Zone[] = sheet?.exclusion_zones ?? autoZones;
+  const zonesByHand = sheet?.exclusion_zones != null;
+  useEffect(() => { setDraft([]); }, [sheetId]);
 
   // ----- derived data -----
   const itemById = useMemo(() => new Map(items.map((i) => [i.id, i])), [items]);
@@ -240,6 +240,28 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
     toast(`Confirmed ${plural(queue.length, 'count')} on this sheet.`);
   };
 
+  // ----- exclusion zones -----
+  async function saveZones(next: Zone[] | null, message: string) {
+    if (!sheet) return;
+    try {
+      const r = await api<{ sheet: SheetRow }>(`/sheets/${sheet.id}`, { method: 'PATCH', body: { exclusion_zones: next } });
+      sheetsQ.setData((d) => (d ? { sheets: d.sheets.map((x) => (x.id === r.sheet.id ? r.sheet : x)) } : d));
+      toast(message);
+    } catch (e) { toast(e instanceof ApiError ? e.message : 'Could not save the zones.'); }
+  }
+  const finishZone = useCallback(() => {
+    if (draft.length < 3) return toast('Place at least 3 corner points first.');
+    void saveZones([...zonesShown, { points: draft }], 'Zone saved. Auto-count will ignore everything inside it.');
+    setDraft([]);
+    setTool('select');
+  }, [draft, zonesShown]); // eslint-disable-line react-hooks/exhaustive-deps
+  const autoInZones = useMemo(() => snap.dets.filter((d) => d.source === 'auto' && inZones(d.x, d.y, zonesShown)), [snap.dets, zonesShown]);
+  const clearCountsInZones = () => {
+    if (!store || autoInZones.length === 0) return;
+    store.erase(autoInZones.map((d) => d.id)); // automatic counts only; manual counts are never touched
+    toast(`Removed ${plural(autoInZones.length, 'automatic count')} inside the zones.`);
+  };
+
   // ----- keyboard -----
   useEffect(() => {
     const on = (e: KeyboardEvent) => {
@@ -250,6 +272,11 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); if (!readOnly) store?.redo(); return; }
       if (mod) return;
       const k = e.key.toLowerCase();
+      if (tool === 'zone' && draft.length > 0) {
+        if (e.key === 'Enter') { e.preventDefault(); finishZone(); return; }
+        if (e.key === 'Escape') { setDraft([]); return; }
+        if (e.key === 'Backspace') { e.preventDefault(); setDraft((d) => d.slice(0, -1)); return; }
+      }
       if (reviewing && current && !readOnly) {
         if (k === 'y') { reviewAct('confirm'); return; }
         if (k === 'n') { reviewAct('reject'); return; }
@@ -257,6 +284,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       if (k === 'v') setTool('select');
       else if (k === 'a' && !readOnly) setTool('add');
       else if (k === 'b') setTool('box');
+      else if (k === 'z' && !readOnly) setTool('zone');
       else if (k === 'e' && !readOnly) setTool('erase');
       else if (k === 'h') setHideMarkers((v) => !v);
       else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelected(); }
@@ -264,7 +292,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
     };
     window.addEventListener('keydown', on);
     return () => window.removeEventListener('keydown', on);
-  }, [store, readOnly, deleteSelected, reviewing, current]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [store, readOnly, deleteSelected, reviewing, current, tool, draft, finishZone]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ----- missing sheet -----
   if (sheetsQ.data && !sheet) {
@@ -321,6 +349,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             <button className={`tool${tool === 'select' ? ' on' : ''}`} onClick={() => setTool('select')} aria-label="Select (V)" title="Select (V)"><Cursor size={18} /></button>
             <button className={`tool${tool === 'add' ? ' on' : ''}`} onClick={() => setTool('add')} disabled={readOnly} aria-label="Add count (A)" title="Add count (A)"><PlusCircle size={18} /></button>
             <button className={`tool${tool === 'box' ? ' on' : ''}`} onClick={() => setTool('box')} aria-label="Box select (B)" title="Box select (B)"><Selection size={18} /></button>
+            <button className={`tool${tool === 'zone' ? ' on' : ''}`} onClick={() => { setTool('zone'); setDraft([]); }} disabled={readOnly} aria-label="Outline an area to ignore (Z)" title="Outline an area to ignore (Z)"><Polygon size={18} /></button>
             <button className={`tool${tool === 'erase' ? ' on' : ''}`} onClick={() => setTool('erase')} disabled={readOnly} aria-label="Erase (E)" title="Erase (E)"><Eraser size={18} /></button>
             <span className="sep" />
             <button className="tool" onClick={() => store?.undo()} disabled={readOnly || !snap.canUndo} aria-label="Undo (Ctrl+Z)" title="Undo (Ctrl+Z)"><ArrowCounterClockwise size={18} /></button>
@@ -332,6 +361,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             <button className="tool" onClick={() => viewRef.current?.zoomBy(1 / 1.3)} aria-label="Zoom out"><MagnifyingGlassMinus size={18} /></button>
             <button className="btn btn-ghost" style={{ minWidth: 52 }} onClick={() => viewRef.current?.fit()} title="Fit to screen">{zoomPct}%</button>
             <button className="tool" onClick={() => viewRef.current?.zoomBy(1.3)} aria-label="Zoom in"><MagnifyingGlassPlus size={18} /></button>
+            <button className={`btn btn-secondary${zonesOpen ? ' on' : ''}`} onClick={() => setZonesOpen((v) => !v)} aria-expanded={zonesOpen} title="Areas whose counts are ignored (past a matchline, or outlined by you)">Ignored areas · {zonesShown.length}</button>
             <button className={`tool${hideMarkers ? ' on' : ''}`} onClick={() => setHideMarkers(!hideMarkers)} aria-pressed={hideMarkers} aria-label="Hide markers (H)" title="Hide or show markers (H)">{hideMarkers ? <EyeSlash size={18} /> : <Eye size={18} />}</button>
             <button className={`btn btn-secondary`} onClick={() => setOnlyActive(!onlyActive)} aria-pressed={onlyActive} title="Show all markers, or only the active item's">
               <Stack size={14} /> {onlyActive && activeItem ? `Only ${activeItem.code}` : 'All items'}
@@ -348,7 +378,10 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                 onBox={(ids, add) => setSelected((cur) => new Set(add ? [...cur, ...ids] : ids))}
                 onZoom={setZoomPct}
                 onError={(m) => setPdfError(m)}
-                zones={zones}
+                zones={zonesShown}
+                draft={draft}
+                onZonePoint={(x, y) => setDraft((d) => [...d, { x, y }])}
+                onZoneFinish={finishZone}
               />
             ) : (
               <div className="viewport-msg">
@@ -356,6 +389,35 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                   <div className="stack" style={{ alignItems: 'center' }}><div className="err-text">{pdfError}</div><button className="btn btn-secondary" onClick={() => setAttempt((a) => a + 1)}>Try again</button></div>
                 ) : (
                   <div><span className="spinner" /> {file && pdfPct < 1 ? `Loading drawings… ${Math.round(pdfPct * 100)}%` : 'Opening sheet…'}</div>
+                )}
+              </div>
+            )}
+            {tool === 'zone' && (
+              <div className="hint" style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', zIndex: 5, maxWidth: '80%' }} role="status">
+                <span style={{ flex: 1 }}>{draft.length === 0 ? 'Click the corners of the area to ignore.' : `${plural(draft.length, 'corner')} placed.`} Click the first point or press Enter to finish; Backspace undoes a point; Esc cancels.</span>
+                {draft.length >= 3 && <button className="btn btn-primary" style={{ minHeight: 28, padding: '2px 12px' }} onClick={finishZone}>Finish</button>}
+              </div>
+            )}
+            {zonesOpen && (
+              <div className="menu" style={{ position: 'absolute', top: 8, right: 8, width: 330, zIndex: 6 }} role="dialog" aria-label="Ignored areas">
+                <div className="row-between"><b>Ignored areas</b><button className="btn btn-ghost" onClick={() => setZonesOpen(false)}>Close</button></div>
+                <div className="muted" style={{ fontSize: 12, margin: '4px 0 8px' }}>
+                  {zonesByHand ? 'Set by hand for this sheet.' : zonesShown.length ? 'Found automatically from the matchlines.' : 'No matchline was found on this sheet.'} Auto-count ignores everything inside these areas.
+                </div>
+                {zonesShown.map((z, i) => (
+                  <div key={i} className="row-between" style={{ padding: '4px 0' }}>
+                    <span>Area {i + 1} <span className="dim" style={{ fontSize: 12 }}>({z.points.length} corners{!zonesByHand ? ', automatic' : ''})</span></span>
+                    {!readOnly && <button className="btn btn-ghost" onClick={() => void saveZones(zonesShown.filter((_, k) => k !== i), 'Area removed.')}>Delete</button>}
+                  </div>
+                ))}
+                {!readOnly && (
+                  <div className="stack" style={{ gap: 6, marginTop: 8 }}>
+                    <button className="btn btn-secondary" onClick={() => { setTool('zone'); setDraft([]); setZonesOpen(false); }}>Outline a new area</button>
+                    <button className="btn btn-secondary" disabled={autoInZones.length === 0} onClick={clearCountsInZones} title="Removes automatic counts inside these areas. Manual counts are never touched.">
+                      Remove {autoInZones.length} automatic count{autoInZones.length === 1 ? '' : 's'} inside
+                    </button>
+                    {zonesByHand && <button className="btn btn-ghost" onClick={() => void saveZones(null, 'Back to the automatic areas.')}>Go back to automatic</button>}
+                  </div>
                 )}
               </div>
             )}
