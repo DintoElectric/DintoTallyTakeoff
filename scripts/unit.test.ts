@@ -248,7 +248,7 @@ test('matchlines: the neighbour sheet number shows which side is past the line',
   assert.equal(isPastMatchline(0.4, 0.05, lines), true);   // above the line, within its span
   assert.equal(isPastMatchline(0.4, 0.5, lines), false);   // the sheet's own side
   assert.equal(isPastMatchline(0.4, 0.099, lines), false); // right on the line is kept
-  assert.equal(isPastMatchline(0.95, 0.05, lines), false); // beyond the line's ends
+  assert.equal(isPastMatchline(0.95, 0.05, lines), true);  // a horizontal line is taken to run the full width of the sheet
   // The same labels read from the neighbour's point of view flip the side.
   assert.equal(findMatchlines(runs, 'EL101.2')[0].exclude, 'below');
 });
@@ -275,11 +275,12 @@ test('drawing notes: finds hexagons and reads the label inside; ignores a plain 
 });
 
 import { planSheetWrite, CONF_TAG } from '../src/detect/writePlan.ts';
-import type { Matchline } from '../src/detect/matchlines.ts';
+import { zonesFromMatchlines, type Matchline } from '../src/detect/matchlines.ts';
 const line: Matchline = { orientation: 'h', pos: 0.1, from: 0, to: 1, exclude: 'above', neighbour: 'EL101.2' };
+const lineZones = zonesFromMatchlines([line]);
 const det = (id: string, item: string, y: number, source: 'auto' | 'manual', status: 'unreviewed' | 'confirmed' | 'rejected', x = 0.5) =>
   ({ id, sheet_id: 's', item_type_id: item, x, y, bbox: null, confidence: 0.98, source, status } as any);
-const base = { lines: [line], itemIdByCode: new Map([['B13', 'itB13'], ['D9', 'itD9']]), ambiguous: new Set<string>(), clearItemIds: new Set(['itB13', 'itD9']), newId: () => 'new' };
+const base = { zones: lineZones, itemIdByCode: new Map([['B13', 'itB13'], ['D9', 'itD9']]), ambiguous: new Set<string>(), clearItemIds: new Set(['itB13', 'itD9']), newId: () => 'new' };
 
 test('re-run: an item whose every mark is past the matchline still has its old counts cleared', () => {
   // Every D9 on the sheet is above the line (past it). Before the fix, nothing cleared the earlier D9 count.
@@ -337,6 +338,40 @@ test('emergency: each printed label belongs to the one nearest fixture, not to e
   assert.deepEqual(a.labels, ['3es']); assert.deepEqual(b.labels, ['4']); // the far "9es" and the tag/sheet-number text are ignored
 });
 test('count confidence can be set per hit (emergency 0.95, normal-of-split 0.9)', () => {
-  const plan = planSheetWrite({ hits: [{ code: 'B7', x: 0.5, y: 0.5, kind: 'tag', conf: 0.95 }, { code: 'B7', x: 0.2, y: 0.5, kind: 'tag' }], lines: [], existing: [], itemIdByCode: new Map([['B7', 'it']]), ambiguous: new Set(), clearItemIds: new Set(), ignorePast: true, newId: () => 'n' });
+  const plan = planSheetWrite({ hits: [{ code: 'B7', x: 0.5, y: 0.5, kind: 'tag', conf: 0.95 }, { code: 'B7', x: 0.2, y: 0.5, kind: 'tag' }], zones: [], existing: [], itemIdByCode: new Map([['B7', 'it']]), ambiguous: new Set(), clearItemIds: new Set(), ignorePast: true, newId: () => 'n' });
   assert.deepEqual((plan.ops as any[]).map((o) => o.detection.confidence), [0.95, CONF_TAG]);
+});
+
+import { inZones, pointInPolygon, rectZone, validateZones } from '../shared/zones.ts';
+test('zones: point-in-polygon works for rectangles, triangles and L shapes', () => {
+  assert.equal(pointInPolygon(0.5, 0.5, rectZone(0, 0, 1, 1).points), true);
+  assert.equal(pointInPolygon(1.2, 0.5, rectZone(0, 0, 1, 1).points), false);
+  const tri = [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 1 }];
+  assert.equal(pointInPolygon(0.2, 0.2, tri), true); assert.equal(pointInPolygon(0.8, 0.8, tri), false);
+  const L = [{ x: 0, y: 0 }, { x: 0.6, y: 0 }, { x: 0.6, y: 0.4 }, { x: 0.3, y: 0.4 }, { x: 0.3, y: 1 }, { x: 0, y: 1 }];
+  assert.equal(pointInPolygon(0.1, 0.8, L), true); assert.equal(pointInPolygon(0.5, 0.8, L), false);
+  assert.equal(inZones(0.5, 0.5, []), false);
+});
+test('zones: a diagonal zone (like the estimators\' blue strip) excludes only its own side', () => {
+  const strip = { points: [{ x: 0, y: 0 }, { x: 1, y: 0.4 }, { x: 1, y: 0.6 }, { x: 0, y: 0.2 }] };
+  assert.equal(inZones(0.5, 0.3, [strip]), true);   // inside the strip
+  assert.equal(inZones(0.5, 0.05, [strip]), false); // above it
+  assert.equal(inZones(0.5, 0.7, [strip]), false);  // below it
+});
+test('zones: automatic zones from matchlines (full width above/below; a vertical line keeps its span)', () => {
+  const z = zonesFromMatchlines([{ orientation: 'h', pos: 0.4, from: 0.2, to: 0.6, exclude: 'above', neighbour: 'X' }, { orientation: 'v', pos: 0.13, from: 0.1, to: 0.6, exclude: 'left', neighbour: 'Y' }]);
+  assert.equal(inZones(0.95, 0.2, z), true);   // far right of the line's labels, still past it
+  assert.equal(inZones(0.5, 0.45, z), false);  // the sheet's own side
+  assert.equal(inZones(0.05, 0.3, z), true);   // left of the vertical line, along its span
+  assert.equal(inZones(0.05, 0.9, z), false);  // left of it but well below the line's span
+  assert.equal(inZones(0.5, 0.3995, z), false); // right on the horizontal line: kept
+});
+test('zones: the server rejects malformed zones', () => {
+  assert.deepEqual(validateZones([]), []);
+  assert.equal(validateZones([rectZone(0, 0, 1, 0.1)]).length, 1);
+  assert.throws(() => validateZones('x'), /list/);
+  assert.throws(() => validateZones([{ points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] }]), /3 and/);
+  assert.throws(() => validateZones([{ points: [{ x: 0, y: 0 }, { x: 2, y: 0 }, { x: 1, y: 1 }] }]), /outside/);
+  assert.throws(() => validateZones([{ points: [{ x: 0, y: 0 }, { x: 'a', y: 0 }, { x: 1, y: 1 }] }]), /outside/);
+  assert.throws(() => validateZones(Array.from({ length: 41 }, () => rectZone(0, 0, 1, 1))), /at most/);
 });

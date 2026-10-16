@@ -48,4 +48,13 @@ await assert.rejects(db.query(`insert into detections (id,sheet_id,item_type_id,
 await db.query(`insert into item_types (code,name,created_by) values ('D9','4'' SURFACE/WET','u1')`);
 await db.query(`insert into item_types (code,name,created_by) values ('D9','4'' SURFACE/WET/EM/OPEN','u1')`);
 await assert.rejects(db.query(`insert into item_types (code,name,created_by) values ('d9','4'' surface/wet','u1')`), /unique|duplicate/i);
+// exclusion zones: a nullable jsonb column on sheets; null means automatic
+const sh = (await db.query(`insert into projects (name, created_by) values ('Z','u') returning id`)).rows[0];
+const fl = (await db.query(`insert into drawing_files (project_id,file_name,size_bytes,chunk_count,uploaded_by) values ($1,'z.pdf',1,1,'u') returning id`, [sh.id])).rows[0];
+const zs = (await db.query(`insert into sheets (project_id,file_id,page,page_width_pt,page_height_pt) values ($1,$2,1,100,100) returning id, exclusion_zones`, [sh.id, fl.id])).rows[0];
+assert.equal(zs.exclusion_zones, null);
+await db.query(`update sheets set exclusion_zones = $2::jsonb where id = $1`, [zs.id, JSON.stringify([{ points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 0.1 }] }])]);
+assert.equal((await db.query(`select exclusion_zones from sheets where id = $1`, [zs.id])).rows[0].exclusion_zones[0].points.length, 3);
+await db.query(`update sheets set exclusion_zones = $2::jsonb where id = $1`, [zs.id, null]);
+assert.equal((await db.query(`select exclusion_zones from sheets where id = $1`, [zs.id])).rows[0].exclusion_zones, null);
 console.log('db.test OK');
