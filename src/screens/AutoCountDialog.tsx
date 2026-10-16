@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CategoryRow, DrawingFileRow, ItemTypeRow, SheetRow } from '../../shared/types.ts';
+import type { CategoryRow, Detection, DrawingFileRow, ItemTypeRow, SheetRow } from '../../shared/types.ts';
 import { api, ApiError } from '../auth/api.ts';
 import { Check, Dialog, plural } from '../app/ui.tsx';
 import { discover, scanSheets, writeSheet, type CodeRow, type SheetScan } from '../detect/autoCount.ts';
 import { CONF_EMERGENCY, CONF_NORMAL_SPLIT } from '../detect/writePlan.ts';
 import { EMERGENCY_KEY, discoverMarkers, emergencyCode, isEmergency, parseCustomMarkers } from '../detect/emergency.ts';
-import { getStore } from './sheetStore.ts';
+import { flushAll, getStore } from './sheetStore.ts';
 
 /** Scans sheets for tags, shows what was found, then counts the ones you choose. */
 export default function AutoCountDialog({ projectId, sheets, items, onClose, onDone }: {
@@ -20,6 +20,10 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
   const [status, setStatus] = useState('');
   const [libraryDriven, setLibraryDriven] = useState(false);
   const [ignorePast, setIgnorePast] = useState(true);
+  // What is already counted on these sheets, so a re-run can start fresh.
+  const [existing, setExisting] = useState<Map<string, { auto: number; confirmed: number; manual: number }>>(new Map());
+  const [resetAuto, setResetAuto] = useState(true);
+  const [resetManual, setResetManual] = useState(false);
   const [markers, setMarkers] = useState<Set<string>>(new Set()); // confirmed emergency label patterns
   const [customText, setCustomText] = useState('');
   const [splitOff, setSplitOff] = useState<Set<string>>(new Set()); // codes the estimator chose NOT to split
@@ -52,6 +56,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
     for (const sc of effective) for (const h of sc.hits) if (h.kind === 'tag' && isEmergency(h, activeMarkers)) m.set(h.code, (m.get(h.code) ?? 0) + 1);
     return m;
   }, [effective, activeMarkers]);
+  const exTotals = useMemo(() => [...existing.values()].reduce((a, v) => ({ auto: a.auto + v.auto, confirmed: a.confirmed + v.confirmed, manual: a.manual + v.manual }), { auto: 0, confirmed: 0, manual: 0 }), [existing]);
   const emTotal = [...emByCode.values()].reduce((a, b) => a + b, 0);
   // A fixture type is split into normal and emergency when it has emergency fixtures, unless it is an exit sign
   // (always emergency), has several library variants already, or the estimator turned the split off.
@@ -76,6 +81,19 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
         setInc(new Set([...(lib.length > 0 ? lib : found.filter((r) => r.kind === 'tag')), ...notes].map((r) => r.code)));
         // Only markers with a normal twin are pre-ticked; "possible" ones (no twin) are left for the estimator.
         setMarkers(new Set(discoverMarkers(res.flatMap((sc) => sc.hits.filter((h) => !h.past))).filter((c) => c.partner !== null).map((c) => c.pattern)));
+        // How many counts are already there (so the estimator sees exactly what a fresh start erases).
+        try {
+          const ex = new Map<string, { auto: number; confirmed: number; manual: number }>();
+          await Promise.all(res.filter((sc) => !sc.error).map(async (sc) => {
+            const r = await api<{ detections: Detection[] }>(`/sheets/${sc.sheet.id}/detections`);
+            ex.set(sc.sheet.id, {
+              auto: r.detections.filter((d) => d.source === 'auto').length,
+              confirmed: r.detections.filter((d) => d.source === 'auto' && d.status === 'confirmed').length,
+              manual: r.detections.filter((d) => d.source === 'manual').length,
+            });
+          }));
+          if (!off) setExisting(ex);
+        } catch { /* the counts shown are only information; the reset itself does not depend on them */ }
         setPhase('pick');
       } catch (e) {
         if (!off && !(e instanceof DOMException)) setError(e instanceof Error ? e.message : 'The scan failed.');
@@ -89,6 +107,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
     setPhase('write');
     setError(null);
     try {
+      await flushAll(); // save any edits still waiting to be sent, so they are not lost or left out of a fresh start
       // 1. Resolve each chosen tag to a library item, creating items for new tags.
       let noteCat: string | undefined;
       const resolved = new Map<string, ItemTypeRow>();
@@ -148,24 +167,27 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
       for (const r of discover(scans)) if (r.kind === 'short') for (const it of byCode.get(r.code.toUpperCase()) ?? []) dropIds.add(it.id);
       const writeInc = new Set([...inc, ...emKeys]);
       // 2. Write each sheet's detections.
-      let total = 0, removedPast = 0, removedShort = 0;
+      let total = 0, removedPast = 0, removedShort = 0, erased = 0, skipped = 0;
+      const reset: false | 'auto' | 'all' = resetAuto ? (resetManual ? 'all' : 'auto') : false;
       let i = 0;
       for (const sc of scans) {
         i++;
+        if (sc.error) { skipped++; continue; } // a sheet that could not be read is left exactly as it was
         setStatus(`Saving counts: sheet ${i} of ${scans.length}…`);
         // Fixtures of a split type go to their normal or emergency item.
         const hits = sc.hits.map((h) => {
           if (h.kind !== 'tag' || !inc.has(h.code) || !splits(h.code)) return h;
           return isEmergency(h, activeMarkers) ? { ...h, code: h.code + EMERGENCY_KEY, conf: CONF_EMERGENCY } : { ...h, conf: CONF_NORMAL_SPLIT };
         });
-        const r = await writeSheet({ ...sc, hits }, resolved, writeInc, { ambiguous, clearItemIds: clearIds, dropItemIds: dropIds, ignorePast });
+        const r = await writeSheet({ ...sc, hits }, resolved, writeInc, { ambiguous, clearItemIds: clearIds, dropItemIds: dropIds, reset, ignorePast });
         total += r.added;
         removedPast += r.removedPast;
         removedShort += r.removedDropped;
+        erased += r.erased;
       }
       // Sheets already open in this session must show the new counts, not a cached copy.
       await Promise.all(scans.map((sc) => getStore(sc.sheet.id).load(true)));
-      onDone(`Counted ${plural(total, 'item')} across ${plural(scans.length, 'sheet')}.${removedPast ? ` Removed ${plural(removedPast, 'earlier count')} that lay past matchlines.` : ''}${removedShort ? ` Removed ${plural(removedShort, 'earlier short-code count')}.` : ''}${ambiguous.size ? ` ${[...ambiguous].join(', ')} ${ambiguous.size === 1 ? 'has' : 'have'} several variants: review those and move each to the right item.` : ''} ${emKeys.size ? ` Emergency fixtures were counted under their own items (${[...emKeys].map((k) => emergencyCode(k.replace(EMERGENCY_KEY, ''))).slice(0, 6).join(', ')}${emKeys.size > 6 ? '…' : ''}).` : ''} Counts are unreviewed until you confirm them.`);
+      onDone(`Counted ${plural(total, 'item')} across ${plural(scans.length, 'sheet')}.${erased ? ` Erased ${plural(erased, 'earlier count')} first.` : ''}${skipped ? ` ${plural(skipped, 'sheet')} could not be read and was left as it was.` : ''}${removedPast ? ` Removed ${plural(removedPast, 'earlier count')} that lay past matchlines.` : ''}${removedShort ? ` Removed ${plural(removedShort, 'earlier short-code count')}.` : ''}${ambiguous.size ? ` ${[...ambiguous].join(', ')} ${ambiguous.size === 1 ? 'has' : 'have'} several variants: review those and move each to the right item.` : ''} ${emKeys.size ? ` Emergency fixtures were counted under their own items (${[...emKeys].map((k) => emergencyCode(k.replace(EMERGENCY_KEY, ''))).slice(0, 6).join(', ')}${emKeys.size > 6 ? '…' : ''}).` : ''} Counts are unreviewed until you confirm them.`);
     } catch (e) {
       setError(e instanceof ApiError || e instanceof Error ? e.message : 'Saving the counts failed.');
       setPhase('pick');
@@ -193,6 +215,22 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
             Found {plural(rows.length, 'tag type')}.{libraryDriven ? ' The tags that match your item library are ticked; the rest are unticked.' : ' New tags are added to your item library; you can rename them there.'}
             Counts are marked unreviewed until you confirm them.
           </div>
+          {exTotals.auto + exTotals.manual > 0 && (
+            <div className="stack" style={{ gap: 8 }}>
+              <div style={{ fontWeight: 500 }}>Earlier counts on these sheets</div>
+              <div className="muted" style={{ fontSize: 13 }}>
+                {plural(exTotals.auto, 'automatic count')}{exTotals.confirmed ? ` (${exTotals.confirmed} confirmed)` : ''}{exTotals.manual ? ` and ${plural(exTotals.manual, 'count')} placed by hand` : ''}.
+              </div>
+              <Check checked={resetAuto} disabled={phase === 'write'} onChange={(v) => { setResetAuto(v); if (!v) setResetManual(false); }}>
+                Start fresh: erase the {plural(exTotals.auto, 'earlier automatic count')} first, confirmed ones included, then count again.
+              </Check>
+              {exTotals.manual > 0 && (
+                <Check checked={resetManual} disabled={phase === 'write' || !resetAuto} onChange={setResetManual}>
+                  <span style={resetManual ? { color: 'var(--color-accent-300)' } : undefined}>Also erase the {plural(exTotals.manual, 'count')} placed by hand. This cannot be undone.</span>
+                </Check>
+              )}
+            </div>
+          )}
           {pastCount > 0 && (
             <Check checked={ignorePast} disabled={phase === 'write'} onChange={setIgnorePast}>
               Leave out {plural(pastCount, 'mark')} past matchlines (on {plural(pastSheets, 'sheet')}). They belong to the neighbouring sheet.
@@ -243,7 +281,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
       {status && phase === 'write' && <div className="muted" style={{ fontSize: 13 }} role="status"><span className="spinner" /> {status}</div>}
       <div className="dialog-actions">
         <button className="btn btn-secondary" onClick={onClose} disabled={phase === 'write'}>Cancel</button>
-        {phase !== 'scan' && <button className="btn btn-primary" onClick={run} disabled={phase === 'write' || totalSelected === 0}>Count {totalSelected} item{totalSelected === 1 ? '' : 's'}</button>}
+        {phase !== 'scan' && <button className="btn btn-primary" onClick={run} disabled={phase === 'write' || totalSelected === 0}>{resetAuto && exTotals.auto + (resetManual ? exTotals.manual : 0) > 0 ? 'Erase and count' : 'Count'} {totalSelected} item{totalSelected === 1 ? '' : 's'}</button>}
       </div>
     </Dialog>
   );
