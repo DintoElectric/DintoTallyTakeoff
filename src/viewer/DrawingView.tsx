@@ -6,7 +6,7 @@ import { GridIndex } from '../detect/grid.ts';
 import type { Zone, ZonePoint } from '../../shared/zones.ts';
 import { appPalette, drawMarker, type Palette } from './markerDraw.ts';
 
-export type Tool = 'select' | 'add' | 'box' | 'erase' | 'zone';
+export type Tool = 'select' | 'add' | 'box' | 'erase' | 'zone' | 'area';
 export interface MarkerData { id: string; x: number; y: number; itemId: string; flagged: boolean }
 export interface ItemStyle { shape: MarkerShape; glyph: string | null }
 export interface DrawingViewHandle { zoomBy(factor: number): void; fit(): void; centerOn(x: number, y: number, zoomFactor?: number): void }
@@ -29,7 +29,9 @@ interface Props {
   onError(message: string): void;
   /** Exclusion zones drawn dimmed: the part of a sheet that lies past a matchline, or that the estimator outlined. */
   zones?: Zone[];
-  /** The outline being drawn with the zone tool (normalized points). */
+  /** Named count areas, drawn as coloured outlines with their name. */
+  areas?: { name: string; points: ZonePoint[]; color: string }[];
+  /** The outline being drawn with the zone or area tool (normalized points). */
   draft?: ZonePoint[];
   onZonePoint?(x: number, y: number): void;
   onZoneFinish?(): void;
@@ -100,6 +102,35 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
       }
       ctx.restore();
     }
+    const areas = P.current.areas;
+    if (areas?.length) {
+      ctx.save();
+      for (const a of areas) {
+        ctx.beginPath();
+        a.points.forEach((p, i) => (i === 0 ? ctx.moveTo(sx(p.x), sy(p.y)) : ctx.lineTo(sx(p.x), sy(p.y))));
+        ctx.closePath();
+        ctx.globalAlpha = 0.1;
+        ctx.fillStyle = a.color;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.lineWidth = 2.5;
+        ctx.strokeStyle = a.color;
+        ctx.stroke();
+      }
+      // names last, so no outline is drawn over a label
+      ctx.font = '600 13px Inter, system-ui, sans-serif';
+      ctx.textBaseline = 'top';
+      for (const a of areas) {
+        const xs = a.points.map((p) => p.x), ys = a.points.map((p) => p.y);
+        const lx = sx(Math.min(...xs)) + 6, ly = sy(Math.min(...ys)) + 6;
+        const w = ctx.measureText(a.name).width + 10;
+        ctx.fillStyle = 'rgba(255,255,255,0.92)';
+        ctx.fillRect(lx - 4, ly - 2, w, 20);
+        ctx.fillStyle = a.color;
+        ctx.fillText(a.name, lx, ly);
+      }
+      ctx.restore();
+    }
     const draft = P.current.draft;
     if (draft?.length) {
       ctx.save();
@@ -132,7 +163,7 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
     if (!raf.current) raf.current = requestAnimationFrame(drawMarkers);
   }, [drawMarkers]);
 
-  useEffect(() => { scheduleMarkers(); }, [props.markers, props.styles, props.activeItemId, props.selected, props.zones, props.draft, scheduleMarkers]);
+  useEffect(() => { scheduleMarkers(); }, [props.markers, props.styles, props.activeItemId, props.selected, props.zones, props.areas, props.draft, scheduleMarkers]);
 
   /* ---------- detail layer: sharp re-render of the visible region after zooming stops ---------- */
   const renderDetail = useCallback(async () => {
@@ -402,7 +433,7 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
         return;
       }
       s.lastTap = now; s.lastTapX = p.x; s.lastTapY = p.y;
-      if ((n.x < 0 || n.x > 1 || n.y < 0 || n.y > 1) && pr.tool !== 'zone') { if (pr.tool === 'select') pr.onPick(null, false); return; }
+      if ((n.x < 0 || n.x > 1 || n.y < 0 || n.y > 1) && pr.tool !== 'zone' && pr.tool !== 'area') { if (pr.tool === 'select') pr.onPick(null, false); return; }
       const coarse = s.type === 'touch' ? 22 : 12;
       const rx = coarse / (pageW * view.current.z), ry = coarse / (pageH * view.current.z);
       const hit = gridRef.current.nearest(n.x, n.y, rx, ry);
@@ -410,7 +441,7 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
       else if (pr.tool === 'add') { if (!pr.readOnly) pr.onPlace(n.x, n.y); }
       else if (pr.tool === 'erase') { if (!pr.readOnly && hit) pr.onErase(hit.id); }
       else if (pr.tool === 'box') pr.onBox([], false);
-      else if (pr.tool === 'zone' && !pr.readOnly) {
+      else if ((pr.tool === 'zone' || pr.tool === 'area') && !pr.readOnly) {
         // Clicking the first corner (with 3 or more placed) closes the outline.
         const d = pr.draft;
         const nearFirst = d && d.length >= 3 && Math.hypot(sxOf(d[0].x) - p.x, syOf(d[0].y) - p.y) < 14;
