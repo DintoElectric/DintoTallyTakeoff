@@ -146,8 +146,8 @@ export default handle(async (req: Request, _ctx: Context) => {
     const items = await sql<any>`
       select i.id, i.code, i.name, i.spec, i.category_id, i.unit, i.detection_mode, i.marker_shape, i.marker_glyph,
              0::int as sample_count, 0::int as detection_count
-        from item_types i order by i.code`;
-    const categories = await sql<any>`select id, name, sort from item_categories order by sort, name`;
+        from item_types i where i.project_id = ${id} order by i.code`;
+    const categories = await sql<any>`select id, name, sort from item_categories where project_id = ${id} order by sort, name`;
     const counts = await sql<any>`
       select d.sheet_id, d.item_type_id, count(*)::int as n,
              (count(*) filter (where d.status = 'unreviewed' and d.confidence is not null and d.confidence < ${project.review_threshold}))::int as flagged

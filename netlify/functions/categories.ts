@@ -10,16 +10,23 @@ export default handle(async (req: Request, _ctx: Context) => {
   if (!seg[1]) {
     if (req.method === 'GET') {
       await requireRole('viewer');
-      return json({ categories: await sql`select id, name, sort from item_categories order by sort, name` });
+      const q = new URL(req.url).searchParams;
+      // Categories of items that predate per-project libraries.
+      if (q.get('unassigned')) return json({ categories: await sql`select id, name, sort from item_categories where project_id is null order by sort, name` });
+      const projectId = q.get('project');
+      if (!projectId) throw new HttpError(400, 'Say which project\'s categories you want.');
+      const pid = uuid(projectId, 'project id');
+      return json({ categories: await sql`select id, name, sort from item_categories where project_id = ${pid} order by sort, name` });
     }
     if (req.method === 'POST') {
       await requireRole('estimator');
       const b = await readJson(req);
-      onlyKeys(b, ['name']);
+      onlyKeys(b, ['project_id', 'name']);
+      const projectId = uuid(b.project_id, 'project id');
       const name = reqStr(b.name, 'Category name', 60);
       const [row] = await sql`
-        insert into item_categories (name, sort)
-        values (${name}, (select coalesce(max(sort), 0) + 1 from item_categories))
+        insert into item_categories (name, sort, project_id)
+        values (${name}, (select coalesce(max(sort), 0) + 1 from item_categories where project_id = ${projectId}), ${projectId})
         returning id, name, sort`;
       return json({ category: row }, 201);
     }
