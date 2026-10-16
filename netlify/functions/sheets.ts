@@ -3,7 +3,7 @@ import { requireRole } from './_lib/auth.ts';
 import { db } from './_lib/db.ts';
 import { HttpError, handle, json, methodNotAllowed, notFound, readJson, segments } from './_lib/http.ts';
 import { oneOf, onlyKeys, str, uuid } from './_lib/validate.ts';
-import { getBytes, keys, putBytes } from './_lib/blobs.ts';
+import { chunkKeys, deleteKeys, getBytes, keys, putBytes } from './_lib/blobs.ts';
 import { applyBatch, listDetections } from './_lib/detections.ts';
 import { validateZones } from '../../shared/zones.ts';
 import { cleanAreaName } from '../../shared/areas.ts';
@@ -43,6 +43,29 @@ export default handle(async (req: Request, _ctx: Context) => {
       const r = await pool.query(`${SHEET_SELECT} where s.id = $1`, [id]);
       if (!r.rows[0]) throw notFound('That sheet');
       return json({ sheet: r.rows[0] });
+    }
+    // DELETE /api/sheets/:id (admin): remove one sheet with its counts and areas. Used to remove duplicate drawings.
+    if (req.method === 'DELETE') {
+      await requireRole('admin');
+      const r = await pool.query(`select file_id, project_id from sheets where id = $1`, [id]);
+      if (!r.rows[0]) return json({ ok: true, file_removed: false });   // already gone is success
+      const { file_id: fileId, project_id: projectId } = r.rows[0] as { file_id: string; project_id: string };
+      await pool.query(`update sheets set replaces_sheet_id = null where replaces_sheet_id = $1`, [id]);
+      await pool.query(`delete from sheets where id = $1`, [id]);          // counts and areas go with it
+      await deleteKeys([keys.thumb(id)]);
+      // The PDF itself is removed only when this was its last sheet.
+      let fileRemoved = false;
+      const left = await pool.query(`select count(*)::int as n from sheets where file_id = $1`, [fileId]);
+      if (left.rows[0].n === 0) {
+        const f = await pool.query(`select chunk_count from drawing_files where id = $1`, [fileId]);
+        if (f.rows[0]) {
+          await pool.query(`delete from drawing_files where id = $1`, [fileId]);
+          await deleteKeys(chunkKeys(fileId, f.rows[0].chunk_count));
+          fileRemoved = true;
+        }
+      }
+      await pool.query(`update projects set updated_at = now() where id = $1`, [projectId]);
+      return json({ ok: true, file_removed: fileRemoved });
     }
     if (req.method === 'PATCH') {
       await requireRole('estimator');
