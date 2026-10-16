@@ -26,9 +26,12 @@ interface Props {
   onBox(ids: string[], additive: boolean): void;
   onZoom(pct: number): void;
   onError(message: string): void;
+  /** Areas drawn dimmed (normalized 0..1): the part of a sheet that lies past a matchline. */
+  zones?: { x0: number; y0: number; x1: number; y1: number }[];
 }
 
 const DEFAULT_STYLE: ItemStyle = { shape: 'circle', glyph: null };
+const z0 = (z: number) => z;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 export const DrawingView = forwardRef<DrawingViewHandle, Props>(function DrawingView(props, ref) {
@@ -76,7 +79,20 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
     palette.current ??= appPalette();
     const pal = palette.current;
     const { z, tx, ty } = view.current;
-    const { markers, styles, activeItemId, selected } = P.current;
+    const { markers, styles, activeItemId, selected, zones } = P.current;
+    if (zones?.length) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(22,24,38,0.30)';
+      ctx.strokeStyle = 'rgba(22,24,38,0.65)';
+      ctx.setLineDash([6, 4]);
+      for (const z of zones) {
+        const x0 = tx + z.x0 * pageW * z0(view.current.z), y0 = ty + z.y0 * pageH * z0(view.current.z);
+        const x1 = tx + z.x1 * pageW * z0(view.current.z), y1 = ty + z.y1 * pageH * z0(view.current.z);
+        ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
+        ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+      }
+      ctx.restore();
+    }
     const size16 = window.matchMedia('(pointer: coarse)').matches ? 20 : 16;
     for (let pass = 0; pass < 3; pass++) {
       for (const m of markers) {
@@ -96,7 +112,7 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
     if (!raf.current) raf.current = requestAnimationFrame(drawMarkers);
   }, [drawMarkers]);
 
-  useEffect(() => { scheduleMarkers(); }, [props.markers, props.styles, props.activeItemId, props.selected, scheduleMarkers]);
+  useEffect(() => { scheduleMarkers(); }, [props.markers, props.styles, props.activeItemId, props.selected, props.zones, scheduleMarkers]);
 
   /* ---------- detail layer: sharp re-render of the visible region after zooming stops ---------- */
   const renderDetail = useCallback(async () => {
