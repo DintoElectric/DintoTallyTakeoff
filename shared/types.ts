@@ -1,3 +1,6 @@
+import type { Zone } from './zones.ts';
+export type { Zone } from './zones.ts';
+
 export type Role = 'viewer' | 'estimator' | 'admin';
 export type SheetKind = 'floor_plan' | 'legend' | 'site_plan' | 'schedule' | 'other';
 export type CountStatus = 'not_counted' | 'needs_review' | 'reviewed';
@@ -60,6 +63,7 @@ export interface SheetRow {
   version: number;
   detection_count: number;
   flagged_count: number;
+  exclusion_zones: Zone[] | null; // null = automatic (from the matchlines)
 }
 
 export interface ItemTypeRow {
