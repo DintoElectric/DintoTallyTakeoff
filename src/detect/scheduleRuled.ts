@@ -7,11 +7,12 @@ import { TAG_RE } from './tagScan.ts';
 import { clean, resolveSimilar, shortName, type ScheduleRow } from './scheduleParse.ts';
 
 const HYPHEN_TAG = /^[A-Z]{1,4}-[A-Z0-9]{1,4}$/;
-export const isScheduleTag = (s: string) => TAG_RE.test(s) || HYPHEN_TAG.test(s);
+/** Type tags: B13, BC-14, RL-2X; and, when the first column is a SYMBOL/MARK number, plain numbers (1..24). */
+export const isScheduleTag = (s: string, numeric = false) => TAG_RE.test(s) || HYPHEN_TAG.test(s) || (numeric && /^\d{1,3}[A-Z]?$/.test(s));
 
 interface Cell { s: string; x0: number; x1: number; cx: number; y: number }
 interface Table { x0: number; x1: number; ys: number[]; xs: number[] }
-type Key = 'code' | 'location' | 'description' | 'manufacturer' | 'catalog' | 'finish' | 'lumens' | 'watts' | 'lamp' | 'volts' | 'driver' | 'notes' | 'mounting' | 'other';
+type Key = 'code' | 'nema' | 'catalogN' | 'breaker' | 'location' | 'description' | 'manufacturer' | 'catalog' | 'finish' | 'lumens' | 'watts' | 'lamp' | 'volts' | 'driver' | 'notes' | 'mounting' | 'other';
 
 const cluster = (vals: number[], tol: number): number[] => {
   const out: number[] = [];
@@ -52,6 +53,9 @@ const colOf = (xs: number[], x: number): number => {
 function keyFor(header: string, index: number): Key {
   const h = header.toUpperCase();
   if (index === 0) return 'code';
+  if (/NEMA/.test(h)) return 'nema';
+  if (/CAT\.?\s*NO\.?$/.test(h)) return 'catalogN';        // "HUBBELL CAT. No.": one column per maker
+  if (/^C\.?B\.?$/.test(h)) return 'breaker';
   if (/MANUFACTURER|MFR/.test(h)) return 'manufacturer';
   if (/CATALOG|MODEL|PART/.test(h)) return 'catalog';
   if (/DESCRIPTION/.test(h)) return 'description';
@@ -101,29 +105,32 @@ export function parseRuledSchedule(runs: PageRun[], prims: Prim[], pageW: number
   if (!tables.length) return [];
 
   // Data bands of a table: between consecutive row lines, with a type tag in the first column.
-  const bands = (t: Table, shift = 0) => {
+  const bands = (t: Table, numeric = false) => {
     const first = [t.xs[0], t.xs[1]];
     const out: { y0: number; y1: number; tag: Cell }[] = [];
     for (let i = 0; i < t.ys.length - 1; i++) {
       const y0 = t.ys[i], y1 = t.ys[i + 1];
       const tag = cells
-        .filter((c) => c.y > y0 && c.y < y1 && c.cx >= first[0] && c.cx < first[1] && isScheduleTag(c.s))
+        .filter((c) => c.y > y0 && c.y < y1 && c.cx >= first[0] && c.cx < first[1] && isScheduleTag(c.s, numeric))
         .sort((a, b) => a.y - b.y)[0];
       if (tag) out.push({ y0, y1, tag });
     }
-    void shift;
     return out;
   };
 
-  // The template: the table that has a header row (TYPE ... DESCRIPTION) above its first data band.
-  let template: { t: Table; keys: Key[] } | null = null;
+  // The template: the table that has a header row (TYPE or SYMBOL ... DESCRIPTION) above its first data band.
+  let template: { t: Table; keys: Key[]; headers: string[]; numeric: boolean } | null = null;
   for (const t of tables) {
-    const b = bands(t);
-    if (!b.length) continue;
-    const headerCells = cells.filter((c) => c.y > t.ys[0] - 4 && c.y < b[0].y0 && c.x0 >= t.x0 - 2 && c.x1 <= t.x1 + 2);
-    const headers = t.xs.slice(0, -1).map((_, i) => clean(headerCells.filter((c) => colOf(t.xs, c.cx) === i).sort((p, q) => p.y - q.y || p.x0 - q.x0).map((c) => c.s).join(' ')));
-    const keys = headers.map((h, i) => keyFor(h, i));
-    if (keys.includes('description') && /TYPE/i.test(headers[0])) { template = { t, keys }; break; }
+    for (const numeric of [false, true]) {
+      const b = bands(t, numeric);
+      if (!b.length) continue;
+      const headerCells = cells.filter((c) => c.y > t.ys[0] - 4 && c.y < b[0].y0 && c.x0 >= t.x0 - 2 && c.x1 <= t.x1 + 2);
+      const headers = t.xs.slice(0, -1).map((_, i) => clean(headerCells.filter((c) => colOf(t.xs, c.cx) === i).sort((p, q) => p.y - q.y || p.x0 - q.x0).map((c) => c.s).join(' ')));
+      const keys = headers.map((h, i) => keyFor(h, i));
+      const first = numeric ? /^(SYMBOL|MARK|NO\.?)$/i : /TYPE/i;
+      if (keys.includes('description') && first.test(headers[0])) { template = { t, keys, headers, numeric }; break; }
+    }
+    if (template) break;
   }
   if (!template) return [];
 
@@ -131,20 +138,28 @@ export function parseRuledSchedule(runs: PageRun[], prims: Prim[], pageW: number
   for (const t of tables) {
     // A table with the same number of columns is read with the template's meaning of each column.
     if (t.xs.length !== template.t.xs.length) continue;
-    for (const band of bands(t)) {
+    for (const band of bands(t, template.numeric)) {
       const inBand = cells.filter((c) => c.y > band.y0 && c.y < band.y1 && c.x0 >= t.x0 - 2 && c.x1 <= t.x1 + 4);
       const by = (k: Key) => inBand.filter((c) => template!.keys[colOf(t.xs, c.cx)] === k).sort((p, q) => (Math.abs(p.y - q.y) < 3 ? p.x0 - q.x0 : p.y - q.y));
       const text = (k: Key) => clean(by(k).map((c) => c.s).join(' '));
       const desc = text('description');
       const lampText = text('lamp');
       const cct = /\((\d{3,4}K)\)/i.exec(lampText)?.[1] ?? '';
+      const nema = text('nema');
+      const makers = template!.keys.map((k, i) => (k === 'catalogN' ? i : -1)).filter((i) => i >= 0).map((i) => ({
+        mfr: template!.headers[i].replace(/\s*CAT\.?\s*NO\.?$/i, '').trim(),
+        v: clean(inBand.filter((c) => colOf(t.xs, c.cx) === i).map((c) => c.s).join(' ')),
+      })).filter((m) => m.v && !/^[-–—]+$/.test(m.v));
       const mfrLines = by('manufacturer').map((c) => c.s).filter((s) => !/^OR APPROVED EQUAL$/i.test(s));
       const sim = /^(?:SIMILAR TO|SAME AS) (?:FIXTURE )?TYPE ([A-Z0-9-]+)/.exec(desc);
       const mounting = text('mounting') || mountingFromDescription(desc);
+      const breaker = text('breaker');
       rows.push({
-        code: band.tag.s, mounting, name: shortName(desc, !!sim), description: desc,
+        code: band.tag.s, mounting, name: nema ? `NEMA ${nema}, ${desc}` : shortName(desc, !!sim), description: desc,
         lumens: normLumens(text('lumens')), cct, optics: '', watts: normWatts(text('watts')), volts: text('volts'), dimming: text('driver'),
-        manufacturer: mfrLines[0] ?? '', alternates: mfrLines.slice(1), catalog: joinCatalog(by('catalog').map((c) => c.s)),
+        manufacturer: makers[0]?.mfr ?? mfrLines[0] ?? '', alternates: makers.length ? makers.slice(1).map((m) => `${m.mfr} ${m.v}`) : mfrLines.slice(1),
+        catalog: makers[0]?.v ?? joinCatalog(by('catalog').map((c) => c.s)),
+        ...(nema ? { category: 'Special purpose receptacles', spec: [makers[0] ? `${makers[0].mfr} ${makers[0].v}` : '', breaker].filter(Boolean).join(' · ') } : {}),
         removed: /REMOVED FROM PROJECT|DELETED/i.test(desc), similarTo: sim ? sim[1] : null,
         location: text('location').replace(/[,;\s]+$/, ''), finish: text('finish'),
       });

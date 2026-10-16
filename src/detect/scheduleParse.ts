@@ -16,6 +16,11 @@ export interface ScheduleRow {
   similarTo: string | null; // "SIMILAR TO FIXTURE TYPE A1" -> "A1"
   location?: string;        // where it is used (BOH, CORRIDOR), when the schedule has such a column
   finish?: string;
+  // Schedules that are not light fixture schedules (outlets, security devices, receptacles):
+  key?: string;             // identity when several rows share a code (IPC is used for two outlet types)
+  category?: string;        // library category
+  spec?: string;            // ready-made spec line
+  count?: number;           // how many the schedule lists (devices, outlets); shown in the review, not stored
 }
 
 interface Cell { s: string; x0: number; x1: number; cx: number; y: number; h: number }
@@ -166,6 +171,7 @@ export function parseSchedulePage(runs: PageRun[], pageW: number, pageH: number)
 
 /** Library-ready one-line spec: "4,800 LM · 3000K · 45 W · LITHONIA EPANL-…" (max 200 characters). */
 export function specLine(r: ScheduleRow): string {
+  if (r.spec) return r.spec.length <= 200 ? r.spec : `${r.spec.slice(0, 197)}…`;
   const bits = [r.lumens, r.cct, r.watts && (/[A-Za-z]/.test(r.watts) ? r.watts : `${r.watts} W`), clean(`${r.manufacturer} ${r.catalog}`)].filter((x) => x && x !== '-' && x !== 'N/A');
   const s = bits.join(' · ');
   return s.length <= 200 ? s : `${s.slice(0, 197)}…`;
