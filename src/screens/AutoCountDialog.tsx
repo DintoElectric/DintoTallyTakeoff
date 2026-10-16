@@ -15,6 +15,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
   const [names, setNames] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState('');
+  const [libraryDriven, setLibraryDriven] = useState(false);
   const abort = useRef(new AbortController());
 
   // Several library items can share a code (variants), so each code maps to a list.
@@ -23,7 +24,11 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
     for (const i of items) m.set(i.code.toUpperCase(), [...(m.get(i.code.toUpperCase()) ?? []), i]);
     return m;
   }, [items]);
-  const rows: CodeRow[] = useMemo(() => discover(scans), [scans]);
+  // Library matches first, then other tags, then short codes, then room numbers.
+  const rows: CodeRow[] = useMemo(() => {
+    const rank = (r: CodeRow) => (r.kind === 'room' ? 3 : byCode.has(r.code.toUpperCase()) ? 0 : r.kind === 'tag' ? 1 : 2);
+    return [...discover(scans)].sort((a, b) => rank(a) - rank(b) || b.total - a.total || a.code.localeCompare(b.code));
+  }, [scans, byCode]);
 
   useEffect(() => {
     let off = false;
@@ -35,8 +40,12 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
         setScans(res);
         const found = discover(res);
         // Tags are pre-selected; short letter-only codes only if already in the library.
-        // Tags are pre-ticked. Short codes only if already in the library. Room numbers are never pre-ticked.
-        setInc(new Set(found.filter((r) => r.kind === 'tag' || (r.kind === 'short' && byCode.has(r.code.toUpperCase()))).map((r) => r.code)));
+        // With a library (for example from a fixture schedule) only tags that match it are pre-ticked, so grid
+        // labels and other look-alikes stay out. With no matches yet, every tag is pre-ticked to get you started.
+        // Room numbers are never pre-ticked.
+        const lib = found.filter((r) => r.kind !== 'room' && byCode.has(r.code.toUpperCase()));
+        setLibraryDriven(lib.length > 0);
+        setInc(new Set((lib.length > 0 ? lib : found.filter((r) => r.kind === 'tag')).map((r) => r.code)));
         setPhase('pick');
       } catch (e) {
         if (!off && !(e instanceof DOMException)) setError(e instanceof Error ? e.message : 'The scan failed.');
@@ -102,7 +111,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
       {phase !== 'scan' && (
         <>
           <div className="muted" style={{ fontSize: 13 }}>
-            Found {plural(rows.length, 'tag type')}. Choose what to count. New tags are added to your item library; you can rename them there.
+            Found {plural(rows.length, 'tag type')}.{libraryDriven ? ' The tags that match your item library are ticked; the rest are unticked.' : ' New tags are added to your item library; you can rename them there.'}
             Counts are marked unreviewed until you confirm them.
           </div>
           {failed.length > 0 && <div className="err-text">{plural(failed.length, 'sheet')} couldn't be read: {failed.map((f) => f.sheet.number ?? `page ${f.sheet.page}`).join(', ')}.</div>}
@@ -116,7 +125,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
                     <tr key={r.code}>
                       <td><Check checked={inc.has(r.code)} disabled={phase === 'write'} onChange={(v) => setInc((cur) => { const n = new Set(cur); if (v) n.add(r.code); else n.delete(r.code); return n; })}><span className="sr-only">Count {r.code}</span></Check></td>
                       <td style={{ fontWeight: 500 }}>{r.code}{r.kind === 'short' && <span className="tag tag-outline" style={{ marginLeft: 8 }} title="Short letter-only codes can match ordinary text. They are flagged for review.">Short code</span>}{r.kind === 'room' && <span className="tag tag-neutral" style={{ marginLeft: 8 }} title="A room name sits just above it and it appears once. Tick it only if it is really a device.">Looks like a room number</span>}</td>
-                      <td>{lib ? <span className="muted">{lib[0].name}{lib.length > 1 ? ` (+${lib.length - 1} variant${lib.length === 2 ? '' : 's'}: flagged for review)` : ''}</span> : <input className="input" style={{ minHeight: 30, padding: '3px 8px' }} placeholder="Description (optional)" aria-label={`Description for ${r.code}`} value={names[r.code] ?? ''} disabled={phase === 'write'} onChange={(e) => setNames({ ...names, [r.code]: e.target.value })} />}</td>
+                      <td>{lib ? <span className="muted">{lib[0].name.length > 50 ? `${lib[0].name.slice(0, 50)}…` : lib[0].name}{lib.length > 1 ? ` (+${lib.length - 1} variant${lib.length === 2 ? '' : 's'}: flagged for review)` : ''}</span> : <input className="input" style={{ minHeight: 30, padding: '3px 8px' }} placeholder="Description (optional)" aria-label={`Description for ${r.code}`} value={names[r.code] ?? ''} disabled={phase === 'write'} onChange={(e) => setNames({ ...names, [r.code]: e.target.value })} />}</td>
                       <td className="right num">{r.total}</td>
                     </tr>
                   );

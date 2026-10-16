@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FilePdf, Check as CheckIcon, SquaresFour, List, UploadSimple, Trash } from '@phosphor-icons/react';
-import type { DrawingFileRow, ItemTypeRow, ProjectRow, SheetKind, SheetRow } from '../../shared/types.ts';
+import type { CategoryRow, DrawingFileRow, ItemTypeRow, ProjectRow, SheetKind, SheetRow } from '../../shared/types.ts';
 import { api, ApiError } from '../auth/api.ts';
 import { useAuth } from '../auth/AuthProvider.tsx';
 import { Check, Dialog, Seg, TopBar, fmtBytes, plural, useToast } from '../app/ui.tsx';
@@ -9,6 +9,7 @@ import { useFetch } from '../app/useFetch.ts';
 import { cancelUpload, dismissUpload, startUpload, useUploads } from '../upload/uploads.ts';
 import { FLOOR_OPTIONS } from '../upload/titleBlock.ts';
 import AutoCountDialog from './AutoCountDialog.tsx';
+import ScheduleDialog from './ScheduleDialog.tsx';
 
 const KIND_LABEL: Record<SheetKind, string> = { floor_plan: 'Floor plan', legend: 'Legend', site_plan: 'Site plan', schedule: 'Schedule', other: 'Other' };
 const STATUS_LABEL = { not_counted: 'Not counted', needs_review: 'Needs review', reviewed: 'Reviewed' } as const;
@@ -47,6 +48,8 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
   const [sheets, setSheets] = useState<SheetRow[]>([]);
   const [confirmDelete, setConfirmDelete] = useState<DrawingFileRow | null>(null);
   const [autoOpen, setAutoOpen] = useState(false);
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const cats = useFetch<{ categories: CategoryRow[] }>('/categories');
   const picker = useRef<HTMLInputElement>(null);
   const jobs = useUploads(projectId);
 
@@ -99,6 +102,7 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
         {canEdit && <button className="btn btn-secondary" onClick={() => picker.current?.click()}><UploadSimple size={14} /> Add drawings</button>}
         <input ref={picker} type="file" accept="application/pdf,.pdf" hidden onChange={(e) => { addFile(e.target.files?.[0]); e.target.value = ''; }} />
         <button className="btn btn-secondary" onClick={openWorkspace} disabled={sheets.length === 0}>Open workspace</button>
+        {canEdit && <button className="btn btn-secondary" onClick={() => setScheduleOpen(true)} disabled={sheets.length === 0}>Read fixture schedule</button>}
         {canEdit && <button className="btn btn-primary" onClick={() => setAutoOpen(true)} disabled={enabled.length === 0} title={enabled.length === 0 ? 'Tick Count on at least one sheet first.' : undefined}>Auto-count {enabled.length} sheet{enabled.length === 1 ? '' : 's'}</button>}
       </TopBar>
       <div className="two-col">
@@ -229,6 +233,10 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
         </aside>
       </div>
 
+      {scheduleOpen && (
+        <ScheduleDialog projectId={projectId} sheets={sheets} files={files.data?.files.filter((f) => f.upload_status === 'ready') ?? []} items={items.data?.items ?? []} categories={cats.data?.categories ?? []}
+          onClose={() => setScheduleOpen(false)} onDone={(msg) => { setScheduleOpen(false); toast(msg); void items.reload(); void cats.reload(); }} />
+      )}
       {autoOpen && (
         <AutoCountDialog projectId={projectId} sheets={enabled} items={items.data?.items ?? []} onClose={() => setAutoOpen(false)}
           onDone={(msg) => { setAutoOpen(false); toast(msg); void sheetsQ.reload(); void items.reload(); void project.reload(); const first = enabled[0]; if (first) navigate(paths.sheet(projectId, first.id)); }} />
