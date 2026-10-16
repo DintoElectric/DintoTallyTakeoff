@@ -376,7 +376,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       <TopBar crumbs={[{ label: 'Projects', to: paths.projects() }, { label: project.data?.project.name ?? '…', to: paths.project(projectId) }, { label: sheetLabel }]}>
         {editorHint && <span className="save-state">{editorHint}</span>}
         {saveText && <span className={`save-state${snap.save.kind === 'error' ? ' err' : ''}`} role="status">{saveText}</span>}
-        {!readOnly && <button className="btn btn-secondary" onClick={() => setShowAuto(true)} disabled={!sheet || !file}><MagicWand size={14} /> Auto-count sheet</button>}
+        {!readOnly && <button className="btn btn-secondary" onClick={() => { if (sheet && (sheet.kind === 'schedule' || sheet.kind === 'legend')) return toast(`This sheet is marked as a ${sheet.kind}. Auto-count skips schedules and legends, since the tags in their tables are not fixtures. Change its type in the sheet index to count it.`); setShowAuto(true); }} disabled={!sheet || !file}><MagicWand size={14} /> Auto-count sheet</button>}
         <button className="btn btn-primary" onClick={() => setShowExport(true)}><Export size={14} /> Export</button>
       </TopBar>
 

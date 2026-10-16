@@ -2,11 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import type { CategoryRow, DrawingFileRow, ItemTypeRow, SheetRow } from '../../shared/types.ts';
 import { api, ApiError } from '../auth/api.ts';
 import { Check, Dialog, plural } from '../app/ui.tsx';
-import { extractRuns } from '../detect/pageRuns.ts';
-import { categoryFor, parseSchedulePage, resolveSimilar, specLine, type ScheduleRow } from '../detect/scheduleParse.ts';
-import { parseRuledSchedule } from '../detect/scheduleRuled.ts';
-import { parseTextSchedules } from '../detect/scheduleDevices.ts';
-import { extractPrims } from '../detect/primitives.ts';
+import { categoryFor, resolveSimilar, specLine, type ScheduleRow } from '../detect/scheduleParse.ts';
+import { readSchedulePage } from '../detect/readSchedulePage.ts';
 import { loadFilePdf, pdfjs } from '../viewer/pdf.ts';
 
 type Phase = 'pick' | 'read' | 'review' | 'write';
@@ -48,29 +45,7 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
     if (!f) return [];
     const pdf = await loadFilePdf({ id: f.id, chunk_count: f.chunk_count });
     const page = await pdf.getPage(sh.page);
-    try {
-      const vp = page.getViewport({ scale: 1 });
-      const runs = await extractRuns(page);
-      if (onlyIfLooksLikeOne) {
-        const words = new Set(runs.map((r) => r.str.trim().toUpperCase()));
-        const any = (re: RegExp) => [...words].some((w) => re.test(w));
-        const looks =
-          (words.has('DESCRIPTION') && (words.has('MANUFACTURER') || words.has('CATALOG NUMBER') || words.has('CATALOG NO.') || words.has('MTG.'))) || // light fixture schedule
-          (words.has('OUTLET TYPE') && words.has('SUBSCRIPT')) ||                                                                                     // communications outlet counts
-          any(/^(CAMERA|DEVICE) TYPE$/) || words.has('DEVICE LOCATION') ||                                                                            // security device lists
-          (words.has('SYMBOL') && words.has('NEMA'));                                                                                                 // special purpose receptacles
-        if (!looks) return [];
-      }
-      // Schedules with a MTG. column (like PSEB) are read from the text alone; tables drawn with row and column
-      // lines (like E0.3) are read from the lines. A sheet that is neither gives no rows.
-      let found = parseSchedulePage(runs, vp.width, vp.height);
-      if (found.length === 0) {
-        const { prims } = await extractPrims(page, pdfjs.OPS);
-        found = parseRuledSchedule(runs, prims, vp.width, vp.height);              // ruled grid (E0.3, receptacle schedule)
-        if (found.length === 0) found = parseTextSchedules(runs, prims, vp.width, vp.height); // laid out by position (outlets, security)
-      }
-      return found;
-    } finally { page.cleanup(); }
+    try { return await readSchedulePage(page, pdfjs.OPS, onlyIfLooksLikeOne); } finally { page.cleanup(); }
   }
 
   async function read(ids: Set<string>, onlyIfLooksLikeOne = false) {

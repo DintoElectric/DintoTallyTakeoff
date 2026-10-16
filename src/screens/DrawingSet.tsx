@@ -10,6 +10,8 @@ import { cancelUpload, dismissUpload, startUpload, useUploads } from '../upload/
 import { FLOOR_OPTIONS } from '../upload/titleBlock.ts';
 import AutoCountDialog from './AutoCountDialog.tsx';
 import ScheduleDialog from './ScheduleDialog.tsx';
+import ScheduleSheetsDialog from './ScheduleSheetsDialog.tsx';
+import DuplicatesDialog from './DuplicatesDialog.tsx';
 
 const KIND_LABEL: Record<SheetKind, string> = { floor_plan: 'Floor plan', legend: 'Legend', site_plan: 'Site plan', schedule: 'Schedule', other: 'Other' };
 const STATUS_LABEL = { not_counted: 'Not counted', needs_review: 'Needs review', reviewed: 'Reviewed' } as const;
@@ -49,6 +51,8 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
   const [confirmDelete, setConfirmDelete] = useState<DrawingFileRow | null>(null);
   const [autoOpen, setAutoOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [schedSheetsOpen, setSchedSheetsOpen] = useState(false);
+  const [dupOpen, setDupOpen] = useState(false);
   const cats = useFetch<{ categories: CategoryRow[] }>('/categories');
   const picker = useRef<HTMLInputElement>(null);
   const jobs = useUploads(projectId);
@@ -65,7 +69,10 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
   }, [busyRemote, activeJobs, files.reload, sheetsQ.reload]);
 
   const proj = project.data?.project;
-  const enabled = sheets.filter((s) => s.count_enabled);
+  // Schedules and legends are never auto-counted: the tags printed in their tables are not fixtures on a plan.
+  const isNonCounting = (s: SheetRow) => s.kind === 'schedule' || s.kind === 'legend';
+  const enabled = sheets.filter((s) => s.count_enabled && !isNonCounting(s));
+  const skippedSheets = sheets.filter((s) => s.count_enabled && isNonCounting(s)).length;
   const libCount = items.data?.items.length ?? 0;
   const platesOk = sheets.length > 0 && sheets.filter((s) => s.kind === 'floor_plan').every((s) => s.number && s.floor);
 
@@ -103,7 +110,9 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
         <input ref={picker} type="file" accept="application/pdf,.pdf" hidden onChange={(e) => { addFile(e.target.files?.[0]); e.target.value = ''; }} />
         <button className="btn btn-secondary" onClick={openWorkspace} disabled={sheets.length === 0}>Open workspace</button>
         {canEdit && <button className="btn btn-secondary" onClick={() => setScheduleOpen(true)} disabled={sheets.length === 0}>Read schedule</button>}
-        {canEdit && <button className="btn btn-primary" onClick={() => setAutoOpen(true)} disabled={enabled.length === 0} title={enabled.length === 0 ? 'Tick Count on at least one sheet first.' : undefined}>Auto-count {enabled.length} sheet{enabled.length === 1 ? '' : 's'}</button>}
+        {canEdit && <button className="btn btn-secondary" onClick={() => setSchedSheetsOpen(true)} disabled={sheets.length === 0} title="Stop counting the sheets that are, or hold, schedules">Exclude schedules</button>}
+        {isAdmin && <button className="btn btn-secondary" onClick={() => setDupOpen(true)} disabled={sheets.length < 2} title="Find and remove sheets that were uploaded more than once">Remove duplicates</button>}
+        {canEdit && <button className="btn btn-primary" onClick={() => setAutoOpen(true)} disabled={enabled.length === 0} title={enabled.length === 0 ? 'Tick Count on at least one sheet first.' : skippedSheets ? `${plural(skippedSheets, 'schedule or legend sheet')} ticked to count will be skipped.` : undefined}>Auto-count {enabled.length} sheet{enabled.length === 1 ? '' : 's'}</button>}
       </TopBar>
       <div className="two-col">
         <main className="sheet-main">
@@ -233,6 +242,14 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
         </aside>
       </div>
 
+      {schedSheetsOpen && (
+        <ScheduleSheetsDialog sheets={sheets} files={files.data?.files ?? []} onClose={() => setSchedSheetsOpen(false)}
+          onDone={(msg) => { setSchedSheetsOpen(false); toast(msg); void sheetsQ.reload(); void project.reload(); }} />
+      )}
+      {dupOpen && (
+        <DuplicatesDialog sheets={sheets} files={files.data?.files ?? []} onClose={() => setDupOpen(false)}
+          onDone={(msg) => { setDupOpen(false); toast(msg); void files.reload(); void sheetsQ.reload(); void project.reload(); }} />
+      )}
       {scheduleOpen && (
         <ScheduleDialog projectId={projectId} sheets={sheets} files={files.data?.files.filter((f) => f.upload_status === 'ready') ?? []} items={items.data?.items ?? []} categories={cats.data?.categories ?? []}
           onClose={() => setScheduleOpen(false)} onDone={(msg) => { setScheduleOpen(false); toast(msg); void items.reload(); void cats.reload(); }} />
