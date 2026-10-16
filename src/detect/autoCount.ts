@@ -6,7 +6,7 @@ import { loadFilePdf, pdfjs } from '../viewer/pdf.ts';
 import type { Matchline } from './matchlines.ts';
 import { scanPage } from './scanPage.ts';
 import { planSheetWrite } from './writePlan.ts';
-export { CONF_AMBIGUOUS, CONF_ROOMISH, CONF_SHORT, CONF_TAG } from './writePlan.ts';
+export { CONF_AMBIGUOUS, CONF_EMERGENCY, CONF_NORMAL_SPLIT, CONF_ROOMISH, CONF_SHORT, CONF_TAG } from './writePlan.ts';
 import type { TagHit, TagKind } from './tagScan.ts';
 
 

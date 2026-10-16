@@ -4,6 +4,7 @@ import { extractPrims, type OpsLike } from './primitives.ts';
 import { findHexNotes } from './notes.ts';
 import { findMatchlines, isPastMatchline, type Matchline } from './matchlines.ts';
 import { DEFAULT_COUNT_REGION, scanTags, type TagHit } from './tagScan.ts';
+import { attachLabels } from './emergency.ts';
 
 type PageForRuns = Parameters<typeof extractRuns>[0];
 type PageForPrims = Parameters<typeof extractPrims>[0];
@@ -11,6 +12,8 @@ type PageForPrims = Parameters<typeof extractPrims>[0];
 export interface PageScan { hits: TagHit[]; lines: Matchline[]; runs: PageRun[] }
 
 /** `sheetNumber` is this sheet's own number (needed to tell which side of a matchline is the neighbour's). */
+const pageSize = async (page: { getViewport(o: { scale: number }): { width: number; height: number } }) => { const v = page.getViewport({ scale: 1 }); return { w: v.width, h: v.height }; };
+
 export async function scanPage(page: PageForRuns & PageForPrims, OPS: OpsLike, sheetNumber: string | null): Promise<PageScan> {
   const runs = await extractRuns(page);
   let hits = scanTags(runs);
@@ -26,6 +29,9 @@ export async function scanPage(page: PageForRuns & PageForPrims, OPS: OpsLike, s
     console.warn('Drawing-note detection failed for a sheet; counting tags only', e);
   }
   // Matchlines: everything past one belongs to the neighbouring sheet.
+  // The printed labels beside each fixture (circuit, zone, panel) are how emergency fixtures are told apart.
+  const dims = await pageSize(page);
+  attachLabels(hits, runs, dims.w, dims.h);
   const lines = findMatchlines(runs, sheetNumber);
   for (const h of hits) if (isPastMatchline(h.x, h.y, lines)) h.past = true;
   return { hits, lines, runs };

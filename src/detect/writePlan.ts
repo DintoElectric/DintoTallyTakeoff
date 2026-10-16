@@ -8,6 +8,8 @@ export const CONF_TAG = 0.98;      // exact tag text or a drawing note: not flag
 export const CONF_SHORT = 0.7;     // short letter-only codes: always flagged for review
 export const CONF_ROOMISH = 0.5;   // a single hit that looks like a room number inside an otherwise real tag
 export const CONF_AMBIGUOUS = 0.6; // the code belongs to several library items (variants): flagged so you choose
+export const CONF_EMERGENCY = 0.95; // matched a confirmed emergency label
+export const CONF_NORMAL_SPLIT = 0.9; // no emergency label on a fixture type that has emergency versions
 
 const NEAR = 0.004; // an existing confirmed or manual count this close blocks a duplicate
 
@@ -47,7 +49,7 @@ export function planSheetWrite(p: PlanInput): Plan {
   for (const h of live) {
     const itemId = p.itemIdByCode.get(h.code)!;
     if (keep.some((d) => d.item_type_id === itemId && Math.abs(d.x - h.x) < NEAR * 3 && Math.abs(d.y - h.y) < NEAR * 3)) continue;
-    const confidence = h.kind === 'room' ? CONF_ROOMISH : p.ambiguous.has(h.code) ? CONF_AMBIGUOUS : h.kind === 'short' ? CONF_SHORT : CONF_TAG;
+    const confidence = h.conf ?? (h.kind === 'room' ? CONF_ROOMISH : p.ambiguous.has(h.code) ? CONF_AMBIGUOUS : h.kind === 'short' ? CONF_SHORT : CONF_TAG);
     ops.push({ op: 'add', detection: {
       id: p.newId(), item_type_id: itemId, x: Math.min(1, Math.max(0, h.x)), y: Math.min(1, Math.max(0, h.y)),
       bbox: null, confidence, source: 'auto', status: 'unreviewed',
