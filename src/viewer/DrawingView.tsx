@@ -3,9 +3,10 @@ import type { PDFPageProxy, RenderTask } from 'pdfjs-dist';
 import type { MarkerShape } from '../../shared/types.ts';
 import { BASE_MAX_PX, DETAIL_MAX_PX } from '../../shared/limits.ts';
 import { GridIndex } from '../detect/grid.ts';
+import type { Zone, ZonePoint } from '../../shared/zones.ts';
 import { appPalette, drawMarker, type Palette } from './markerDraw.ts';
 
-export type Tool = 'select' | 'add' | 'box' | 'erase';
+export type Tool = 'select' | 'add' | 'box' | 'erase' | 'zone';
 export interface MarkerData { id: string; x: number; y: number; itemId: string; flagged: boolean }
 export interface ItemStyle { shape: MarkerShape; glyph: string | null }
 export interface DrawingViewHandle { zoomBy(factor: number): void; fit(): void; centerOn(x: number, y: number, zoomFactor?: number): void }
@@ -26,12 +27,15 @@ interface Props {
   onBox(ids: string[], additive: boolean): void;
   onZoom(pct: number): void;
   onError(message: string): void;
-  /** Areas drawn dimmed (normalized 0..1): the part of a sheet that lies past a matchline. */
-  zones?: { x0: number; y0: number; x1: number; y1: number }[];
+  /** Exclusion zones drawn dimmed: the part of a sheet that lies past a matchline, or that the estimator outlined. */
+  zones?: Zone[];
+  /** The outline being drawn with the zone tool (normalized points). */
+  draft?: ZonePoint[];
+  onZonePoint?(x: number, y: number): void;
+  onZoneFinish?(): void;
 }
 
 const DEFAULT_STYLE: ItemStyle = { shape: 'circle', glyph: null };
-const z0 = (z: number) => z;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 export const DrawingView = forwardRef<DrawingViewHandle, Props>(function DrawingView(props, ref) {
@@ -80,17 +84,33 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
     const pal = palette.current;
     const { z, tx, ty } = view.current;
     const { markers, styles, activeItemId, selected, zones } = P.current;
+    const sx = (x: number) => tx + x * pageW * z;
+    const sy = (y: number) => ty + y * pageH * z;
     if (zones?.length) {
       ctx.save();
       ctx.fillStyle = 'rgba(22,24,38,0.30)';
       ctx.strokeStyle = 'rgba(22,24,38,0.65)';
       ctx.setLineDash([6, 4]);
-      for (const z of zones) {
-        const x0 = tx + z.x0 * pageW * z0(view.current.z), y0 = ty + z.y0 * pageH * z0(view.current.z);
-        const x1 = tx + z.x1 * pageW * z0(view.current.z), y1 = ty + z.y1 * pageH * z0(view.current.z);
-        ctx.fillRect(x0, y0, x1 - x0, y1 - y0);
-        ctx.strokeRect(x0, y0, x1 - x0, y1 - y0);
+      for (const zone of zones) {
+        ctx.beginPath();
+        zone.points.forEach((p, i) => (i === 0 ? ctx.moveTo(sx(p.x), sy(p.y)) : ctx.lineTo(sx(p.x), sy(p.y))));
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
       }
+      ctx.restore();
+    }
+    const draft = P.current.draft;
+    if (draft?.length) {
+      ctx.save();
+      ctx.strokeStyle = pal.active;
+      ctx.fillStyle = pal.active;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      draft.forEach((p, i) => (i === 0 ? ctx.moveTo(sx(p.x), sy(p.y)) : ctx.lineTo(sx(p.x), sy(p.y))));
+      ctx.stroke();
+      if (draft.length >= 3) { ctx.setLineDash([4, 4]); ctx.lineTo(sx(draft[0].x), sy(draft[0].y)); ctx.stroke(); ctx.setLineDash([]); }
+      draft.forEach((p, i) => { ctx.beginPath(); ctx.arc(sx(p.x), sy(p.y), i === 0 ? 6 : 4, 0, Math.PI * 2); ctx.fill(); });
       ctx.restore();
     }
     const size16 = window.matchMedia('(pointer: coarse)').matches ? 20 : 16;
@@ -112,7 +132,7 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
     if (!raf.current) raf.current = requestAnimationFrame(drawMarkers);
   }, [drawMarkers]);
 
-  useEffect(() => { scheduleMarkers(); }, [props.markers, props.styles, props.activeItemId, props.selected, props.zones, scheduleMarkers]);
+  useEffect(() => { scheduleMarkers(); }, [props.markers, props.styles, props.activeItemId, props.selected, props.zones, props.draft, scheduleMarkers]);
 
   /* ---------- detail layer: sharp re-render of the visible region after zooming stops ---------- */
   const renderDetail = useCallback(async () => {
@@ -291,6 +311,8 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
     const r = viewportRef.current!.getBoundingClientRect();
     return { x: e.clientX - r.left, y: e.clientY - r.top };
   };
+  const sxOf = (x: number) => view.current.tx + x * pageW * view.current.z;
+  const syOf = (y: number) => view.current.ty + y * pageH * view.current.z;
   const toNorm = (sx: number, sy: number) => ({
     x: (sx - view.current.tx) / (pageW * view.current.z),
     y: (sy - view.current.ty) / (pageH * view.current.z),
@@ -380,7 +402,7 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
         return;
       }
       s.lastTap = now; s.lastTapX = p.x; s.lastTapY = p.y;
-      if (n.x < 0 || n.x > 1 || n.y < 0 || n.y > 1) { if (pr.tool === 'select') pr.onPick(null, false); return; }
+      if ((n.x < 0 || n.x > 1 || n.y < 0 || n.y > 1) && pr.tool !== 'zone') { if (pr.tool === 'select') pr.onPick(null, false); return; }
       const coarse = s.type === 'touch' ? 22 : 12;
       const rx = coarse / (pageW * view.current.z), ry = coarse / (pageH * view.current.z);
       const hit = gridRef.current.nearest(n.x, n.y, rx, ry);
@@ -388,6 +410,13 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
       else if (pr.tool === 'add') { if (!pr.readOnly) pr.onPlace(n.x, n.y); }
       else if (pr.tool === 'erase') { if (!pr.readOnly && hit) pr.onErase(hit.id); }
       else if (pr.tool === 'box') pr.onBox([], false);
+      else if (pr.tool === 'zone' && !pr.readOnly) {
+        // Clicking the first corner (with 3 or more placed) closes the outline.
+        const d = pr.draft;
+        const nearFirst = d && d.length >= 3 && Math.hypot(sxOf(d[0].x) - p.x, syOf(d[0].y) - p.y) < 14;
+        if (nearFirst) pr.onZoneFinish?.();
+        else pr.onZonePoint?.(Math.min(1, Math.max(0, n.x)), Math.min(1, Math.max(0, n.y)));
+      }
     }
   };
 
