@@ -122,12 +122,12 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
         setStatus(`Adding ${r.code} to the library…`);
         const isNote = r.kind === 'note';
         if (isNote && noteCat === undefined) {
-          const { categories } = await api<{ categories: CategoryRow[] }>('/categories');
-          noteCat = categories.find((c) => c.name.toLowerCase() === 'drawing notes')?.id ?? (await api<{ category: CategoryRow }>('/categories', { body: { name: 'Drawing notes' } })).category.id;
+          const { categories } = await api<{ categories: CategoryRow[] }>(`/categories?project=${projectId}`);
+          noteCat = categories.find((c) => c.name.toLowerCase() === 'drawing notes')?.id ?? (await api<{ category: CategoryRow }>('/categories', { body: { project_id: projectId, name: 'Drawing notes' } })).category.id;
         }
         const { item } = await api<{ item: ItemTypeRow }>('/items', {
           body: {
-            code: r.code, name: (names[r.code] ?? '').trim() || (isNote ? `Drawing note ${r.code}` : r.code),
+            project_id: projectId, code: r.code, name: (names[r.code] ?? '').trim() || (isNote ? `Drawing note ${r.code}` : r.code),
             category_id: isNote ? noteCat : null, marker_shape: isNote ? 'diamond' : r.kind === 'short' ? 'square' : 'circle', marker_glyph: isNote ? null : r.code.slice(0, 2),
           },
         });
@@ -145,12 +145,12 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
           setStatus(`Adding ${emCode} (emergency ${r.code}) to the library…`);
           try {
             emItem = (await api<{ item: ItemTypeRow }>('/items', {
-              body: { code: emCode, name: `${base.name}, emergency`.slice(0, 200), spec: base.spec, category_id: base.category_id, unit: base.unit, marker_shape: base.marker_shape, marker_glyph: base.marker_glyph },
+              body: { project_id: projectId, code: emCode, name: `${base.name}, emergency`.slice(0, 200), spec: base.spec, category_id: base.category_id, unit: base.unit, marker_shape: base.marker_shape, marker_glyph: base.marker_glyph },
             })).item;
             emCreated++;
           } catch (e) {
             if (!(e instanceof ApiError && e.status === 409)) throw e;
-            emItem = (await api<{ items: ItemTypeRow[] }>('/items')).items.find((i) => i.code.toUpperCase() === emCode.toUpperCase());
+            emItem = (await api<{ items: ItemTypeRow[] }>(`/items?project=${projectId}`)).items.find((i) => i.code.toUpperCase() === emCode.toUpperCase());
             if (!emItem) throw e;
           }
         }

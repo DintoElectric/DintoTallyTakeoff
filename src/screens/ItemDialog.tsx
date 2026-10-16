@@ -6,8 +6,8 @@ import { Dialog, Seg, Symbol } from '../app/ui.tsx';
 const SHAPES: MarkerShape[] = ['circle', 'square', 'rect', 'diamond'];
 
 /** Create an item type (library entry). Shared by the library and the workspace. */
-export function ItemDialog({ categories, defaultCategoryId, onClose, onCreated }: {
-  categories: CategoryRow[]; defaultCategoryId?: string | null; onClose: () => void; onCreated: (item: ItemTypeRow) => void;
+export function ItemDialog({ projectId, categories, defaultCategoryId, onClose, onCreated }: {
+  projectId: string; categories: CategoryRow[]; defaultCategoryId?: string | null; onClose: () => void; onCreated: (item: ItemTypeRow) => void;
 }) {
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
@@ -25,7 +25,7 @@ export function ItemDialog({ categories, defaultCategoryId, onClose, onCreated }
     setErr(null);
     try {
       const { item } = await api<{ item: ItemTypeRow }>('/items', {
-        body: { code, name, spec: spec || null, unit: unit || 'EA', category_id: categoryId || null, marker_shape: shape, marker_glyph: glyph || null },
+        body: { project_id: projectId, code, name, spec: spec || null, unit: unit || 'EA', category_id: categoryId || null, marker_shape: shape, marker_glyph: glyph || null },
       });
       onCreated(item);
     } catch (e) {

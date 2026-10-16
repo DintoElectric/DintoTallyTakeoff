@@ -36,8 +36,8 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const project = useFetch<{ project: ProjectRow }>(`/projects/${projectId}`);
   const sheetsQ = useFetch<{ sheets: SheetRow[] }>(`/sheets?project=${projectId}`);
   const filesQ = useFetch<{ files: DrawingFileRow[] }>(`/files?project=${projectId}`);
-  const itemsQ = useFetch<{ items: ItemTypeRow[] }>('/items');
-  const catsQ = useFetch<{ categories: CategoryRow[] }>('/categories');
+  const itemsQ = useFetch<{ items: ItemTypeRow[] }>(`/items?project=${projectId}`);
+  const catsQ = useFetch<{ categories: CategoryRow[] }>(`/categories?project=${projectId}`);
   const countsQ = useFetch<{ counts: CountRow[] }>(`/projects/${projectId}/counts`);
   const areasQ = useFetch<{ areas: AreaRow[] }>(`/sheets/${sheetId}/areas`);                              // this sheet's areas
   const areaTotalsQ = useFetch<{ names: string[]; rows: AreaCountRow[] }>(`/projects/${projectId}/area-counts`); // names and counts, project-wide
@@ -603,7 +603,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
 
       {pendingArea && <AreaNameDialog names={allAreaNames} onSave={(n) => void saveArea(n)} onCancel={() => { setPendingArea(null); setTool('select'); }} />}
       {showItemDialog && (
-        <ItemDialog categories={categories} onClose={() => setShowItemDialog(false)} onCreated={(it) => { setShowItemDialog(false); setActiveItemId(it.id); void itemsQ.reload(); }} />
+        <ItemDialog projectId={projectId} categories={categories} onClose={() => setShowItemDialog(false)} onCreated={(it) => { setShowItemDialog(false); setActiveItemId(it.id); void itemsQ.reload(); }} />
       )}
       {showAuto && sheet && (
         <AutoCountDialog projectId={projectId} sheets={[sheet]} items={items} onClose={() => setShowAuto(false)}

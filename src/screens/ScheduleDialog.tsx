@@ -86,7 +86,7 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
         if (catId.has(name.toLowerCase())) continue;
         setStatus(`Adding category ${name}…`);
         try {
-          const { category } = await api<{ category: CategoryRow }>('/categories', { body: { name } });
+          const { category } = await api<{ category: CategoryRow }>('/categories', { body: { project_id: projectId, name } });
           catId.set(name.toLowerCase(), category.id);
         } catch { /* a teammate may have just added it; the item is saved without a category */ }
       }
@@ -104,7 +104,7 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
           } else {
             await api('/items', {
               body: {
-                code: r.code, name: r.name.slice(0, 200), spec: specLine(r) || null, unit: 'EA',
+                project_id: projectId, code: r.code, name: r.name.slice(0, 200), spec: specLine(r) || null, unit: 'EA',
                 category_id: catId.get(catOf(r).toLowerCase()) ?? null, marker_shape: 'circle', marker_glyph: r.code.slice(0, 2),
               },
             });

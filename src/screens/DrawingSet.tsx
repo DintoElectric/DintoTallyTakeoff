@@ -45,7 +45,7 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
   const project = useFetch<{ project: ProjectRow }>(`/projects/${projectId}`);
   const files = useFetch<{ files: DrawingFileRow[] }>(`/files?project=${projectId}`);
   const sheetsQ = useFetch<{ sheets: SheetRow[] }>(`/sheets?project=${projectId}`);
-  const items = useFetch<{ items: ItemTypeRow[] }>('/items');
+  const items = useFetch<{ items: ItemTypeRow[] }>(`/items?project=${projectId}`);
   const [view, setView] = useState<'grid' | 'list'>('grid');
   const [sheets, setSheets] = useState<SheetRow[]>([]);
   const [confirmDelete, setConfirmDelete] = useState<DrawingFileRow | null>(null);
@@ -53,7 +53,7 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [schedSheetsOpen, setSchedSheetsOpen] = useState(false);
   const [dupOpen, setDupOpen] = useState(false);
-  const cats = useFetch<{ categories: CategoryRow[] }>('/categories');
+  const cats = useFetch<{ categories: CategoryRow[] }>(`/categories?project=${projectId}`);
   const picker = useRef<HTMLInputElement>(null);
   const jobs = useUploads(projectId);
 
@@ -108,6 +108,7 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
       <TopBar crumbs={[{ label: 'Projects', to: paths.projects() }, { label: proj?.name ?? '…', to: paths.project(projectId) }, { label: 'Drawing set' }]}>
         {canEdit && <button className="btn btn-secondary" onClick={() => picker.current?.click()}><UploadSimple size={14} /> Add drawings</button>}
         <input ref={picker} type="file" accept="application/pdf,.pdf" hidden onChange={(e) => { addFile(e.target.files?.[0]); e.target.value = ''; }} />
+        <button className="btn btn-secondary" onClick={() => navigate(paths.library(projectId))}>Item library</button>
         <button className="btn btn-secondary" onClick={openWorkspace} disabled={sheets.length === 0}>Open workspace</button>
         {canEdit && <button className="btn btn-secondary" onClick={() => setScheduleOpen(true)} disabled={sheets.length === 0}>Read schedule</button>}
         {canEdit && <button className="btn btn-secondary" onClick={() => setSchedSheetsOpen(true)} disabled={sheets.length === 0} title="Stop counting the sheets that are, or hold, schedules">Exclude schedules</button>}
@@ -231,7 +232,7 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
               <div>
                 <div>Set up your item library.</div>
                 <div className="dim" style={{ fontSize: 12 }}>{libCount > 0 ? `${plural(libCount, 'item')} in the library.` : 'No items yet. Add the fixtures and devices you count.'}</div>
-                <button className="btn btn-ghost" style={{ padding: 0 }} onClick={() => navigate(paths.library())}>Open item library</button>
+                <button className="btn btn-ghost" style={{ padding: 0 }} onClick={() => navigate(paths.library(projectId))}>Open item library</button>
               </div>
             </div>
             <div className={`step${enabled.length > 0 ? ' done' : ''}`}>

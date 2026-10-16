@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { MagnifyingGlass, Plus } from '@phosphor-icons/react';
-import type { CategoryRow, ItemTypeRow, MarkerShape } from '../../shared/types.ts';
+import type { CategoryRow, ItemTypeRow, MarkerShape, ProjectRow } from '../../shared/types.ts';
 import { api, ApiError } from '../auth/api.ts';
 import { useAuth } from '../auth/AuthProvider.tsx';
 import { Dialog, Seg, Symbol, TopBar, plural, useToast } from '../app/ui.tsx';
 import { useFetch } from '../app/useFetch.ts';
+import { paths } from '../app/router.ts';
 import { ItemDialog } from './ItemDialog.tsx';
 
 const SHAPES: MarkerShape[] = ['circle', 'square', 'rect', 'diamond'];
@@ -87,13 +88,53 @@ function Editor({ item, categories, canEdit, isAdmin, onSaved, onDeleted }: {
   );
 }
 
-export default function Library() {
+/** Copy another project's library (items and categories) into this one. Items it already has are left alone. */
+function CopyLibraryDialog({ projectId, onClose, onDone }: { projectId: string; onClose: () => void; onDone: (msg: string) => void }) {
+  const projects = useFetch<{ projects: ProjectRow[] }>('/projects');
+  const [from, setFrom] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const others = (projects.data?.projects ?? []).filter((p) => p.id !== projectId);
+  async function run() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await api<{ copied: number; skipped: number }>('/items/copy', { body: { from_project_id: from, to_project_id: projectId } });
+      onDone(`${plural(r.copied, 'item')} copied${r.skipped ? `, ${r.skipped} already in this library` : ''}.`);
+    } catch (e) { setErr(e instanceof ApiError ? e.message : 'Could not copy the library.'); setBusy(false); }
+  }
+  return (
+    <Dialog title="Copy a library" onClose={onClose}>
+      <div className="dialog-title">Copy another project's library</div>
+      <div className="muted" style={{ fontSize: 13 }}>Adds that project's items and categories to this one, so you don't start from nothing. Items this project already has are left as they are. Counts are not copied.</div>
+      <div className="field">
+        <label htmlFor="cl">Copy from</label>
+        <select id="cl" className="input" value={from} onChange={(e) => setFrom(e.target.value)}>
+          <option value="">Choose a project…</option>
+          {others.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      </div>
+      {projects.data && others.length === 0 && <div className="dim" style={{ fontSize: 13 }}>There is no other project yet.</div>}
+      {err && <div className="err-text" role="alert">{err}</div>}
+      <div className="dialog-actions">
+        <button className="btn btn-secondary" onClick={onClose} disabled={busy}>Cancel</button>
+        <button className="btn btn-primary" onClick={() => void run()} disabled={busy || !from}>{busy ? 'Copying…' : 'Copy library'}</button>
+      </div>
+    </Dialog>
+  );
+}
+
+export default function Library({ projectId }: { projectId: string }) {
   const { me } = useAuth();
   const canEdit = me?.role !== 'viewer';
   const isAdmin = me?.role === 'admin';
   const toast = useToast();
-  const itemsQ = useFetch<{ items: ItemTypeRow[] }>('/items');
-  const catsQ = useFetch<{ categories: CategoryRow[] }>('/categories');
+  const project = useFetch<{ project: ProjectRow }>(`/projects/${projectId}`);
+  const itemsQ = useFetch<{ items: ItemTypeRow[] }>(`/items?project=${projectId}`);
+  const catsQ = useFetch<{ categories: CategoryRow[] }>(`/categories?project=${projectId}`);
+  // Items from before libraries were per project, not yet in any project.
+  const legacyQ = useFetch<{ items: ItemTypeRow[] }>('/items?unassigned=1');
+  const [showCopy, setShowCopy] = useState(false);
   const [cat, setCat] = useState<string>('all');
   const [q, setQ] = useState('');
   const [sel, setSel] = useState<string | null>(null);
@@ -118,13 +159,13 @@ export default function Library() {
     const name = newCat.trim();
     setNewCat(null);
     if (!name) return;
-    try { await api('/categories', { body: { name } }); void catsQ.reload(); }
+    try { await api('/categories', { body: { project_id: projectId, name } }); void catsQ.reload(); }
     catch (e) { toast(e instanceof ApiError ? (e.status === 409 ? 'That category already exists.' : e.message) : 'Could not add the category.'); }
   }
 
   return (
     <>
-      <TopBar nav="library" />
+      <TopBar crumbs={[{ label: 'Projects', to: paths.projects() }, { label: project.data?.project.name ?? '…', to: paths.project(projectId) }, { label: 'Item library' }]} />
       <div className="lib">
         <aside className="lib-left" aria-label="Categories">
           <h6 style={{ padding: '0 10px' }}>Categories</h6>
@@ -140,15 +181,31 @@ export default function Library() {
           <div className="row-between">
             <div>
               <h3 style={{ marginBottom: 2 }}>Item library</h3>
-              <div className="muted" style={{ fontSize: 13 }}>Shared across projects. Add the fixtures and devices you count; each one gets a marker shape and letters you will see on the drawing.</div>
+              <div className="muted" style={{ fontSize: 13 }}>This project's items. Add the fixtures and devices you count here; each one gets a marker shape and letters you will see on the drawing.</div>
             </div>
             <div className="row">
               {items.length > 0 && <div className="search"><MagnifyingGlass size={14} /><input className="input" placeholder="Search items" aria-label="Search items" value={q} onChange={(e) => setQ(e.target.value)} /></div>}
               <button className="btn btn-secondary" disabled title="Legend import arrives in a later stage.">Import legend</button>
+              {canEdit && <button className="btn btn-secondary" onClick={() => setShowCopy(true)}>Copy from another project</button>}
               {canEdit && <button className="btn btn-primary" onClick={() => setShowNew(true)}><Plus size={14} /> New item</button>}
             </div>
           </div>
 
+          {canEdit && (legacyQ.data?.items.length ?? 0) > 0 && (
+            <div className="banner" role="status">
+              <div>{plural(legacyQ.data!.items.length, 'item')} from before libraries were per project {legacyQ.data!.items.length === 1 ? "isn't" : "aren't"} in any project yet.</div>
+              <div className="row" style={{ marginTop: 6 }}>
+                <button className="btn btn-secondary" onClick={async () => {
+                  try {
+                    const r = await api<{ moved: number; skipped: number }>('/items/claim', { body: { project_id: projectId } });
+                    toast(`${plural(r.moved, 'item')} added to this project${r.skipped ? `, ${r.skipped} skipped because this project already has them` : ''}.`);
+                    void itemsQ.reload(); void catsQ.reload(); void legacyQ.reload();
+                  } catch (e) { toast(e instanceof ApiError ? e.message : 'Could not add them.'); }
+                }}>Add them to this project</button>
+                <span className="dim" style={{ fontSize: 12 }}>They disappear from here once any project takes them, so add them where they belong.</span>
+              </div>
+            </div>
+          )}
           {itemsQ.error && <div className="err-text" role="alert">{itemsQ.error}</div>}
           {itemsQ.loading && !itemsQ.data && <div className="muted"><span className="spinner" /> Loading…</div>}
           {!itemsQ.loading && !itemsQ.error && items.length === 0 && (
@@ -182,7 +239,8 @@ export default function Library() {
         {selected && <Editor item={selected} categories={categories} canEdit={canEdit} isAdmin={isAdmin} onSaved={() => void itemsQ.reload()} onDeleted={() => { setSel(null); void itemsQ.reload(); }} />}
       </div>
 
-      {showNew && <ItemDialog categories={categories} defaultCategoryId={cat !== 'all' && cat !== '_' ? cat : null} onClose={() => setShowNew(false)} onCreated={(it) => { setShowNew(false); setSel(it.id); void itemsQ.reload(); }} />}
+      {showCopy && <CopyLibraryDialog projectId={projectId} onClose={() => setShowCopy(false)} onDone={(m) => { setShowCopy(false); toast(m); void itemsQ.reload(); void catsQ.reload(); }} />}
+      {showNew && <ItemDialog projectId={projectId} categories={categories} defaultCategoryId={cat !== 'all' && cat !== '_' ? cat : null} onClose={() => setShowNew(false)} onCreated={(it) => { setShowNew(false); setSel(it.id); void itemsQ.reload(); }} />}
     </>
   );
 }
