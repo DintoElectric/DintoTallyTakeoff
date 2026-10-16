@@ -500,3 +500,20 @@ test('emergency suffix: proposed only when it repeats across fixture types, neve
   assert.equal(isEmergency(hits[0], new Set(['+LS'])), true); assert.equal(isEmergency(hits[7], new Set(['+LS'])), false);
   assert.equal(emergencyCode('BR-22', new Set(['+LS'])), 'BR-22LS'); assert.equal(emergencyCode('B13', new Set(['#es'])), 'B13E');
 });
+
+import { readLabeledTitle } from '../src/upload/titleBlock.ts';
+const T = (str: string, x: number, y: number, h = 0.006) => ({ str, x, y, w: str.length * 0.004, h });
+test('labelled title block: the sheet title is read under CONTENT:, not the copyright line next to the number', () => {
+  const runs = [
+    T('CONTENT:', 0.892, 0.800), T('ELECTRICAL LIGHTING FIXTURE', 0.894, 0.811), T('SCHEDULE', 0.894, 0.821), T('DRAWN BY:', 0.892, 0.850), T('Author', 0.96, 0.850),
+    T('E0.3', 0.925, 0.925, 0.02), T('Project Phase', 0.892, 0.955), T('100% CONSTRUCTION DOCUMENTS', 0.892, 0.965), T('COPYRIGHT © 2026 BY LAVALLEE BRENSINGER PLLC.', 0.89, 0.985),
+  ];
+  const tb = readTitleBlock(runs);
+  assert.equal(tb.number, 'E0.3'); assert.equal(tb.title, 'ELECTRICAL LIGHTING FIXTURE SCHEDULE'); assert.equal(tb.unsure, false);
+  assert.equal(inferKind(tb.title, tb.number), 'schedule');
+});
+test('labelled title block: a title that ends in NORTH keeps it; a block without a label is read as before', () => {
+  const runs = [T('CONTENT:', 0.892, 0.800), T('ELECTRICAL LEVEL 1 LIGHTING PLAN -', 0.894, 0.811), T('NORTH', 0.894, 0.821), T('DRAWN BY:', 0.892, 0.850), T('E1.01A', 0.925, 0.925, 0.02)];
+  assert.equal(readLabeledTitle(runs), 'ELECTRICAL LEVEL 1 LIGHTING PLAN - NORTH');
+  assert.equal(readLabeledTitle([T('E1.01A', 0.925, 0.925, 0.02), T('LIGHTING PLAN', 0.9, 0.9)]), null);
+});
