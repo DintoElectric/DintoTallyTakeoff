@@ -5,6 +5,7 @@ import { HttpError, handle, json, methodNotAllowed, notFound, readJson, segments
 import { dateOnly, num, oneOf, onlyKeys, reqStr, str, uuid } from './_lib/validate.ts';
 import { chunkKeys, deleteKeys, keys } from './_lib/blobs.ts';
 import type { ExportData } from '../../shared/types.ts';
+import { areaNames, assignAreas, type AreaRow } from '../../shared/areas.ts';
 
 async function listProjects(id: string | null) {
   const sql = db().sql;
@@ -112,6 +113,23 @@ export default handle(async (req: Request, _ctx: Context) => {
     return json({ counts: rows });
   }
 
+  // ---- counts per named area (additive by name, across sheets) ----
+  if (sub === 'area-counts' && req.method === 'GET') {
+    await requireRole('viewer');
+    const [proj] = await sql<{ review_threshold: number }>`select review_threshold from projects where id = ${id} and archived_at is null`;
+    if (!proj) throw notFound('That project');
+    const areas = await sql<any>`
+      select a.id, a.sheet_id, a.name, a.polygon as points from areas a join sheets s on s.id = a.sheet_id
+       where s.project_id = ${id} and s.superseded_at is null order by lower(a.name), a.id`;
+    if (areas.length === 0) return json({ names: [], rows: [] });
+    const dets = await sql<any>`
+      select d.sheet_id, d.item_type_id, d.x, d.y,
+             (d.status = 'unreviewed' and d.confidence is not null and d.confidence < ${proj.review_threshold}) as flagged
+        from detections d join sheets s on s.id = d.sheet_id
+       where s.project_id = ${id} and s.superseded_at is null and d.status <> 'rejected'`;
+    return json({ names: areaNames(areas), rows: assignAreas(dets, areas as AreaRow[]) });
+  }
+
   // ---- export data: everything an export needs, read at click time ----
   if (sub === 'export-data' && req.method === 'GET') {
     await requireRole('viewer');
@@ -142,7 +160,10 @@ export default handle(async (req: Request, _ctx: Context) => {
         from detections d join sheets s on s.id = d.sheet_id
        where s.project_id = ${id} and s.superseded_at is null and d.status <> 'rejected'
        order by s.number nulls last, d.created_at`;
-    const out: ExportData = { project, sheets, items, categories, counts, detections };
+    const areas = await sql<any>`
+      select a.id, a.sheet_id, a.name, a.polygon as points from areas a join sheets s on s.id = a.sheet_id
+       where s.project_id = ${id} and s.superseded_at is null order by lower(a.name), a.id`;
+    const out: ExportData = { project, sheets, items, categories, counts, detections, areas };
     return json(out);
   }
 

@@ -6,6 +6,7 @@ import { oneOf, onlyKeys, str, uuid } from './_lib/validate.ts';
 import { getBytes, keys, putBytes } from './_lib/blobs.ts';
 import { applyBatch, listDetections } from './_lib/detections.ts';
 import { validateZones } from '../../shared/zones.ts';
+import { cleanAreaName } from '../../shared/areas.ts';
 
 const SHEET_SELECT = `
   select s.id, s.project_id, s.file_id, s.page, s.number, s.title, s.kind, s.floor, s.scale,
@@ -110,6 +111,57 @@ export default handle(async (req: Request, _ctx: Context) => {
     if (seg[3] === 'batch' && req.method === 'POST') {
       const actor = await requireRole('estimator');
       return applyBatch(req, id, actor);
+    }
+    throw methodNotAllowed();
+  }
+
+  // ----- named count areas: /api/sheets/:id/areas[/:areaId] -----
+  if (sub === 'areas') {
+    const areaId = seg[3] ? uuid(seg[3], 'area id') : null;
+    const sheetRow = await pool.query(`select project_id from sheets where id = $1`, [id]);
+    if (!sheetRow.rows[0]) throw notFound('That sheet');
+    const projectId = sheetRow.rows[0].project_id as string;
+    const name = (v: unknown) => { try { return cleanAreaName(v); } catch (e) { throw new HttpError(400, e instanceof Error ? e.message : 'That name is not valid.'); } };
+    // "Lab A" and "lab a" are one area: use the spelling already in the project.
+    const canonical = async (n: string) => {
+      const r = await pool.query(`select a.name from areas a join sheets s on s.id = a.sheet_id where s.project_id = $1 and lower(a.name) = lower($2) order by a.name limit 1`, [projectId, n]);
+      return (r.rows[0]?.name as string | undefined) ?? n;
+    };
+    const polygon = (v: unknown) => { try { return validateZones([{ points: v }])[0].points; } catch (e) { throw new HttpError(400, e instanceof Error ? e.message : 'That outline is not valid.'); } };
+
+    if (!areaId && req.method === 'GET') {
+      await requireRole('viewer');
+      const r = await pool.query(`select id, sheet_id, name, polygon as points from areas where sheet_id = $1 order by lower(name), id`, [id]);
+      return json({ areas: r.rows });
+    }
+    if (!areaId && req.method === 'POST') {
+      const actor = await requireRole('estimator');
+      const b = await readJson(req);
+      onlyKeys(b, ['name', 'points']);
+      const n = await canonical(name(b.name));
+      const pts = polygon(b.points);
+      const r = await pool.query(`insert into areas (sheet_id, name, polygon, created_by) values ($1, $2, $3::jsonb, $4) returning id, sheet_id, name, polygon as points`, [id, n, JSON.stringify(pts), actor.id]);
+      return json({ area: r.rows[0] }, 201);
+    }
+    if (areaId && req.method === 'PATCH') {
+      await requireRole('estimator');
+      const b = await readJson(req);
+      onlyKeys(b, ['name', 'points']);
+      const cur = await pool.query(`select name from areas where id = $1 and sheet_id = $2`, [areaId, id]);
+      if (!cur.rows[0]) throw notFound('That area');
+      if ('points' in b) await pool.query(`update areas set polygon = $3::jsonb where id = $1 and sheet_id = $2`, [areaId, id, JSON.stringify(polygon(b.points))]);
+      if ('name' in b) {
+        // The name is the identity of the area, so renaming changes every polygon of that name in the project.
+        const n = await canonical(name(b.name));
+        await pool.query(`update areas set name = $3 where lower(name) = lower($2) and sheet_id in (select id from sheets where project_id = $1)`, [projectId, cur.rows[0].name, n]);
+      }
+      const r = await pool.query(`select id, sheet_id, name, polygon as points from areas where id = $1`, [areaId]);
+      return json({ area: r.rows[0] });
+    }
+    if (areaId && req.method === 'DELETE') {
+      await requireRole('estimator');
+      await pool.query(`delete from areas where id = $1 and sheet_id = $2`, [areaId, id]); // already gone is success
+      return json({ ok: true });
     }
     throw methodNotAllowed();
   }
