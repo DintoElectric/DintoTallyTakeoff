@@ -63,14 +63,14 @@ export function discover(scans: SheetScan[]): CodeRow[] {
  * sheet, never touches manual counts, and (with ignorePast) also removes earlier automatic counts that lie past a matchline.
  */
 export async function writeSheet(
-  scan: SheetScan, itemByCode: Map<string, ItemTypeRow>, include: Set<string>, opts: { ambiguous: Set<string>; clearItemIds: Set<string>; dropItemIds?: Set<string>; ignorePast: boolean },
-): Promise<{ added: number; removedPast: number; removedDropped: number }> {
+  scan: SheetScan, itemByCode: Map<string, ItemTypeRow>, include: Set<string>, opts: { ambiguous: Set<string>; clearItemIds: Set<string>; dropItemIds?: Set<string>; reset?: false | 'auto' | 'all'; ignorePast: boolean },
+): Promise<{ added: number; removedPast: number; removedDropped: number; erased: number }> {
   const existing = await api<{ detections: Detection[] }>(`/sheets/${scan.sheet.id}/detections`);
   const itemIdByCode = new Map<string, string>();
   for (const c of include) { const it = itemByCode.get(c); if (it) itemIdByCode.set(c, it.id); }
-  const plan = planSheetWrite({ hits: scan.hits, zones: scan.zones, existing: existing.detections, itemIdByCode, ambiguous: opts.ambiguous, clearItemIds: opts.clearItemIds, dropItemIds: opts.dropItemIds, ignorePast: opts.ignorePast, newId: () => crypto.randomUUID() });
+  const plan = planSheetWrite({ hits: scan.hits, zones: scan.zones, existing: existing.detections, itemIdByCode, ambiguous: opts.ambiguous, clearItemIds: opts.clearItemIds, dropItemIds: opts.dropItemIds, reset: opts.reset ?? false, ignorePast: opts.ignorePast, newId: () => crypto.randomUUID() });
   for (let i = 0; i < plan.ops.length; i += BATCH_MAX_OPS) {
     await api(`/sheets/${scan.sheet.id}/detections/batch`, { body: { ops: plan.ops.slice(i, i + BATCH_MAX_OPS) } });
   }
-  return { added: plan.added, removedPast: plan.removedPast, removedDropped: plan.removedDropped };
+  return { added: plan.added, removedPast: plan.removedPast, removedDropped: plan.removedDropped, erased: plan.erased };
 }

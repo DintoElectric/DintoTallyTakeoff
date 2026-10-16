@@ -23,19 +23,27 @@ export interface PlanInput {
   clearItemIds: Set<string>;
   /** Items that are no longer counted at all (short codes): every earlier automatic count of them is removed. */
   dropItemIds?: Set<string>;
+  /** Start fresh: erase every earlier automatic count on the sheet ('auto'), or every count including hand-placed ones ('all'). */
+  reset?: false | 'auto' | 'all';
   ignorePast: boolean;
   newId: () => string;
 }
 export type Op = { op: 'delete'; id: string } | { op: 'add'; detection: Record<string, unknown> };
-export interface Plan { ops: Op[]; added: number; removedPast: number; removedDropped: number }
+export interface Plan { ops: Op[]; added: number; removedPast: number; removedDropped: number; erased: number }
 
 export function planSheetWrite(p: PlanInput): Plan {
   const ops: Op[] = [];
-  let removedPast = 0, removedDropped = 0;
+  let removedPast = 0, removedDropped = 0, erased = 0;
   const live = p.hits.filter((h) => !(p.ignorePast && h.past) && p.itemIdByCode.has(h.code));
   const tickedItems = new Set(p.itemIdByCode.values());
   const keep: Detection[] = [];
   for (const d of p.existing) {
+    if (p.reset === 'all' || (p.reset === 'auto' && d.source === 'auto')) {
+      // Starting fresh: everything earlier of this kind goes, whatever its status.
+      ops.push({ op: 'delete', id: d.id });
+      erased++;
+      continue;
+    }
     const pastNow = p.ignorePast && d.source === 'auto' && d.status !== 'rejected' && inZones(d.x, d.y, p.zones);
     if (p.dropItemIds?.has(d.item_type_id) && d.source === 'auto' && d.status !== 'rejected') {
       // Short codes are not counted any more; earlier automatic counts of them go. Manual counts are never touched.
@@ -62,5 +70,5 @@ export function planSheetWrite(p: PlanInput): Plan {
     } });
     added++;
   }
-  return { ops, added, removedPast, removedDropped };
+  return { ops, added, removedPast, removedDropped, erased };
 }
