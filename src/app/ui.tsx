@@ -79,7 +79,6 @@ export function TopBar({ crumbs, nav, children }: { crumbs?: Crumb[]; nav?: Rout
       ) : (
         <nav className="navlinks">
           <button aria-current={nav === 'projects' ? 'page' : undefined} onClick={() => navigate(paths.projects())}>Projects</button>
-          <button aria-current={nav === 'library' ? 'page' : undefined} onClick={() => navigate(paths.library())}>Item library</button>
         </nav>
       )}
       <div className="topbar-right">

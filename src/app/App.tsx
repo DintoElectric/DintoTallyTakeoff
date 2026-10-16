@@ -15,7 +15,7 @@ function Routes() {
     case 'projects': return <Projects />;
     case 'project': return <DrawingSet key={route.id} projectId={route.id} />;
     case 'sheet': return <Workspace key={route.id} projectId={route.id} sheetId={route.sheetId} />;
-    case 'library': return <Library />;
+    case 'library': return <Library key={route.id} projectId={route.id} />;
   }
 }
 

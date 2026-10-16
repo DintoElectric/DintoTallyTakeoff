@@ -4,15 +4,16 @@ export type Route =
   | { name: 'projects' }
   | { name: 'project'; id: string }
   | { name: 'sheet'; id: string; sheetId: string }
-  | { name: 'library' };
+  | { name: 'library'; id: string };
 
 export function parse(path: string): Route {
   const p = path.replace(/\/+$/, '') || '/';
   let m = p.match(/^\/p\/([^/]+)\/s\/([^/]+)$/);
   if (m) return { name: 'sheet', id: m[1], sheetId: m[2] };
+  m = p.match(/^\/p\/([^/]+)\/library$/);
+  if (m) return { name: 'library', id: m[1] };
   m = p.match(/^\/p\/([^/]+)$/);
   if (m) return { name: 'project', id: m[1] };
-  if (p === '/library') return { name: 'library' };
   return { name: 'projects' };
 }
 
@@ -20,7 +21,7 @@ export const paths = {
   projects: () => '/',
   project: (id: string) => `/p/${id}`,
   sheet: (id: string, sheetId: string) => `/p/${id}/s/${sheetId}`,
-  library: () => '/library',
+  library: (id: string) => `/p/${id}/library`,
 };
 
 const listeners = new Set<() => void>();
