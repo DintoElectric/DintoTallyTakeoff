@@ -304,3 +304,39 @@ test('re-run: a mark past the line is not added, one beside a confirmed count is
   assert.deepEqual(adds.map((a) => a.detection.item_type_id), ['itNote']); // the B13 at y=.5 already has a confirmed count
   assert.equal(adds[0].detection.confidence, CONF_TAG);
 });
+
+import { attachLabels, discoverMarkers, isEmergency, labelPatterns, normalizeLabel, parseCustomMarkers, emergencyCode } from '../src/detect/emergency.ts';
+const fix = (code: string, x: number, y: number, labels: string[] = []) => ({ code, x, y, kind: 'tag' as const, labels });
+test('emergency: label patterns turn numbers into #, and split lists', () => {
+  assert.equal(normalizeLabel('3es'), '#es'); assert.equal(normalizeLabel('EHLP/1B1/12'), 'EHLP/#B#/#');
+  assert.deepEqual(labelPatterns('r1, r2e').sort(), ['r#', 'r#, r#e', 'r#e'].sort());
+  assert.deepEqual(parseCustomMarkers('EM2, NL'), ['EM#', 'NL']);
+  assert.equal(emergencyCode('B13'), 'B13E');
+});
+test('emergency: markers are proposed only as pairs (a plain label beside the same label plus E)', () => {
+  const hits = [
+    ...[1, 2, 3, 4].map((n) => fix('B7', 0.1 * n, 0.1, [`${n}`])),            // normal circuits: 1, 2, 3, 4
+    ...[3, 5, 7, 9].map((n) => fix('B7', 0.1 * n, 0.5, [`${n}es`])),          // emergency circuits: 3es, 5es ...
+    ...[1, 2, 3].map((n) => fix('B3', 0.1 * n, 0.8, [`S${n}`])),              // room-ish labels with no partner
+    fix('D1', 0.9, 0.9, ['EM-lonely']),                                        // a one-off is never proposed
+  ];
+  const c = discoverMarkers(hits);
+  assert.deepEqual(c.map((m) => [m.pattern, m.partner]), [['#es', '#']]);
+  // A panel-style label starting with E and no normal twin is offered as a possibility (partner null), after the sure ones.
+  const withEpp = discoverMarkers([...hits, ...[1, 2, 3].map((n) => fix('D9', 0.2 * n, 0.3, ['EPP/1B1/7']))]);
+  assert.deepEqual(withEpp.map((m) => [m.pattern, m.partner]), [['#es', '#'], ['EPP/#B#/#', null]]);
+  assert.equal(c[0].count, 4);
+  const markers = new Set(c.map((m) => m.pattern));
+  assert.equal(isEmergency(hits[4], markers), true); assert.equal(isEmergency(hits[0], markers), false);
+  assert.equal(isEmergency(hits[8], new Set(parseCustomMarkers('EM-lonely'))), false); // custom markers are matched by pattern
+});
+test('emergency: each printed label belongs to the one nearest fixture, not to every fixture around it', () => {
+  const a = fix('B7', 0.100, 0.5), b = fix('B7', 0.130, 0.5); // 30pt apart on a 1000pt page
+  const runs = [{ str: '3es', cx: 0.1, cy: 0.52 }, { str: '4', cx: 0.133, cy: 0.52 }, { str: '9es', cx: 0.5, cy: 0.5 }, { str: 'B7', cx: 0.11, cy: 0.5 }, { str: 'EL101.1', cx: 0.1, cy: 0.5 }];
+  attachLabels([a, b], runs, 1000, 1000);
+  assert.deepEqual(a.labels, ['3es']); assert.deepEqual(b.labels, ['4']); // the far "9es" and the tag/sheet-number text are ignored
+});
+test('count confidence can be set per hit (emergency 0.95, normal-of-split 0.9)', () => {
+  const plan = planSheetWrite({ hits: [{ code: 'B7', x: 0.5, y: 0.5, kind: 'tag', conf: 0.95 }, { code: 'B7', x: 0.2, y: 0.5, kind: 'tag' }], lines: [], existing: [], itemIdByCode: new Map([['B7', 'it']]), ambiguous: new Set(), clearItemIds: new Set(), ignorePast: true, newId: () => 'n' });
+  assert.deepEqual((plan.ops as any[]).map((o) => o.detection.confidence), [0.95, CONF_TAG]);
+});
