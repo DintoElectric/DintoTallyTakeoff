@@ -68,7 +68,21 @@ export async function buildDocx(
     2,
   ));
 
-  /* per-floor tables: by sheet (areas are not captured yet) */
+  /* counts by named area */
+  if (agg.areas.names.length > 0) {
+    kids.push(para('Counts by area', { bold: true, size: 28, before: 280, after: 100 }));
+    kids.push(table(
+      ['Code', 'Description', ...agg.areas.names, 'Not in any area', 'Total'],
+      [
+        ...agg.areas.rows.map((r) => ({ cells: [r.item.code, r.item.name, ...agg.areas.names.map((n) => String(r.byArea.get(n) ?? '–')), String(r.unassigned || '–'), String(r.total)] })),
+        { cells: ['', 'All items', ...agg.areas.names.map((n) => String(agg.areas.totals.byArea.get(n) ?? 0)), String(agg.areas.totals.unassigned), String(agg.areas.totals.total)], total: true },
+      ],
+      2,
+    ));
+    kids.push(para('Areas with the same name are one area and their counts are added. A count inside two differently named areas appears under both.', { size: 18, color: MUTED, before: 80 }));
+  }
+
+  /* per-floor tables: by sheet (floors from the sheet index) */
   const cats = [...new Set(agg.rows.map((r) => r.item.category_id))].sort((a, b) => agg.categoryOrder(a) - agg.categoryOrder(b));
   for (const f of agg.floors) {
     kids.push(para(`${f.floor ? floorLabel(f.floor) : 'No floor set'} · by sheet`, { bold: true, size: 24, before: 280, after: 100 }));

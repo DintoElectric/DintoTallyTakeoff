@@ -118,6 +118,32 @@ export async function buildXlsx(data: ExportData, agg: Agg, opts: ExportOptions)
     setup(ws, hdrNo, 4);
   }
 
+  /* ---------- by named area ---------- */
+  if (agg.areas.names.length > 0) {
+    const ws = wb.addWorksheet(safeTab('By area'));
+    title(ws, data.project.name, `Counts by named area · Prepared ${prepared}`);
+    const header = ['Code', 'Description', 'Unit', ...agg.areas.names, 'Not in any area', 'Total'];
+    const hr = ws.addRow(header);
+    headerStyle(hr, 4);
+    const hdrNo = hr.number;
+    for (const r of agg.areas.rows) {
+      const row = ws.addRow([r.item.code, r.item.name, r.item.unit, ...agg.areas.names.map((n) => r.byArea.get(n) ?? ''), r.unassigned || '', r.total]);
+      style(row);
+      row.eachCell((c: any, i: number) => { if (i >= 4) c.alignment = { horizontal: 'right' }; });
+    }
+    const last = ws.lastRow.number;
+    ws.addRow([]);
+    const tot = ws.addRow(['', 'All items', '', ...agg.areas.names.map((n) => agg.areas.totals.byArea.get(n) ?? 0), agg.areas.totals.unassigned, agg.areas.totals.total]);
+    style(tot, { bold: true, fill: TOTAL_FILL });
+    tot.eachCell((c: any, i: number) => { if (i >= 4) c.alignment = { horizontal: 'right' }; });
+    ws.addRow([]);
+    ws.addRow(['Areas with the same name are one area: their counts are added together. A count inside two differently named areas appears under both, so the area columns can add up to more than Total.']);
+    style(ws.lastRow, { color: MUTED });
+    ws.getColumn(1).width = 12; ws.getColumn(2).width = 42; ws.getColumn(3).width = 8;
+    for (let i = 4; i <= header.length; i++) ws.getColumn(i).width = 14;
+    setup(ws, hdrNo, header.length, last);
+  }
+
   /* ---------- detections log ---------- */
   if (opts.detectionLog) {
     const ws = wb.addWorksheet(safeTab('Detections log'));

@@ -1,6 +1,7 @@
 // All exported numbers come from here, and from nothing but the detection counts the
 // server returned at the moment the user clicked Export (spec 2.14).
 import type { CategoryRow, ExportData, ItemTypeRow, SheetRow } from '../../shared/types.ts';
+import { areaKey, areaNames, assignAreas } from '../../shared/areas.ts';
 
 export interface AggOptions { sheetIds: Set<string> | null }
 
@@ -18,7 +19,15 @@ export interface FloorAgg {
   total: number;
 }
 
+/** Counts broken out by named area. A count inside two differently named areas appears under both. */
+export interface AreaAgg {
+  names: string[];
+  rows: { item: ItemTypeRow; byArea: Map<string, number>; unassigned: number; total: number }[];
+  totals: { byArea: Map<string, number>; unassigned: number; total: number };
+}
+
 export interface Agg {
+  areas: AreaAgg;
   sheets: SheetRow[];
   rows: ItemRowAgg[];
   grandTotal: number;
@@ -107,7 +116,27 @@ export function aggregate(data: ExportData, opts: AggOptions): Agg {
   }
   const floors = [...floorMap.values()].sort((a, b) => floorRank(a.floor) - floorRank(b.floor));
 
-  return { sheets, rows, grandTotal, bySheetTotal, unreviewedBySheet, unreviewedTotal, floors, categoryName, categoryOrder };
+  // Counts per named area (additive by name, across the included sheets).
+  const areaRowsIn = (data.areas ?? []).filter((a) => sheetSet.has(a.sheet_id));
+  const names = areaNames(areaRowsIn);
+  const areaAgg: AreaAgg = { names, rows: [], totals: { byArea: new Map(), unassigned: 0, total: grandTotal } };
+  if (names.length > 0) {
+    const assigned = assignAreas(data.detections.filter((d) => sheetSet.has(d.sheet_id)), areaRowsIn);
+    for (const r of rows) {
+      const byArea = new Map<string, number>();
+      let unassigned = 0;
+      for (const a of assigned) {
+        if (a.item_type_id !== r.item.id) continue;
+        if (a.area === null) unassigned += a.n;
+        else byArea.set(a.area, (byArea.get(a.area) ?? 0) + a.n);
+      }
+      areaAgg.rows.push({ item: r.item, byArea, unassigned, total: r.total });
+      for (const [k, v] of byArea) areaAgg.totals.byArea.set(k, (areaAgg.totals.byArea.get(k) ?? 0) + v);
+      areaAgg.totals.unassigned += unassigned;
+    }
+  }
+  void areaKey;
+  return { areas: areaAgg, sheets, rows, grandTotal, bySheetTotal, unreviewedBySheet, unreviewedTotal, floors, categoryName, categoryOrder };
 }
 
 export function safeFileName(name: string, fallback = 'Takeoff'): string {
