@@ -13,6 +13,8 @@ import { useFetch } from '../app/useFetch.ts';
 import { DrawingView, type DrawingViewHandle, type ItemStyle, type MarkerData, type Tool } from '../viewer/DrawingView.tsx';
 import { loadFilePdf } from '../viewer/pdf.ts';
 import { getStore, useSheetStore } from './sheetStore.ts';
+import { extractRuns } from '../detect/pageRuns.ts';
+import { findMatchlines } from '../detect/matchlines.ts';
 import AutoCountDialog from './AutoCountDialog.tsx';
 import { ItemDialog } from './ItemDialog.tsx';
 import ExportDialog from './ExportDialog.tsx';
@@ -82,6 +84,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [page, setPage] = useState<PDFPageProxy | null>(null);
   const [pageDims, setPageDims] = useState<{ w: number; h: number } | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const [zones, setZones] = useState<{ x0: number; y0: number; x1: number; y1: number }[]>([]);
 
   useEffect(() => {
     if (!file) return;
@@ -108,6 +111,23 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       .catch(() => { if (!off) setPdfError("This page couldn't be read."); });
     return () => { off = true; };
   }, [pdf, sheet?.page, sheet?.id]);
+
+  // Dim the part of the sheet that lies past a matchline (it belongs to the neighbouring sheet).
+  useEffect(() => {
+    setZones([]);
+    if (!page || !sheet) return;
+    let off = false;
+    extractRuns(page).then((runs) => {
+      if (off) return;
+      const pad = 0.03;
+      setZones(findMatchlines(runs, sheet.number).map((l) => {
+        const a = Math.max(0, l.from - pad), b = Math.min(1, l.to + pad);
+        if (l.orientation === 'h') return l.exclude === 'above' ? { x0: a, y0: 0, x1: b, y1: l.pos } : { x0: a, y0: l.pos, x1: b, y1: 1 };
+        return l.exclude === 'left' ? { x0: 0, y0: a, x1: l.pos, y1: b } : { x0: l.pos, y0: a, x1: 1, y1: b };
+      }));
+    }).catch(() => undefined);
+    return () => { off = true; };
+  }, [page, sheet?.id, sheet?.number]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ----- derived data -----
   const itemById = useMemo(() => new Map(items.map((i) => [i.id, i])), [items]);
@@ -328,6 +348,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                 onBox={(ids, add) => setSelected((cur) => new Set(add ? [...cur, ...ids] : ids))}
                 onZoom={setZoomPct}
                 onError={(m) => setPdfError(m)}
+                zones={zones}
               />
             ) : (
               <div className="viewport-msg">
