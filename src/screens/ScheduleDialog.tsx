@@ -25,6 +25,7 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
   const [updateExisting, setUpdateExisting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState('');
+  const [searchedAll, setSearchedAll] = useState(false);
 
   const byCode = useMemo(() => {
     const m = new Map<string, ItemTypeRow[]>();
@@ -32,31 +33,40 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
     return m;
   }, [items]);
 
-  async function read(ids: Set<string>) {
+  /** Reads one sheet. With `onlyIfLooksLikeOne`, a sheet whose text has no schedule-table headings is skipped cheaply. */
+  async function readSheet(sh: SheetRow, onlyIfLooksLikeOne: boolean): Promise<ScheduleRow[]> {
+    const f = files.find((x) => x.id === sh.file_id);
+    if (!f) return [];
+    const pdf = await loadFilePdf({ id: f.id, chunk_count: f.chunk_count });
+    const page = await pdf.getPage(sh.page);
+    try {
+      const vp = page.getViewport({ scale: 1 });
+      const runs = await extractRuns(page);
+      if (onlyIfLooksLikeOne) {
+        const words = new Set(runs.map((r) => r.str.trim().toUpperCase()));
+        const looks = words.has('DESCRIPTION') && (words.has('MANUFACTURER') || words.has('CATALOG NUMBER') || words.has('CATALOG NO.') || words.has('MTG.'));
+        if (!looks) return [];
+      }
+      // Schedules with a MTG. column (like PSEB) are read from the text alone; tables drawn with row and column
+      // lines (like E0.3) are read from the lines. A sheet that is neither gives no rows.
+      let found = parseSchedulePage(runs, vp.width, vp.height);
+      if (found.length === 0) {
+        const { prims } = await extractPrims(page, pdfjs.OPS);
+        found = parseRuledSchedule(runs, prims, vp.width, vp.height);
+      }
+      return found;
+    } finally { page.cleanup(); }
+  }
+
+  async function read(ids: Set<string>, onlyIfLooksLikeOne = false) {
     setPhase('read');
     setError(null);
     const list = sheets.filter((s) => ids.has(s.id));
     const all: ScheduleRow[] = [];
     try {
-      const fileById = new Map(files.map((f) => [f.id, f]));
       for (let i = 0; i < list.length; i++) {
-        const sh = list[i];
-        setProgress({ done: i, total: list.length, label: label(sh) });
-        const f = fileById.get(sh.file_id);
-        if (!f) continue;
-        const pdf = await loadFilePdf({ id: f.id, chunk_count: f.chunk_count });
-        const page = await pdf.getPage(sh.page);
-        const vp = page.getViewport({ scale: 1 });
-        const runs = await extractRuns(page);
-        // Schedules with a MTG. column (like PSEB) are read from the text alone; tables drawn with row and column
-        // lines (like E0.3) are read from the lines. A sheet that is neither gives no rows.
-        let found = parseSchedulePage(runs, vp.width, vp.height);
-        if (found.length === 0) {
-          const { prims } = await extractPrims(page, pdfjs.OPS);
-          found = parseRuledSchedule(runs, prims, vp.width, vp.height);
-        }
-        all.push(...found);
-        page.cleanup();
+        setProgress({ done: i, total: list.length, label: label(list[i]) });
+        all.push(...(await readSheet(list[i], onlyIfLooksLikeOne)));
         await new Promise((r) => setTimeout(r, 0));
       }
       // A type listed twice keeps its first row.
@@ -155,7 +165,15 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
       {(phase === 'review' || phase === 'write') && (
         <>
           {rows.length === 0 ? (
-            <div className="banner">I couldn't find a fixture schedule table on those sheets. Tables drawn as pictures (scans) have no text to read. Try choosing different sheets.</div>
+            <div className="stack">
+              <div className="banner">I couldn't find a fixture schedule table on {searchedAll ? 'any sheet' : 'those sheets'}. Tables drawn as pictures (scans) have no text to read.</div>
+              {!searchedAll && sheets.length > chosen.size && (
+                <div className="row" style={{ gap: 8 }}>
+                  <button className="btn btn-secondary" onClick={() => { setSearchedAll(true); void read(new Set(sheets.map((x) => x.id)), true); }}>Search every sheet for a schedule</button>
+                  <button className="btn btn-ghost" onClick={() => setPhase('pick')}>Choose sheets myself</button>
+                </div>
+              )}
+            </div>
           ) : (
             <>
               <div className="muted" style={{ fontSize: 13 }}>
@@ -192,6 +210,7 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
       {status && phase === 'write' && <div className="muted" style={{ fontSize: 13 }} role="status"><span className="spinner" /> {status}</div>}
       <div className="dialog-actions">
         <button className="btn btn-secondary" onClick={onClose} disabled={phase === 'write'}>Cancel</button>
+        {phase === 'pick' && <button className="btn btn-secondary" onClick={() => { setSearchedAll(true); void read(new Set(sheets.map((x) => x.id)), true); }}>Search every sheet</button>}
         {phase === 'pick' && <button className="btn btn-primary" onClick={() => void read(chosen)} disabled={chosen.size === 0}>Read {plural(chosen.size, 'sheet')}</button>}
         {(phase === 'review' || phase === 'write') && rows.length > 0 && <button className="btn btn-primary" onClick={() => void write()} disabled={phase === 'write' || nIncluded === 0}>Add {plural(nIncluded, 'type')} to library</button>}
       </div>
