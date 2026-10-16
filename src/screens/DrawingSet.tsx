@@ -102,7 +102,7 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
         {canEdit && <button className="btn btn-secondary" onClick={() => picker.current?.click()}><UploadSimple size={14} /> Add drawings</button>}
         <input ref={picker} type="file" accept="application/pdf,.pdf" hidden onChange={(e) => { addFile(e.target.files?.[0]); e.target.value = ''; }} />
         <button className="btn btn-secondary" onClick={openWorkspace} disabled={sheets.length === 0}>Open workspace</button>
-        {canEdit && <button className="btn btn-secondary" onClick={() => setScheduleOpen(true)} disabled={sheets.length === 0}>Read fixture schedule</button>}
+        {canEdit && <button className="btn btn-secondary" onClick={() => setScheduleOpen(true)} disabled={sheets.length === 0}>Read schedule</button>}
         {canEdit && <button className="btn btn-primary" onClick={() => setAutoOpen(true)} disabled={enabled.length === 0} title={enabled.length === 0 ? 'Tick Count on at least one sheet first.' : undefined}>Auto-count {enabled.length} sheet{enabled.length === 1 ? '' : 's'}</button>}
       </TopBar>
       <div className="two-col">

@@ -5,6 +5,7 @@ import { Check, Dialog, plural } from '../app/ui.tsx';
 import { extractRuns } from '../detect/pageRuns.ts';
 import { categoryFor, parseSchedulePage, resolveSimilar, specLine, type ScheduleRow } from '../detect/scheduleParse.ts';
 import { parseRuledSchedule } from '../detect/scheduleRuled.ts';
+import { parseTextSchedules } from '../detect/scheduleDevices.ts';
 import { extractPrims } from '../detect/primitives.ts';
 import { loadFilePdf, pdfjs } from '../viewer/pdf.ts';
 
@@ -33,6 +34,14 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
     return m;
   }, [items]);
 
+  // A row's identity: its code, unless the schedule repeats codes for different items (IPC: ceiling and wall mounted).
+  const rkey = (r: ScheduleRow) => r.key ?? r.code;
+  const norm = (x: string) => x.replace(/\s+/g, ' ').trim().toUpperCase();
+  const existingFor = (r: ScheduleRow): ItemTypeRow | undefined => {
+    const list = byCode.get(r.code.toUpperCase()) ?? [];
+    return r.key ? list.find((i) => norm(i.name) === norm(r.name)) : list[0];
+  };
+
   /** Reads one sheet. With `onlyIfLooksLikeOne`, a sheet whose text has no schedule-table headings is skipped cheaply. */
   async function readSheet(sh: SheetRow, onlyIfLooksLikeOne: boolean): Promise<ScheduleRow[]> {
     const f = files.find((x) => x.id === sh.file_id);
@@ -44,7 +53,12 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
       const runs = await extractRuns(page);
       if (onlyIfLooksLikeOne) {
         const words = new Set(runs.map((r) => r.str.trim().toUpperCase()));
-        const looks = words.has('DESCRIPTION') && (words.has('MANUFACTURER') || words.has('CATALOG NUMBER') || words.has('CATALOG NO.') || words.has('MTG.'));
+        const any = (re: RegExp) => [...words].some((w) => re.test(w));
+        const looks =
+          (words.has('DESCRIPTION') && (words.has('MANUFACTURER') || words.has('CATALOG NUMBER') || words.has('CATALOG NO.') || words.has('MTG.'))) || // light fixture schedule
+          (words.has('OUTLET TYPE') && words.has('SUBSCRIPT')) ||                                                                                     // communications outlet counts
+          any(/^(CAMERA|DEVICE) TYPE$/) || words.has('DEVICE LOCATION') ||                                                                            // security device lists
+          (words.has('SYMBOL') && words.has('NEMA'));                                                                                                 // special purpose receptacles
         if (!looks) return [];
       }
       // Schedules with a MTG. column (like PSEB) are read from the text alone; tables drawn with row and column
@@ -52,7 +66,8 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
       let found = parseSchedulePage(runs, vp.width, vp.height);
       if (found.length === 0) {
         const { prims } = await extractPrims(page, pdfjs.OPS);
-        found = parseRuledSchedule(runs, prims, vp.width, vp.height);
+        found = parseRuledSchedule(runs, prims, vp.width, vp.height);              // ruled grid (E0.3, receptacle schedule)
+        if (found.length === 0) found = parseTextSchedules(runs, prims, vp.width, vp.height); // laid out by position (outlets, security)
       }
       return found;
     } finally { page.cleanup(); }
@@ -71,10 +86,10 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
       }
       // A type listed twice keeps its first row.
       const seen = new Set<string>();
-      const unique = all.filter((r) => (seen.has(r.code) ? false : (seen.add(r.code), true)));
+      const unique = all.filter((r) => (seen.has(rkey(r)) ? false : (seen.add(rkey(r)), true)));
       resolveSimilar(unique);
       setRows(unique);
-      setInc(new Set(unique.filter((r) => !r.removed && !byCode.has(r.code.toUpperCase())).map((r) => r.code)));
+      setInc(new Set(unique.filter((r) => !r.removed && !existingFor(r)).map(rkey)));
       setPhase('review');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'The schedule could not be read.');
@@ -88,10 +103,11 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
     setPhase('write');
     setError(null);
     try {
-      const chosenRows = rows.filter((r) => inc.has(r.code));
-      // Categories come from the mounting column (Recessed, Pendant, ...). Create the ones that are missing.
+      const chosenRows = rows.filter((r) => inc.has(rkey(r)));
+      // Categories come from the schedule (outlet kinds, camera, receptacle) or the mounting (Recessed, Pendant, ...). Create the ones that are missing.
+      const catOf = (r: ScheduleRow) => r.category ?? categoryFor(r.mounting);
       const catId = new Map<string, string>(categories.map((c) => [c.name.toLowerCase(), c.id]));
-      for (const name of new Set(chosenRows.map((r) => categoryFor(r.mounting)))) {
+      for (const name of new Set(chosenRows.map(catOf))) {
         if (catId.has(name.toLowerCase())) continue;
         setStatus(`Adding category ${name}…`);
         try {
@@ -103,7 +119,7 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
       for (let i = 0; i < chosenRows.length; i++) {
         const r = chosenRows[i];
         setStatus(`Saving ${r.code} (${i + 1} of ${chosenRows.length})…`);
-        const existing = byCode.get(r.code.toUpperCase())?.[0];
+        const existing = existingFor(r);
         try {
           if (existing) {
             if (updateExisting) {
@@ -114,7 +130,7 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
             await api('/items', {
               body: {
                 code: r.code, name: r.name.slice(0, 200), spec: specLine(r) || null, unit: 'EA',
-                category_id: catId.get(categoryFor(r.mounting).toLowerCase()) ?? null, marker_shape: 'circle', marker_glyph: r.code.slice(0, 2),
+                category_id: catId.get(catOf(r).toLowerCase()) ?? null, marker_shape: 'circle', marker_glyph: r.code.slice(0, 2),
               },
             });
             added++;
@@ -124,25 +140,25 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
           else throw e;
         }
       }
-      onDone(`Schedule read: ${plural(added, 'fixture type')} added${updated ? `, ${updated} updated` : ''}${skipped ? `, ${skipped} already in the library` : ''}.`);
+      onDone(`Schedule read: ${plural(added, 'type')} added${updated ? `, ${updated} updated` : ''}${skipped ? `, ${skipped} already in the library` : ''}.`);
     } catch (e) {
-      setError(e instanceof ApiError || e instanceof Error ? e.message : 'Saving the fixture types failed.');
+      setError(e instanceof ApiError || e instanceof Error ? e.message : 'Saving the types failed.');
       setPhase('review');
     }
   }
 
-  const nIncluded = rows.filter((r) => inc.has(r.code)).length;
-  const inLib = rows.filter((r) => byCode.has(r.code.toUpperCase())).length;
+  const nIncluded = rows.filter((r) => inc.has(rkey(r))).length;
+  const inLib = rows.filter((r) => existingFor(r)).length;
   const removed = rows.filter((r) => r.removed).length;
 
   return (
-    <Dialog title="Read fixture schedule" onClose={phase === 'write' ? () => undefined : onClose} wide>
-      <div className="dialog-title">Read fixture schedule</div>
+    <Dialog title="Read schedule" onClose={phase === 'write' ? () => undefined : onClose} wide>
+      <div className="dialog-title">Read schedule</div>
 
       {phase === 'pick' && (
         <>
           <div className="muted" style={{ fontSize: 13 }}>
-            {scheduleSheets.length === 0 ? "No sheet is marked as a schedule. Choose the sheet(s) that hold the fixture schedule table." : 'Choose the sheet(s) to read.'}
+            {scheduleSheets.length === 0 ? "No sheet is marked as a schedule. Choose the sheet(s) that hold the schedule table." : 'Choose the sheet(s) to read.'}
           </div>
           <div style={{ maxHeight: 260, overflow: 'auto' }} className="stack">
             {sheets.map((s) => (
@@ -166,7 +182,7 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
         <>
           {rows.length === 0 ? (
             <div className="stack">
-              <div className="banner">I couldn't find a fixture schedule table on {searchedAll ? 'any sheet' : 'those sheets'}. Tables drawn as pictures (scans) have no text to read.</div>
+              <div className="banner">I couldn't find a schedule table I can read on {searchedAll ? 'any sheet' : 'those sheets'}. Tables drawn as pictures (scans) have no text to read.</div>
               {!searchedAll && sheets.length > chosen.size && (
                 <div className="row" style={{ gap: 8 }}>
                   <button className="btn btn-secondary" onClick={() => { setSearchedAll(true); void read(new Set(sheets.map((x) => x.id)), true); }}>Search every sheet for a schedule</button>
@@ -177,30 +193,30 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
           ) : (
             <>
               <div className="muted" style={{ fontSize: 13 }}>
-                Found {plural(rows.length, 'fixture type')}{inLib ? `, ${inLib} already in your library` : ''}{removed ? `, ${removed} marked removed` : ''}.
+                Found {plural(rows.length, 'type')}{inLib ? `, ${inLib} already in your library` : ''}{removed ? `, ${removed} marked removed` : ''}.
                 Ticked types are added to the item library, with their description and specs. Check them over before adding.
               </div>
               <div style={{ maxHeight: 340, overflow: 'auto' }}>
                 <table className="table">
-                  <thead><tr><th /><th>Type</th><th>Mount</th><th>Description</th><th>Light / watts</th><th>Manufacturer</th></tr></thead>
+                  <thead><tr><th /><th>Type</th><th>Group</th><th>Description</th><th>Details</th><th>Listed</th></tr></thead>
                   <tbody>
                     {rows.map((r) => {
-                      const lib = byCode.has(r.code.toUpperCase());
+                      const lib = !!existingFor(r);
                       return (
-                        <tr key={r.code} style={r.removed ? { opacity: 0.55 } : undefined}>
-                          <td><Check checked={inc.has(r.code)} disabled={phase === 'write' || (lib && !updateExisting)} onChange={(v) => setInc((cur) => { const n = new Set(cur); if (v) n.add(r.code); else n.delete(r.code); return n; })}><span className="sr-only">Include {r.code}</span></Check></td>
+                        <tr key={rkey(r)} style={r.removed ? { opacity: 0.55 } : undefined}>
+                          <td><Check checked={inc.has(rkey(r))} disabled={phase === 'write' || (lib && !updateExisting)} onChange={(v) => setInc((cur) => { const n = new Set(cur); if (v) n.add(rkey(r)); else n.delete(rkey(r)); return n; })}><span className="sr-only">Include {r.code}</span></Check></td>
                           <td style={{ fontWeight: 500 }}>{r.code}{lib && <span className="tag tag-neutral" style={{ marginLeft: 6 }}>In library</span>}{r.removed && <span className="tag tag-outline" style={{ marginLeft: 6 }}>Removed</span>}</td>
-                          <td>{r.mounting}</td>
+                          <td style={{ fontSize: 12 }}>{r.category ?? categoryFor(r.mounting)}</td>
                           <td style={{ maxWidth: 280 }}>{r.name}</td>
-                          <td className="num" style={{ fontSize: 12 }}>{[r.lumens, r.watts].filter((x) => x && x !== '-' && x !== 'N/A').join(' · ')}</td>
-                          <td style={{ fontSize: 12 }}>{r.manufacturer !== '-' ? r.manufacturer : ''}</td>
+                          <td style={{ fontSize: 12 }}>{r.spec ?? [r.lumens, r.watts, r.manufacturer !== '-' ? r.manufacturer : ''].filter((x) => x && x !== '-' && x !== 'N/A').join(' · ')}</td>
+                          <td className="num" style={{ fontSize: 12 }}>{r.count ?? ''}</td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
               </div>
-              {inLib > 0 && <Check checked={updateExisting} onChange={(v) => { setUpdateExisting(v); if (v) setInc((cur) => new Set([...cur, ...rows.filter((r) => byCode.has(r.code.toUpperCase()) && !r.removed).map((r) => r.code)])); else setInc((cur) => new Set([...cur].filter((c) => !byCode.has(c.toUpperCase())))); }}>Also update the description of types already in the library</Check>}
+              {inLib > 0 && <Check checked={updateExisting} onChange={(v) => { setUpdateExisting(v); if (v) setInc((cur) => new Set([...cur, ...rows.filter((r) => existingFor(r) && !r.removed).map(rkey)])); else setInc((cur) => new Set([...cur].filter((k) => !rows.some((r) => rkey(r) === k && existingFor(r))))); }}>Also update the description of types already in the library</Check>}
             </>
           )}
         </>
