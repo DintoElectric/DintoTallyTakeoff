@@ -5,11 +5,12 @@ import { HttpError, handle, json, methodNotAllowed, notFound, readJson, segments
 import { oneOf, onlyKeys, str, uuid } from './_lib/validate.ts';
 import { getBytes, keys, putBytes } from './_lib/blobs.ts';
 import { applyBatch, listDetections } from './_lib/detections.ts';
+import { validateZones } from '../../shared/zones.ts';
 
 const SHEET_SELECT = `
   select s.id, s.project_id, s.file_id, s.page, s.number, s.title, s.kind, s.floor, s.scale,
          s.page_width_pt, s.page_height_pt, s.rotation, s.count_enabled, s.count_status,
-         s.read_source, s.title_unsure, s.version,
+         s.read_source, s.title_unsure, s.version, s.exclusion_zones,
          (select count(*) from detections d where d.sheet_id = s.id and d.status <> 'rejected')::int as detection_count,
          (select count(*) from detections d where d.sheet_id = s.id and d.status = 'unreviewed'
              and d.confidence is not null and d.confidence < p.review_threshold)::int as flagged_count
@@ -45,7 +46,7 @@ export default handle(async (req: Request, _ctx: Context) => {
     if (req.method === 'PATCH') {
       await requireRole('estimator');
       const b = await readJson(req);
-      onlyKeys(b, ['number', 'title', 'kind', 'floor', 'scale', 'count_enabled', 'count_status']);
+      onlyKeys(b, ['number', 'title', 'kind', 'floor', 'scale', 'count_enabled', 'count_status', 'exclusion_zones']);
       const cur = await pool.query(`select number, title, kind, floor, scale, count_enabled, count_status, read_source from sheets where id = $1`, [id]);
       const c = cur.rows[0];
       if (!c) throw notFound('That sheet');
@@ -67,6 +68,14 @@ export default handle(async (req: Request, _ctx: Context) => {
           where id = $1`,
         [id, next.number, next.title, next.kind, next.floor, next.scale, next.count_enabled, next.count_status, edited],
       );
+      if ('exclusion_zones' in b) {
+        // null puts the sheet back to automatic zones; a list (possibly empty) is the estimator's own.
+        let zones: unknown = null;
+        if (b.exclusion_zones !== null) {
+          try { zones = validateZones(b.exclusion_zones); } catch (e) { throw new HttpError(400, e instanceof Error ? e.message : 'Those zones are not valid.'); }
+        }
+        await pool.query(`update sheets set exclusion_zones = $2::jsonb where id = $1`, [id, zones === null ? null : JSON.stringify(zones)]);
+      }
       const r = await pool.query(`${SHEET_SELECT} where s.id = $1`, [id]);
       return json({ sheet: r.rows[0] });
     }
