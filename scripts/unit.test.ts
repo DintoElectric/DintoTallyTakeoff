@@ -273,3 +273,34 @@ test('drawing notes: finds hexagons and reads the label inside; ignores a plain 
   assert.deepEqual(notes.map((n) => n.label).sort(), ['1A', 'EM2']); // the empty hexagon and the circle with "7" are not notes
   assert.ok(Math.abs(notes[0].x - 0.2) < 0.002 || Math.abs(notes[0].x - 0.4) < 0.002);
 });
+
+import { planSheetWrite, CONF_TAG } from '../src/detect/writePlan.ts';
+import type { Matchline } from '../src/detect/matchlines.ts';
+const line: Matchline = { orientation: 'h', pos: 0.1, from: 0, to: 1, exclude: 'above', neighbour: 'EL101.2' };
+const det = (id: string, item: string, y: number, source: 'auto' | 'manual', status: 'unreviewed' | 'confirmed' | 'rejected', x = 0.5) =>
+  ({ id, sheet_id: 's', item_type_id: item, x, y, bbox: null, confidence: 0.98, source, status } as any);
+const base = { lines: [line], itemIdByCode: new Map([['B13', 'itB13'], ['D9', 'itD9']]), ambiguous: new Set<string>(), clearItemIds: new Set(['itB13', 'itD9']), newId: () => 'new' };
+
+test('re-run: an item whose every mark is past the matchline still has its old counts cleared', () => {
+  // Every D9 on the sheet is above the line (past it). Before the fix, nothing cleared the earlier D9 count.
+  const plan = planSheetWrite({ ...base, ignorePast: true, hits: [{ code: 'D9', x: 0.5, y: 0.05, kind: 'tag', past: true }, { code: 'B13', x: 0.5, y: 0.5, kind: 'tag' }],
+    existing: [det('old-d9', 'itD9', 0.05, 'auto', 'unreviewed')] });
+  assert.ok(plan.ops.some((o) => o.op === 'delete' && o.id === 'old-d9'));
+  assert.equal(plan.added, 1); // only the B13 on the sheet's own side
+});
+test('re-run: confirmed automatic counts past a matchline are removed; manual counts and counts on the sheet are kept', () => {
+  const existing = [det('conf-past', 'itB13', 0.05, 'auto', 'confirmed'), det('manual-past', 'itB13', 0.06, 'manual', 'confirmed', 0.3), det('conf-ok', 'itB13', 0.5, 'auto', 'confirmed')];
+  const on = planSheetWrite({ ...base, ignorePast: true, hits: [], existing });
+  assert.deepEqual(on.ops.filter((o) => o.op === 'delete').map((o: any) => o.id), ['conf-past']);
+  assert.equal(on.removedPast, 1);
+  const off = planSheetWrite({ ...base, ignorePast: false, hits: [], existing });
+  assert.equal(off.ops.length, 0); // box unticked: nothing past the line is touched
+});
+test('re-run: a mark past the line is not added, one beside a confirmed count is not doubled, notes are not flagged', () => {
+  const plan = planSheetWrite({ ...base, ignorePast: true, itemIdByCode: new Map([['B13', 'itB13'], ['14', 'itNote']]), clearItemIds: new Set(['itB13', 'itNote']),
+    hits: [{ code: 'B13', x: 0.5, y: 0.05, kind: 'tag', past: true }, { code: 'B13', x: 0.2, y: 0.5, kind: 'tag' }, { code: '14', x: 0.7, y: 0.6, kind: 'note' }],
+    existing: [det('conf', 'itB13', 0.5, 'auto', 'confirmed', 0.2)] });
+  const adds = plan.ops.filter((o) => o.op === 'add') as any[];
+  assert.deepEqual(adds.map((a) => a.detection.item_type_id), ['itNote']); // the B13 at y=.5 already has a confirmed count
+  assert.equal(adds[0].detection.confidence, CONF_TAG);
+});
