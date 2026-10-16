@@ -43,7 +43,7 @@ export async function buildXlsx(data: ExportData, agg: Agg, opts: ExportOptions)
 
   /* ---------- Summary: item x sheet ---------- */
   {
-    const ws = wb.addWorksheet('Summary');
+    const ws = wb.addWorksheet(safeTab('Summary'));
     const sheetCols = opts.perSheetColumns ? agg.sheets : [];
     const showUnrev = agg.unreviewedTotal > 0;
     title(ws, data.project.name, `Electrical takeoff · Fixture & device counts · Prepared ${prepared}`);
@@ -79,8 +79,8 @@ export async function buildXlsx(data: ExportData, agg: Agg, opts: ExportOptions)
 
   /* ---------- grouped tab ---------- */
   {
-    const name = opts.groupBy === 'floor' ? 'By floor / area' : opts.groupBy === 'item' ? 'By item' : 'By sheet';
-    const ws = wb.addWorksheet(name);
+    const name = opts.groupBy === 'floor' ? 'By floor and area' : opts.groupBy === 'item' ? 'By item' : 'By sheet';
+    const ws = wb.addWorksheet(safeTab(name)); // Excel forbids \ / ? * [ ] : in tab names
     title(ws, data.project.name, `${name} · Prepared ${prepared}`);
     const hdr = opts.groupBy === 'item' ? ['Item', 'Description', 'Sheet', 'Count'] : opts.groupBy === 'sheet' ? ['Sheet', 'Code', 'Description', 'Count'] : ['Floor', 'Code', 'Description', 'Count'];
     const hr = ws.addRow(hdr);
@@ -120,7 +120,7 @@ export async function buildXlsx(data: ExportData, agg: Agg, opts: ExportOptions)
 
   /* ---------- detections log ---------- */
   if (opts.detectionLog) {
-    const ws = wb.addWorksheet('Detections log');
+    const ws = wb.addWorksheet(safeTab('Detections log'));
     title(ws, data.project.name, `One row per detection · Prepared ${prepared}`);
     const hr = ws.addRow(['Sheet', 'Item code', 'Item', 'X (pt)', 'Y (pt)', 'Confidence', 'Status', 'Source', 'Confirmed by']);
     headerStyle(hr, 4);
@@ -147,4 +147,3 @@ export async function buildXlsx(data: ExportData, agg: Agg, opts: ExportOptions)
   return new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 }
 
-export { safeTab };
