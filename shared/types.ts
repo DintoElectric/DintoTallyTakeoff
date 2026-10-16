@@ -70,6 +70,7 @@ export interface SheetRow {
 
 export interface ItemTypeRow {
   id: string;
+  project_id: string | null; // the project whose library it belongs to (null: from before libraries were per project)
   code: string;
   name: string;
   spec: string | null;
