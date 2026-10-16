@@ -189,3 +189,48 @@ test('room numbers: repeated codes and codes with no name above stay fixtures', 
 test('room numbers: a leading zero in the digits marks a room (X06)', () => {
   assert.equal(markRoomNumbers([hit('X07', 0.1, 0.1)], [])[0].kind, 'room');
 });
+
+import { parseSchedulePage, resolveSimilar, firstSentence, shortName, categoryFor, specLine } from '../src/detect/scheduleParse.ts';
+// A small copy of the real table layout (page 3000 x 2000 pt). `dx` shifts the whole table sideways.
+function scheduleRuns(dx = 0): PageRun[] {
+  const r = (str: string, x0: number, x1: number, y: number): PageRun => ({ str, cx: (x0 + x1 + 2 * dx) / 2 / 3000, cy: y / 2000, w: (x1 - x0) / 3000, h: 9 / 2000, rotated: false });
+  const row = (y: number, code: string, mtg: string, desc: string[], lm: string, cct: string, w: string, mfr: string[], cat: string[]) => [
+    r(code, 419, 431, y), r(mtg, 473, 494, y), ...desc.map((d, i) => r(d, 515, 1040, y + i * 12)),
+    r(lm, 1086, 1129, y), r(cct, 1188, 1217, y), r('-', 1283, 1286, y), r(w, 1359, 1370, y), r('UNV', 1405, 1426, y), r('0-10V/1%', 1439, 1484, y),
+    ...mfr.map((m, i) => r(m, 1540, 1600, y + i * 46)), ...cat.map((c, i) => r(c, 1666, i === 0 ? 1892 : 1707, y + i * 46)),
+  ];
+  return [
+    r('TYPE', 411, 438, 177), r('MTG.', 471, 497, 177), r('DESCRIPTION', 743, 813, 177), r('DELIVERED LUMENS OR', 1047, 1168, 178), r('LAMP NO. DESIGNATION', 1046, 1172, 190),
+    r('COLOR/CCT', 1172, 1232, 184), r('OPTICS', 1266, 1304, 184), r('WATTAGE', 1338, 1390, 171), r('(W)', 1357, 1374, 183), r('VOLTS', 1398, 1432, 177),
+    r('DIMMING', 1465, 1510, 171), r('PROTOCOL/RANGE', 1439, 1535, 183), r('MANUFACTURER', 1558, 1644, 177), r('CATALOG NUMBER', 1730, 1826, 177),
+    ...row(204, 'A1', 'REC', ['LED 2X2 FLAT PANEL TROFFER, NOMINAL 3 INCH RECESS DEPTH, INTEGRAL DRIVER, FOR INSTALLATION', 'IN ACT CEILINGS.'], '4,800 LM', '3000K', '45', ['LITHONIA', 'COLUMBIA LIGHTING'], ['EPANL-2X2-4800LM-MVOLT', 'SCALER']),
+    ...row(294, 'A1A', 'REC', ['SIMILAR TO FIXTURE TYPE A1, EXCEPT WITH DIFFERENT COLOR TEMPERATURE AND CRI.'], '5,150 LM', '4000K', '54', ['LITHONIA'], ['CPX-2X2-6000LM']),
+    ...row(383, 'B12B', 'PEND', ['REMOVED FROM PROJECT'], '-', '-', '-', ['-'], ['-']),
+    r('A.', 2160, 2167, 200), r('FOR ELECTRICAL SYMBOLS', 2180, 2420, 200), // notes column to the right: must be ignored
+  ];
+}
+for (const dx of [0, 340]) {
+  test(`schedule: reads rows, columns and removed types (table shifted ${dx}pt)`, () => {
+    const rows = resolveSimilar(parseSchedulePage(scheduleRuns(dx), 3000, 2000));
+    assert.deepEqual(rows.map((x) => x.code), ['A1', 'A1A', 'B12B']);
+    const a1 = rows[0];
+    assert.equal(a1.name, 'LED 2X2 FLAT PANEL TROFFER');
+    assert.equal(a1.mounting, 'REC'); assert.equal(a1.lumens, '4,800 LM'); assert.equal(a1.cct, '3000K'); assert.equal(a1.watts, '45');
+    assert.equal(a1.volts, 'UNV'); assert.equal(a1.dimming, '0-10V/1%');
+    assert.equal(a1.manufacturer, 'LITHONIA'); assert.deepEqual(a1.alternates, ['COLUMBIA LIGHTING']);
+    assert.equal(a1.catalog, 'EPANL-2X2-4800LM-MVOLT');
+    assert.equal(rows[1].similarTo, 'A1');
+    assert.match(rows[1].name, /^LED 2X2 FLAT PANEL TROFFER, except with different color temperature/);
+    assert.equal(rows[2].removed, true);
+    assert.equal(specLine(a1), '4,800 LM · 3000K · 45 W · LITHONIA EPANL-2X2-4800LM-MVOLT');
+  });
+}
+test('schedule: a page without a schedule header returns nothing', () => {
+  assert.deepEqual(parseSchedulePage([pr('B13'), pr('NOTES')], 3000, 2000), []);
+});
+test('schedule: names and categories', () => {
+  assert.equal(firstSentence('LED WALL PACK, 8 INCH, U.L. LISTED FOR WET LOCATIONS. REFER TO PLANS.'), 'LED WALL PACK, 8 INCH, U.L. LISTED FOR WET LOCATIONS.');
+  assert.equal(shortName('LED INDUSTRIAL STRIP PENDANT, NOMINAL 4 FOOT LONG X 3 INCH WIDE, STEEL HOUSING, FROSTED LENS, INTEGRAL DRIVER', false), 'LED INDUSTRIAL STRIP PENDANT');
+  assert.equal(shortName('THERMOPLASTIC LED EXIT SIGN. PROVIDE MOUNTING, FACES AND CHEVRONS AS INDICATED ON DRAWINGS.', false), 'THERMOPLASTIC LED EXIT SIGN.');
+  assert.equal(categoryFor('REC/SURF'), 'Recessed'); assert.equal(categoryFor('PEND'), 'Pendant'); assert.equal(categoryFor(''), 'Other');
+});
