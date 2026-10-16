@@ -2,6 +2,8 @@
 // ends: the word MATCHLINE, the neighbour's sheet number on the neighbour's side, and this sheet's number on
 // its own side. Anything past the line (on the neighbour's side) belongs to the other sheet and is not counted.
 import type { PageRun } from './pageRuns.ts';
+import { inZones, rectZone, type Zone } from '../../shared/zones.ts';
+export type { Zone } from '../../shared/zones.ts';
 
 export type Side = 'above' | 'below' | 'left' | 'right';
 export interface Matchline {
@@ -59,16 +61,24 @@ export function findMatchlines(runs: PageRun[], ownSheet: string | null): Matchl
   return lines;
 }
 
-/** True if the point lies past a matchline, on the neighbouring sheet's side. `tol` is a small margin on the line itself. */
-export function isPastMatchline(x: number, y: number, lines: Matchline[], tol = 0.003, pad = 0.03): boolean {
-  for (const l of lines) {
+const ON_LINE = 0.0015; // marks this close to the line (about 3 pt) are on it, and are kept
+
+/**
+ * The area past each matchline, as zones. A horizontal line is taken to run the full width of the sheet: the
+ * neighbouring sheet's content lies past it wherever the line itself stops (checked against estimator-counted
+ * fixtures: no counted fixture falls in the extra area). A vertical line keeps its own extent, plus a margin.
+ */
+export function zonesFromMatchlines(lines: Matchline[]): Zone[] {
+  return lines.map((l) => {
     if (l.orientation === 'h') {
-      if (x < l.from - pad || x > l.to + pad) continue;
-      if (l.exclude === 'above' ? y < l.pos - tol : y > l.pos + tol) return true;
-    } else {
-      if (y < l.from - pad || y > l.to + pad) continue;
-      if (l.exclude === 'left' ? x < l.pos - tol : x > l.pos + tol) return true;
+      return l.exclude === 'above' ? rectZone(0, 0, 1, Math.max(0, l.pos - ON_LINE)) : rectZone(0, Math.min(1, l.pos + ON_LINE), 1, 1);
     }
-  }
-  return false;
+    const a = Math.max(0, l.from - 0.06), b = Math.min(1, l.to + 0.06);
+    return l.exclude === 'left' ? rectZone(0, a, Math.max(0, l.pos - ON_LINE), b) : rectZone(Math.min(1, l.pos + ON_LINE), a, 1, b);
+  });
+}
+
+/** True if the point lies past a matchline, on the neighbouring sheet's side. */
+export function isPastMatchline(x: number, y: number, lines: Matchline[]): boolean {
+  return inZones(x, y, zonesFromMatchlines(lines));
 }

@@ -2,19 +2,23 @@
 import { extractRuns, type PageRun } from './pageRuns.ts';
 import { extractPrims, type OpsLike } from './primitives.ts';
 import { findHexNotes } from './notes.ts';
-import { findMatchlines, isPastMatchline, type Matchline } from './matchlines.ts';
+import { findMatchlines, zonesFromMatchlines, type Matchline } from './matchlines.ts';
+import { inZones, type Zone } from '../../shared/zones.ts';
 import { DEFAULT_COUNT_REGION, scanTags, type TagHit } from './tagScan.ts';
 import { attachLabels } from './emergency.ts';
 
 type PageForRuns = Parameters<typeof extractRuns>[0];
 type PageForPrims = Parameters<typeof extractPrims>[0];
 
-export interface PageScan { hits: TagHit[]; lines: Matchline[]; runs: PageRun[] }
+export interface PageScan { hits: TagHit[]; lines: Matchline[]; zones: Zone[]; autoZones: Zone[]; runs: PageRun[] }
 
-/** `sheetNumber` is this sheet's own number (needed to tell which side of a matchline is the neighbour's). */
 const pageSize = async (page: { getViewport(o: { scale: number }): { width: number; height: number } }) => { const v = page.getViewport({ scale: 1 }); return { w: v.width, h: v.height }; };
 
-export async function scanPage(page: PageForRuns & PageForPrims, OPS: OpsLike, sheetNumber: string | null): Promise<PageScan> {
+/**
+ * `sheetNumber` is this sheet's own number (needed to tell which side of a matchline is the neighbour's).
+ * `handZones` are the estimator's own exclusion zones for the sheet; null means use the ones found from the matchlines.
+ */
+export async function scanPage(page: PageForRuns & PageForPrims, OPS: OpsLike, sheetNumber: string | null, handZones: Zone[] | null = null): Promise<PageScan> {
   const runs = await extractRuns(page);
   let hits = scanTags(runs);
   // Drawing notes: hexagons with a label inside. A tag-looking label inside a hexagon (EM2, EX3) is a note, not a device.
@@ -33,6 +37,8 @@ export async function scanPage(page: PageForRuns & PageForPrims, OPS: OpsLike, s
   const dims = await pageSize(page);
   attachLabels(hits, runs, dims.w, dims.h);
   const lines = findMatchlines(runs, sheetNumber);
-  for (const h of hits) if (isPastMatchline(h.x, h.y, lines)) h.past = true;
-  return { hits, lines, runs };
+  const autoZones = zonesFromMatchlines(lines);
+  const zones = handZones ?? autoZones;
+  for (const h of hits) if (inZones(h.x, h.y, zones)) h.past = true;
+  return { hits, lines, zones, autoZones, runs };
 }

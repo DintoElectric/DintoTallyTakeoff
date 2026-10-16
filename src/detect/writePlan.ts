@@ -1,7 +1,7 @@
 // Decides what Auto-count writes to one sheet: which earlier counts to remove and which new ones to add.
 // Pure (no network), so it can be tested.
 import type { Detection } from '../../shared/types.ts';
-import { isPastMatchline, type Matchline } from './matchlines.ts';
+import { inZones, type Zone } from '../../shared/zones.ts';
 import type { TagHit } from './tagScan.ts';
 
 export const CONF_TAG = 0.98;      // exact tag text or a drawing note: not flagged
@@ -15,7 +15,7 @@ const NEAR = 0.004; // an existing confirmed or manual count this close blocks a
 
 export interface PlanInput {
   hits: TagHit[];
-  lines: Matchline[];
+  zones: Zone[];
   existing: Detection[];
   itemIdByCode: Map<string, string>; // ticked codes -> library item id
   ambiguous: Set<string>;
@@ -34,9 +34,9 @@ export function planSheetWrite(p: PlanInput): Plan {
   const tickedItems = new Set(p.itemIdByCode.values());
   const keep: Detection[] = [];
   for (const d of p.existing) {
-    const pastNow = p.ignorePast && d.source === 'auto' && d.status !== 'rejected' && isPastMatchline(d.x, d.y, p.lines);
+    const pastNow = p.ignorePast && d.source === 'auto' && d.status !== 'rejected' && inZones(d.x, d.y, p.zones);
     if (pastNow) {
-      // An earlier automatic count that lies past a matchline, even a confirmed one. Manual counts are never touched.
+      // An earlier automatic count inside an exclusion zone (past a matchline, or outlined by hand), even a confirmed one. Manual counts are never touched.
       ops.push({ op: 'delete', id: d.id });
       removedPast++;
     } else if (p.clearItemIds.has(d.item_type_id) && d.source === 'auto' && d.status === 'unreviewed') {
