@@ -3,6 +3,8 @@ import type { CategoryRow, DrawingFileRow, ItemTypeRow, SheetRow } from '../../s
 import { api, ApiError } from '../auth/api.ts';
 import { Check, Dialog, plural } from '../app/ui.tsx';
 import { discover, scanSheets, writeSheet, type CodeRow, type SheetScan } from '../detect/autoCount.ts';
+import { CONF_EMERGENCY, CONF_NORMAL_SPLIT } from '../detect/writePlan.ts';
+import { EMERGENCY_KEY, discoverMarkers, emergencyCode, isEmergency, parseCustomMarkers } from '../detect/emergency.ts';
 import { getStore } from './sheetStore.ts';
 
 /** Scans sheets for tags, shows what was found, then counts the ones you choose. */
@@ -18,6 +20,9 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
   const [status, setStatus] = useState('');
   const [libraryDriven, setLibraryDriven] = useState(false);
   const [ignorePast, setIgnorePast] = useState(true);
+  const [markers, setMarkers] = useState<Set<string>>(new Set()); // confirmed emergency label patterns
+  const [customText, setCustomText] = useState('');
+  const [splitOff, setSplitOff] = useState<Set<string>>(new Set()); // codes the estimator chose NOT to split
   const abort = useRef(new AbortController());
 
   // Several library items can share a code (variants), so each code maps to a list.
@@ -36,6 +41,19 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
     return [...discover(effective)].sort((a, b) => rank(a) - rank(b) || b.total - a.total || a.code.localeCompare(b.code));
   }, [effective, byCode]);
 
+  // Emergency markers: found from the labels beside fixtures, confirmed by the estimator.
+  const candidates = useMemo(() => discoverMarkers(effective.flatMap((sc) => sc.hits)), [effective]);
+  const activeMarkers = useMemo(() => new Set([...markers, ...parseCustomMarkers(customText)]), [markers, customText]);
+  const emByCode = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const sc of effective) for (const h of sc.hits) if (h.kind === 'tag' && isEmergency(h, activeMarkers)) m.set(h.code, (m.get(h.code) ?? 0) + 1);
+    return m;
+  }, [effective, activeMarkers]);
+  const emTotal = [...emByCode.values()].reduce((a, b) => a + b, 0);
+  // A fixture type is split into normal and emergency when it has emergency fixtures, unless it is an exit sign
+  // (always emergency), has several library variants already, or the estimator turned the split off.
+  const splits = (code: string) => (emByCode.get(code) ?? 0) > 0 && !splitOff.has(code) && (byCode.get(code.toUpperCase())?.length ?? 0) <= 1 && !/^XL/i.test(code);
+
   useEffect(() => {
     let off = false;
     (async () => {
@@ -53,6 +71,8 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
         setLibraryDriven(lib.length > 0);
         const notes = found.filter((r) => r.kind === 'note'); // drawing notes are always counted
         setInc(new Set([...(lib.length > 0 ? lib : found.filter((r) => r.kind === 'tag')), ...notes].map((r) => r.code)));
+        // Only markers with a normal twin are pre-ticked; "possible" ones (no twin) are left for the estimator.
+        setMarkers(new Set(discoverMarkers(res.flatMap((sc) => sc.hits.filter((h) => !h.past))).filter((c) => c.partner !== null).map((c) => c.pattern)));
         setPhase('pick');
       } catch (e) {
         if (!off && !(e instanceof DOMException)) setError(e instanceof Error ? e.message : 'The scan failed.');
@@ -91,24 +111,54 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
         });
         resolved.set(r.code, item);
       }
+      // Emergency versions: B13 -> B13E (the schedule's own convention). Use the library item if it exists, else create it.
+      const emKeys = new Set<string>();
+      let emCreated = 0;
+      for (const r of rows.filter((x) => inc.has(x.code) && x.kind === 'tag' && splits(x.code))) {
+        const base = resolved.get(r.code);
+        if (!base) continue;
+        const emCode = emergencyCode(r.code);
+        let emItem = byCode.get(emCode.toUpperCase())?.[0];
+        if (!emItem) {
+          setStatus(`Adding ${emCode} (emergency ${r.code}) to the library…`);
+          try {
+            emItem = (await api<{ item: ItemTypeRow }>('/items', {
+              body: { code: emCode, name: `${base.name}, emergency`.slice(0, 200), spec: base.spec, category_id: base.category_id, unit: base.unit, marker_shape: base.marker_shape, marker_glyph: base.marker_glyph },
+            })).item;
+            emCreated++;
+          } catch (e) {
+            if (!(e instanceof ApiError && e.status === 409)) throw e;
+            emItem = (await api<{ items: ItemTypeRow[] }>('/items')).items.find((i) => i.code.toUpperCase() === emCode.toUpperCase());
+            if (!emItem) throw e;
+          }
+        }
+        resolved.set(r.code + EMERGENCY_KEY, emItem);
+        emKeys.add(r.code + EMERGENCY_KEY);
+      }
       // Every library item whose code was found anywhere in the scan (ticked or not, past a matchline or not):
       // their earlier unreviewed automatic counts are replaced by this run.
       const clearIds = new Set<string>();
       for (const sc of scans) for (const h of sc.hits) for (const it of byCode.get(h.code.toUpperCase()) ?? []) clearIds.add(it.id);
       for (const it of resolved.values()) clearIds.add(it.id);
+      const writeInc = new Set([...inc, ...emKeys]);
       // 2. Write each sheet's detections.
       let total = 0, removedPast = 0;
       let i = 0;
       for (const sc of scans) {
         i++;
         setStatus(`Saving counts: sheet ${i} of ${scans.length}…`);
-        const r = await writeSheet(sc, resolved, inc, { ambiguous, clearItemIds: clearIds, ignorePast });
+        // Fixtures of a split type go to their normal or emergency item.
+        const hits = sc.hits.map((h) => {
+          if (h.kind !== 'tag' || !inc.has(h.code) || !splits(h.code)) return h;
+          return isEmergency(h, activeMarkers) ? { ...h, code: h.code + EMERGENCY_KEY, conf: CONF_EMERGENCY } : { ...h, conf: CONF_NORMAL_SPLIT };
+        });
+        const r = await writeSheet({ ...sc, hits }, resolved, writeInc, { ambiguous, clearItemIds: clearIds, ignorePast });
         total += r.added;
         removedPast += r.removedPast;
       }
       // Sheets already open in this session must show the new counts, not a cached copy.
       await Promise.all(scans.map((sc) => getStore(sc.sheet.id).load(true)));
-      onDone(`Counted ${plural(total, 'item')} across ${plural(scans.length, 'sheet')}.${removedPast ? ` Removed ${plural(removedPast, 'earlier count')} that lay past matchlines.` : ''}${ambiguous.size ? ` ${[...ambiguous].join(', ')} ${ambiguous.size === 1 ? 'has' : 'have'} several variants: review those and move each to the right item.` : ''} Counts are unreviewed until you confirm them.`);
+      onDone(`Counted ${plural(total, 'item')} across ${plural(scans.length, 'sheet')}.${removedPast ? ` Removed ${plural(removedPast, 'earlier count')} that lay past matchlines.` : ''}${ambiguous.size ? ` ${[...ambiguous].join(', ')} ${ambiguous.size === 1 ? 'has' : 'have'} several variants: review those and move each to the right item.` : ''} ${emKeys.size ? ` Emergency fixtures were counted under their own items (${[...emKeys].map((k) => emergencyCode(k.replace(EMERGENCY_KEY, ''))).slice(0, 6).join(', ')}${emKeys.size > 6 ? '…' : ''}).` : ''} Counts are unreviewed until you confirm them.`);
     } catch (e) {
       setError(e instanceof ApiError || e instanceof Error ? e.message : 'Saving the counts failed.');
       setPhase('pick');
@@ -141,10 +191,24 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
               Leave out {plural(pastCount, 'mark')} past matchlines (on {plural(pastSheets, 'sheet')}). They belong to the neighbouring sheet.
             </Check>
           )}
+          <div className="stack" style={{ gap: 8 }}>
+            <div style={{ fontWeight: 500 }}>Emergency fixtures{emTotal > 0 ? ` · ${emTotal} found` : ''}</div>
+            <div className="muted" style={{ fontSize: 13 }}>
+              {candidates.length > 0
+                ? 'These labels beside fixtures look like emergency markings, each next to a normal version of the same label. Tick the ones that mean emergency; those fixtures are counted separately.'
+                : 'No emergency labels were found automatically. If your drawings mark emergency fixtures with a label, type it below.'}
+            </div>
+            {candidates.map((c) => (
+              <Check key={c.pattern} checked={markers.has(c.pattern)} disabled={phase === 'write'} onChange={(v) => setMarkers((cur) => { const n = new Set(cur); if (v) n.add(c.pattern); else n.delete(c.pattern); return n; })}>
+                <span><b>{c.pattern}</b> <span className="dim">({c.count} fixtures, e.g. {c.examples.slice(0, 3).join(', ')}; {c.partner ? `normal: ${c.partner}` : 'possible: starts with E, no normal version found'})</span></span>
+              </Check>
+            ))}
+            <input className="input" style={{ minHeight: 30, padding: '3px 8px' }} aria-label="Other emergency labels" placeholder="Other emergency labels, e.g. EM#, NL  (# stands for a number)" value={customText} disabled={phase === 'write'} onChange={(e) => setCustomText(e.target.value)} />
+          </div>
           {failed.length > 0 && <div className="err-text">{plural(failed.length, 'sheet')} couldn't be read: {failed.map((f) => f.sheet.number ?? `page ${f.sheet.page}`).join(', ')}.</div>}
           <div style={{ maxHeight: 340, overflow: 'auto' }}>
             <table className="table">
-              <thead><tr><th /><th>Tag</th><th>Library item</th><th className="right">Found</th></tr></thead>
+              <thead><tr><th /><th>Tag</th><th>Library item</th><th>Emergency</th><th className="right">Found</th></tr></thead>
               <tbody>
                 {rows.map((r) => {
                   const lib = byCode.get(r.code.toUpperCase());
@@ -153,11 +217,14 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
                       <td><Check checked={inc.has(r.code)} disabled={phase === 'write'} onChange={(v) => setInc((cur) => { const n = new Set(cur); if (v) n.add(r.code); else n.delete(r.code); return n; })}><span className="sr-only">Count {r.code}</span></Check></td>
                       <td style={{ fontWeight: 500 }}>{r.code}{r.kind === 'short' && <span className="tag tag-outline" style={{ marginLeft: 8 }} title="Short letter-only codes can match ordinary text. They are flagged for review.">Short code</span>}{r.kind === 'note' && <span className="tag tag-accent" style={{ marginLeft: 8 }} title="A number or letters inside a hexagon on the plan.">Drawing note</span>}{r.kind === 'room' && <span className="tag tag-neutral" style={{ marginLeft: 8 }} title="A room name sits just above it and it appears once. Tick it only if it is really a device.">Looks like a room number</span>}</td>
                       <td>{lib ? <span className="muted">{lib[0].name.length > 50 ? `${lib[0].name.slice(0, 50)}…` : lib[0].name}{lib.length > 1 ? ` (+${lib.length - 1} variant${lib.length === 2 ? '' : 's'}: flagged for review)` : ''}</span> : <input className="input" style={{ minHeight: 30, padding: '3px 8px' }} placeholder={r.kind === 'note' ? `Drawing note ${r.code}` : 'Description (optional)'} aria-label={`Description for ${r.code}`} value={names[r.code] ?? ''} disabled={phase === 'write'} onChange={(e) => setNames({ ...names, [r.code]: e.target.value })} />}</td>
+                      <td>{r.kind === 'tag' && (emByCode.get(r.code) ?? 0) > 0 && !/^XL/i.test(r.code) && (byCode.get(r.code.toUpperCase())?.length ?? 0) <= 1 ? (
+                        <Check checked={!splitOff.has(r.code)} disabled={phase === 'write'} onChange={(v) => setSplitOff((cur) => { const n = new Set(cur); if (v) n.delete(r.code); else n.add(r.code); return n; })}>{emByCode.get(r.code)} as {emergencyCode(r.code)}</Check>
+                      ) : <span className="dim">{r.kind === 'tag' && /^XL/i.test(r.code) ? 'exit sign' : ''}</span>}</td>
                       <td className="right num">{r.total}</td>
                     </tr>
                   );
                 })}
-                {rows.length === 0 && <tr><td colSpan={4} className="muted">No tags were found. Sheets drawn as pictures (scans) have no text to read.</td></tr>}
+                {rows.length === 0 && <tr><td colSpan={5} className="muted">No tags were found. Sheets drawn as pictures (scans) have no text to read.</td></tr>}
               </tbody>
             </table>
           </div>
