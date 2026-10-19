@@ -5,11 +5,12 @@ import { api, ApiError } from '../auth/api.ts';
 import { Check, Dialog, plural } from '../app/ui.tsx';
 import { extractPrims, type Prim } from '../detect/primitives.ts';
 import { extractRuns } from '../detect/pageRuns.ts';
+import { findGridBubbles, inBubble, type GridBubble } from '../detect/gridBubbles.ts';
 import { buildTemplate, darkSmall, dropCounted, findSimilar, type SymbolMatch, type Template, type TextMark } from '../detect/symbolSearch.ts';
 import { flushAll, getStore, type SheetStore } from './sheetStore.ts';
 import { loadFilePdf, pdfjs } from '../viewer/pdf.ts';
 
-interface PageShapes { prims: Prim[]; texts: TextMark[]; width: number; height: number }
+interface PageShapes { prims: Prim[]; texts: TextMark[]; bubbles: GridBubble[]; width: number; height: number }
 // Shapes of recently searched sheets, so changing the strictness does not read the drawing again.
 const cache = new Map<string, PageShapes>();
 async function shapesOf(sheet: SheetRow, file: DrawingFileRow): Promise<PageShapes> {
@@ -20,8 +21,9 @@ async function shapesOf(sheet: SheetRow, file: DrawingFileRow): Promise<PageShap
   try {
     const r = await extractPrims(page, pdfjs.OPS);
     // The letters on the page too: a device is often a plain circle or square with its letters inside ("CR", "MM").
-    const texts = (await extractRuns(page)).filter((m) => m.str.trim()).map((m) => ({ s: m.str, x: m.cx * r.width, y: m.cy * r.height }));
-    const out = { prims: darkSmall(r.prims), texts, width: r.width, height: r.height };
+    const runs = await extractRuns(page);
+    const texts = runs.filter((m) => m.str.trim()).map((m) => ({ s: m.str, x: m.cx * r.width, y: m.cy * r.height }));
+    const out = { prims: darkSmall(r.prims), texts, bubbles: findGridBubbles(r.prims, runs, r.width, r.height), width: r.width, height: r.height };
     cache.set(sheet.id, out);
     if (cache.size > 6) cache.delete(cache.keys().next().value as string);
     return out;
@@ -87,7 +89,8 @@ export default function SimilarDialog({ current, box, sheets, files, item, store
           const f = fileById.get(s.file_id);
           if (!f) continue;
           const shapes = await shapesOf(s, f);
-          const found = findSimilar(shapes.prims, t, { minScore: score, texts: shapes.texts });
+          // The letters and numbers in grid-line bubbles are not devices, however much they look like the example.
+          const found = findSimilar(shapes.prims, t, { minScore: score, texts: shapes.texts }).filter((m) => !inBubble(m.x / shapes.width, m.y / shapes.height, shapes.bubbles));
           // Already counted as this item (a second run, or hand-placed): left out.
           const { detections } = await api<{ detections: Detection[] }>(`/sheets/${s.id}/detections`);
           const counted = detections.filter((d) => d.item_type_id === item.id && d.status !== 'rejected').map((d) => ({ x: d.x * shapes.width, y: d.y * shapes.height }));

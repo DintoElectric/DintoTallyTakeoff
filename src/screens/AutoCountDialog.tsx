@@ -20,6 +20,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
   const [status, setStatus] = useState('');
   const [libraryDriven, setLibraryDriven] = useState(false);
   const [ignorePast, setIgnorePast] = useState(true);
+  const [leaveOutGrid, setLeaveOutGrid] = useState(true); // grid-line bubbles (D, F, 4, E.2 ...) are not fixtures
   // What is already counted on these sheets, so a re-run can start fresh.
   const [existing, setExisting] = useState<Map<string, { auto: number; confirmed: number; manual: number }>>(new Map());
   const [resetAuto, setResetAuto] = useState(true);
@@ -36,7 +37,11 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
     return m;
   }, [items]);
   // Anything past a matchline belongs to the neighbouring sheet and is left out (unless you turn that off).
-  const effective: SheetScan[] = useMemo(() => (ignorePast ? scans.map((sc) => ({ ...sc, hits: sc.hits.filter((h) => !h.past) })) : scans), [scans, ignorePast]);
+  const effective: SheetScan[] = useMemo(() => scans.map((sc) => ({ ...sc, hits: sc.hits.filter((h) => !(ignorePast && h.past) && !(leaveOutGrid && h.grid)) })), [scans, ignorePast, leaveOutGrid]);
+  // The grid marks that would otherwise have been counted: a tag, or a short code that is in the library.
+  const wouldCount = (h: { grid?: boolean; past?: boolean; kind: string; code: string }) => !!h.grid && !(ignorePast && h.past) && (h.kind !== 'short' || byCode.has(h.code.toUpperCase()));
+  const gridMarks = useMemo(() => scans.flatMap((sc) => sc.hits.filter(wouldCount)), [scans, ignorePast, byCode]); // eslint-disable-line react-hooks/exhaustive-deps
+  const gridSheets = useMemo(() => scans.filter((sc) => sc.hits.some(wouldCount)).length, [scans, ignorePast, byCode]); // eslint-disable-line react-hooks/exhaustive-deps
   const pastCount = useMemo(() => scans.reduce((n, sc) => n + sc.hits.filter((h) => h.past).length, 0), [scans]);
   const pastSheets = useMemo(() => scans.filter((sc) => sc.hits.some((h) => h.past)).length, [scans]);
   // Library matches first, then drawing notes, then other tags, then short codes, then room numbers.
@@ -168,7 +173,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
       for (const it of resolved.values()) clearIds.add(it.id);
       const writeInc = new Set([...inc, ...emKeys]);
       // 2. Write each sheet's detections.
-      let total = 0, removedPast = 0, removedShort = 0, erased = 0, skipped = 0;
+      let total = 0, removedPast = 0, removedGrid = 0, removedShort = 0, erased = 0, skipped = 0;
       const reset: false | 'auto' | 'all' = resetAuto ? (resetManual ? 'all' : 'auto') : false;
       let i = 0;
       for (const sc of scans) {
@@ -180,15 +185,16 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
           if (h.kind !== 'tag' || !inc.has(h.code) || !splits(h.code)) return h;
           return isEmergency(h, activeMarkers) ? { ...h, code: h.code + EMERGENCY_KEY, conf: CONF_EMERGENCY } : { ...h, conf: CONF_NORMAL_SPLIT };
         });
-        const r = await writeSheet({ ...sc, hits }, resolved, writeInc, { ambiguous, clearItemIds: clearIds, reset, ignorePast });
+        const r = await writeSheet({ ...sc, hits }, resolved, writeInc, { ambiguous, clearItemIds: clearIds, reset, ignorePast, leaveOutGrid });
         total += r.added;
         removedPast += r.removedPast;
+        removedGrid += r.removedGrid;
         removedShort += r.removedDropped;
         erased += r.erased;
       }
       // Sheets already open in this session must show the new counts, not a cached copy.
       await Promise.all(scans.map((sc) => getStore(sc.sheet.id).load(true)));
-      onDone(`Counted ${plural(total, 'item')} across ${plural(scans.length, 'sheet')}.${erased ? ` Erased ${plural(erased, 'earlier count')} first.` : ''}${skipped ? ` ${plural(skipped, 'sheet')} could not be read and was left as it was.` : ''}${removedPast ? ` Removed ${plural(removedPast, 'earlier count')} that lay past matchlines.` : ''}${removedShort ? ` Removed ${plural(removedShort, 'earlier short-code count')}.` : ''}${ambiguous.size ? ` ${[...ambiguous].join(', ')} ${ambiguous.size === 1 ? 'has' : 'have'} several variants: review those and move each to the right item.` : ''} ${emKeys.size ? ` Emergency fixtures were counted under their own items (${[...emKeys].map((k) => emergencyCode(k.replace(EMERGENCY_KEY, ''), activeMarkers)).slice(0, 6).join(', ')}${emKeys.size > 6 ? '…' : ''}).` : ''} Counts are unreviewed until you confirm them.`);
+      onDone(`Counted ${plural(total, 'item')} across ${plural(scans.length, 'sheet')}.${erased ? ` Erased ${plural(erased, 'earlier count')} first.` : ''}${skipped ? ` ${plural(skipped, 'sheet')} could not be read and was left as it was.` : ''}${removedGrid ? ` Removed ${plural(removedGrid, 'earlier count')} that sat on grid-line bubbles.` : ''}${removedPast ? ` Removed ${plural(removedPast, 'earlier count')} that lay past matchlines.` : ''}${removedShort ? ` Removed ${plural(removedShort, 'earlier short-code count')}.` : ''}${ambiguous.size ? ` ${[...ambiguous].join(', ')} ${ambiguous.size === 1 ? 'has' : 'have'} several variants: review those and move each to the right item.` : ''} ${emKeys.size ? ` Emergency fixtures were counted under their own items (${[...emKeys].map((k) => emergencyCode(k.replace(EMERGENCY_KEY, ''), activeMarkers)).slice(0, 6).join(', ')}${emKeys.size > 6 ? '…' : ''}).` : ''} Counts are unreviewed until you confirm them.`);
     } catch (e) {
       setError(e instanceof ApiError || e instanceof Error ? e.message : 'Saving the counts failed.');
       setPhase('pick');
@@ -257,6 +263,11 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
                   </Check>
                 )}
               </div>
+            )}
+            {(gridMarks.length > 0 || !leaveOutGrid) && (
+              <Check checked={leaveOutGrid} disabled={phase === 'write'} onChange={setLeaveOutGrid}>
+                Leave out grid-line bubbles ({plural(gridMarks.length, 'mark')}: {[...new Set(gridMarks.map((h) => h.code))].slice(0, 6).join(', ')}{new Set(gridMarks.map((h) => h.code)).size > 6 ? '…' : ''}). Removes earlier counts on them.
+              </Check>
             )}
             {pastCount > 0 && (
             <Check checked={ignorePast} disabled={phase === 'write'} onChange={setIgnorePast}>
