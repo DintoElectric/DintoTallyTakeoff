@@ -182,3 +182,12 @@ th.right { text-align: right; }
 .item-card .ic-name { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item-card .btns { display: flex; flex-wrap: wrap; gap: 6px; }
 .item-card .btns .btn { min-height: 26px; padding: 1px 9px; font-size: 12px; }
+
+/* Auto-count: the tags to count come first and take the room; the options sit below, compact and scrollable */
+.dialog.wide.ac { width: min(720px, 100%); height: min(800px, 92dvh); padding: 18px 22px; gap: 12px; overflow: hidden; display: flex; flex-direction: column; }
+.ac .ac-table { flex: 1 1 0; min-height: 130px; overflow: auto; }
+.ac .ac-options { flex: none; max-height: 42%; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding-top: 2px; border-top: 1px solid var(--color-divider); }
+.ac .dialog-actions { flex: none; }
+.ac .ac-head { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; color: inherit; font: inherit; cursor: pointer; text-align: left; padding: 4px 0; }
+.ac .ac-caret { width: 10px; color: var(--color-neutral-500); }
+.ac .ac-section { display: flex; flex-direction: column; }
