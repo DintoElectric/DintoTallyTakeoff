@@ -117,7 +117,7 @@ th.right { text-align: right; }
 @media (pointer: coarse) { .tool { width: 44px; height: 44px; } .btn { min-height: 44px; } .toolbar { height: 56px; } }
 .canvas-wrap { flex: 1; position: relative; overflow: hidden; background: radial-gradient(circle at 40% 30%, var(--color-surface), var(--color-bg) 70%); }
 .viewport { position: absolute; inset: 0; touch-action: none; overflow: hidden; user-select: none; -webkit-user-select: none; }
-.viewport.tool-add, .viewport.tool-box, .viewport.tool-zone, .viewport.tool-area { cursor: crosshair; }
+.viewport.tool-add, .viewport.tool-box, .viewport.tool-zone, .viewport.tool-area, .viewport.tool-similar { cursor: crosshair; }
 .viewport.tool-erase { cursor: not-allowed; }
 .page-layer { position: absolute; left: 0; top: 0; transform-origin: 0 0; box-shadow: var(--shadow-md); background: var(--color-neutral-100); }
 .page-layer canvas { position: absolute; left: 0; top: 0; display: block; }
