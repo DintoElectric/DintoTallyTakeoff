@@ -656,47 +656,6 @@ test('schedule sheets: titled ones are marked, plans with only a schedule on the
     ['SITE LIGHTING SCHEDULE', 'AREA A EQUIPMENT SCHEDULE (by room)']);
 });
 
-import { darkSmall, dropCounted, findSimilar, symbolSignature, tightTemplate } from '../src/detect/symbolSearch.ts';
-// A fire-alarm-style symbol: a circle, an S curve and two small ticks, drawn at several places among noise.
-function symbolPage() {
-  const P = (x0: number, y0: number, x1: number, y1: number, n: number, fill = false, lum = 0): PrimT => ({ x0, y0, x1, y1, n, fill, lum });
-  const sym = (ox: number, oy: number): PrimT[] => [P(ox, oy + 8, ox + 15.6, oy + 23.4, 19), P(ox + 6.4, oy + 10.4, ox + 7.6, oy + 15.7, 5), P(ox + 7.6, oy + 15.7, ox + 8.8, oy + 21, 5), P(ox + 6.9, oy, ox + 6.9, oy + 2.3, 2), P(ox + 9.3, oy, ox + 9.3, oy + 6, 2)];
-  const prims: PrimT[] = [];
-  const at = [[100, 100], [400, 120], [250, 500], [700, 640]];
-  for (const [x, y] of at) prims.push(...sym(x, y));
-  prims.push(...sym(100, 100));                                                    // CAD often draws a shape twice on top of itself
-  prims.push(P(0, 300, 900, 300, 2), P(50, 0, 50, 900, 2));                        // long wall and grid lines: not part of any symbol
-  prims.push(P(110, 90, 118, 98, 2, false, 0.6), P(300, 300, 340, 340, 30, true, 0.7)); // gray hatching and a pale fill: ignored
-  prims.push(P(500, 50, 515.6, 65.4, 19));                                         // a lone circle of the same size, without the S: not the symbol
-  prims.push(P(402, 118, 404, 119, 2), P(398, 125, 399, 126, 2));                  // stray marks next to the second symbol
-  return prims;
-}
-test('similar symbols: every copy of a boxed symbol is found, and nothing that only looks a bit like it', () => {
-  const prims = symbolPage();
-  const t = tightTemplate(prims, { x0: 95, y0: 95, x1: 125, y1: 130 })!;           // the estimator's loose box around the first one
-  assert.ok(t && t.sig.length === 5, `5 shapes, not ${t?.sig.length}`);           // the doubled-up shape counts once
-  assert.ok(Math.abs(t.w - 15.6) < 0.2 && Math.abs(t.h - 23.4) < 0.2);              // the box shrank to the symbol
-  const found = findSimilar(darkSmall(prims), t.sig, t.w, t.h);
-  assert.equal(found.length, 4);
-  assert.deepEqual(found.map((m) => [Math.round(m.x), Math.round(m.y)]).sort((a, b) => a[0] - b[0]), [[108, 112], [408, 132], [258, 512], [708, 652]].sort((a, b) => a[0] - b[0]));
-  assert.ok(found.every((m) => m.score >= 0.85));
-});
-test('similar symbols: a symbol with a part missing scores lower and needs a looser setting; a bare circle is no match', () => {
-  const prims = symbolPage().filter((p) => !(p.x0 > 395 && p.x0 < 420 && p.n === 5));  // the S curve removed from the second symbol
-  const t = tightTemplate(prims, { x0: 95, y0: 95, x1: 125, y1: 130 })!;
-  const strict = findSimilar(darkSmall(prims), t.sig, t.w, t.h, { minScore: 0.85 });
-  const loose = findSimilar(darkSmall(prims), t.sig, t.w, t.h, { minScore: 0.6 });
-  assert.equal(strict.length, 3); assert.equal(loose.length, 4);
-  // one shape alone (a circle) is too generic to search for
-  assert.deepEqual(findSimilar(darkSmall(prims), [{ x0: 0, y0: 0, x1: 15.6, y1: 15.4, n: 19, fill: false }], 15.6, 15.4), []);
-  assert.equal(tightTemplate(prims, { x0: 800, y0: 800, x1: 850, y1: 850 }), null);            // an empty box
-});
-test('similar symbols: counts that are already there are not added twice', () => {
-  const m = [{ x: 108, y: 112, score: 1 }, { x: 408, y: 132, score: 1 }, { x: 258, y: 512, score: 1 }];
-  assert.deepEqual(dropCounted(m, [{ x: 109, y: 111 }], 9).map((q) => q.x), [408, 258]);
-  assert.equal(dropCounted(m, [], 9).length, 3);
-  assert.equal(symbolSignature([], { x0: 0, y0: 0, x1: 10, y1: 10 }).length, 0);
-});
 
 import { isCountableDiscipline, legendCategory, parseLegendPage } from '../src/detect/legendParse.ts';
 function legendPage() {
@@ -785,4 +744,62 @@ test('item search: tags are found however they are typed, codes rank above descr
   const mixed = [it('X1', 'Has an ex in its words'), it('EX-1', 'Exit sign')];
   assert.deepEqual(searchItems('ex', mixed).map((i) => i.code), ['EX-1', 'X1']);
   assert.deepEqual(searchItems('lights', [it('A', 'x')], () => 'Lights').map((i) => i.code), ['A']);   // the category too
+});
+
+import { buildTemplate, darkSmall, dropCounted, findSimilar, orientations } from '../src/detect/symbolSearch.ts';
+const P = (x0: number, y0: number, x1: number, y1: number, n: number, fill = false, lum = 0): PrimT => ({ x0, y0, x1, y1, n, fill, lum });
+// Devices as drawn on the plans: a square of four separate lines, a circle, and a multi-part symbol.
+const square = (ox: number, oy: number, size = 15.7): PrimT[] => [P(ox, oy, ox + size, oy, 2), P(ox, oy + size, ox + size, oy + size, 2), P(ox, oy, ox, oy + size, 2), P(ox + size, oy, ox + size, oy + size, 2)];
+const circle = (ox: number, oy: number): PrimT[] => [P(ox, oy, ox + 13.5, oy + 13.5, 18)];
+const detector = (ox: number, oy: number): PrimT[] => [P(ox, oy + 8, ox + 15.6, oy + 23.4, 19), P(ox + 6.4, oy + 10.4, ox + 7.6, oy + 15.7, 5), P(ox + 7.6, oy + 15.7, ox + 8.8, oy + 21, 5), P(ox + 6.9, oy, ox + 6.9, oy + 2.3, 2), P(ox + 9.3, oy, ox + 9.3, oy + 6, 2)];
+const T_ = (s: string, x: number, y: number) => ({ s, x, y });
+
+test('similar symbols, no letters: a box that is loose, tight or off-centre finds every copy, and nothing that only looks a bit like it', () => {
+  const prims: PrimT[] = [];
+  for (const [x, y] of [[100, 100], [400, 120], [250, 500], [700, 640]]) prims.push(...detector(x, y));
+  prims.push(...detector(100, 100));                                                  // CAD draws a shape twice, on top of itself
+  prims.push(P(0, 300, 900, 300, 2), P(50, 0, 50, 900, 2), P(110, 90, 118, 98, 2, false, 0.6), P(500, 50, 515.6, 65.4, 19)); // walls, gray hatching, a bare circle
+  const dark = darkSmall(prims);
+  for (const box of [{ x0: 98, y0: 98, x1: 118, y1: 126 }, { x0: 90, y0: 90, x1: 130, y1: 140 }, { x0: 104, y0: 104, x1: 128, y1: 130 }]) {
+    const t = buildTemplate(dark, [], box)!;
+    assert.ok(t.sig.length >= 3);                                                      // an off-centre box can leave out the two small ticks above the circle
+    assert.equal(findSimilar(dark, t).length, 4);
+  }
+  assert.deepEqual(findSimilar(dark, buildTemplate(dark, [], { x0: 498, y0: 48, x1: 518, y1: 68 })!), []);      // a lone circle with no letters: too generic to search for
+  assert.equal(buildTemplate(dark, [], { x0: 800, y0: 800, x1: 850, y1: 850 }), null);                          // an empty box
+});
+test('similar symbols, letters: a plain square is told apart by its letters, and a neighbour cannot lend its letters', () => {
+  const prims = [...square(100, 100), ...square(300, 100), ...square(500, 100), ...square(100, 300), ...square(300, 300), ...square(120, 130)]; // the last is unlabelled, right beside the first
+  const texts = [T_('CR', 108, 108), T_('CR', 308, 108), T_('CR', 508, 108), T_('DC', 108, 308), T_('DC', 308, 308)];
+  const t = buildTemplate(darkSmall(prims), texts, { x0: 92, y0: 92, x1: 124, y1: 124 })!;     // a loose box around the first CR
+  assert.deepEqual(t.texts, ['CR']); assert.equal(t.inside, true);
+  const found = findSimilar(darkSmall(prims), t, { texts });
+  assert.deepEqual(found.map((m) => [Math.round(m.x), Math.round(m.y)]), [[108, 108], [308, 108], [508, 108]]);   // not the DC squares, not the unlabelled one
+  const dc = buildTemplate(darkSmall(prims), texts, { x0: 92, y0: 292, x1: 124, y1: 324 })!;
+  assert.equal(findSimilar(darkSmall(prims), dc, { texts }).length, 2);
+});
+test('similar symbols, letters beside the shape: a circle with its letters set below it', () => {
+  const prims = [...circle(100, 100), ...circle(300, 100), ...circle(500, 100)];
+  const texts = [T_('MM', 107, 118), T_('MM', 307, 118), T_('T', 507, 118), T_('1', 301, 116)];   // the second has a nearer, different label as well; the third is a different device
+  const t = buildTemplate(darkSmall(prims), texts, { x0: 90, y0: 90, x1: 130, y1: 130 })!;
+  assert.deepEqual(t.texts, ['MM']); assert.equal(t.inside, false);                                // learned the letters beside it, not inside
+  assert.equal(findSimilar(darkSmall(prims), t, { texts }).length, 2);                              // the T circle is a different device
+});
+test('similar symbols: the same device drawn turned or mirrored is found', () => {
+  const asym = (ox: number, oy: number, turned: boolean): PrimT[] => turned
+    ? [P(ox, oy, ox + 20, oy + 10, 8), P(ox + 2, oy + 2, ox + 6, oy + 8, 4, true)]   // a 10 x 20 box turned to 20 x 10, its filled wedge now at the left
+    : [P(ox, oy, ox + 10, oy + 20, 8), P(ox + 2, oy + 2, ox + 8, oy + 6, 4, true)];  // a 10 x 20 box with a filled wedge at the top
+  const prims = [...asym(100, 100, false), ...asym(300, 100, true), ...asym(500, 100, false)];
+  const t = buildTemplate(darkSmall(prims), [], { x0: 95, y0: 95, x1: 115, y1: 125 })!;
+  assert.equal(findSimilar(darkSmall(prims), t).length, 3);
+  assert.ok(orientations(t).length >= 4);
+});
+test('similar symbols: a box holding only a tag finds that tag; several pieces of text are refused; counted ones are skipped', () => {
+  const texts = [T_('TS', 100, 100), T_('TS', 300, 100), T_('CR', 500, 100)];
+  const t = buildTemplate([], texts, { x0: 95, y0: 95, x1: 115, y1: 108 })!;
+  assert.deepEqual([t.sig.length, t.texts], [0, ['TS']]);
+  assert.equal(findSimilar([], t, { texts }).length, 2);
+  assert.deepEqual(findSimilar([], buildTemplate([], texts, { x0: 95, y0: 95, x1: 520, y1: 108 })!, { texts }), []);
+  const m = [{ x: 108, y: 112, score: 1 }, { x: 408, y: 132, score: 1 }, { x: 258, y: 512, score: 1 }];
+  assert.deepEqual(dropCounted(m, [{ x: 109, y: 111 }], 9).map((q) => q.x), [408, 258]);
 });
