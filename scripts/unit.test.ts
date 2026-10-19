@@ -764,3 +764,25 @@ test('stepping through an item\'s counts wraps round and starts sensibly', () =>
   assert.equal(stepIndex(3, 0, -1), 2); assert.equal(stepIndex(3, 2, -1), 1);     // back, wrapping
   assert.equal(stepIndex(1, 0, 1), 0); assert.equal(stepIndex(0, -1, 1), -1);
 });
+
+import { itemRank, searchItems } from '../src/app/itemSearch.ts';
+test('item search: tags are found however they are typed, codes rank above descriptions, words can come from anywhere', () => {
+  const it = (code: string, name: string, spec: string | null = null) => ({ code, name, spec });
+  const items = [it('BC-14', "4' strip, chain hung"), it('BC-18', "8' strip, chain hung"), it('BS-8', 'Surface mounted strip light'), it('PR-48', 'Pendant ring', 'LUMENWERX'), it('EX-1', 'Exit sign, single sided'), it('CR', 'Card reader'), it('D9', "4' surface/wet")];
+  const codes = (q: string) => searchItems(q, items).map((i) => i.code);
+  assert.deepEqual(codes('bc14'), ['BC-14']);
+  assert.deepEqual(codes('BC 14'), ['BC-14']);
+  assert.deepEqual(codes('bc-14'), ['BC-14']);
+  assert.deepEqual(codes('bc'), ['BC-14', 'BC-18']);                       // codes starting with it, in order
+  assert.deepEqual(codes('strip'), ['BC-14', 'BC-18', 'BS-8']);              // a word in the description
+  assert.deepEqual(codes('exit single'), ['EX-1']);                          // several words, any order, all must be there
+  assert.deepEqual(codes('lumenwerx'), ['PR-48']);                           // the spec counts too
+  assert.deepEqual(codes('cr'), ['CR']);
+  assert.equal(codes('zzz').length, 0);
+  assert.equal(searchItems('   ', items).length, items.length);              // nothing typed: everything
+  assert.equal(itemRank('d9', items[6]), 0); assert.equal(itemRank('d', items[6]), 1);
+  // a code match beats a description match for the same text
+  const mixed = [it('X1', 'Has an ex in its words'), it('EX-1', 'Exit sign')];
+  assert.deepEqual(searchItems('ex', mixed).map((i) => i.code), ['EX-1', 'X1']);
+  assert.deepEqual(searchItems('lights', [it('A', 'x')], () => 'Lights').map((i) => i.code), ['A']);   // the category too
+});
