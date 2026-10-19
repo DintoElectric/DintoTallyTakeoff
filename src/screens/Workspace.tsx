@@ -22,6 +22,7 @@ import AutoCountDialog from './AutoCountDialog.tsx';
 import { ItemDialog } from './ItemDialog.tsx';
 import SimilarDialog from './SimilarDialog.tsx';
 import { stepIndex } from '../app/step.ts';
+import { singleItemOf } from '../app/selection.ts';
 import { searchItems } from '../app/itemSearch.ts';
 import ExportDialog from './ExportDialog.tsx';
 
@@ -405,6 +406,22 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const itemSheetCount = itemOtherSheets.length + (itemDets.length > 0 ? 1 : 0);
   useEffect(() => { if (scrollTo) document.getElementById(`item-row-${scrollTo.id}`)?.scrollIntoView({ block: 'nearest' }); }, [scrollTo]);
 
+  // Selecting counts, however it is done (a click, a box, Next ▶, Select all here), shows their item in the panel with its
+  // actions. If every selected count is of one item, that item becomes the active one.
+  useEffect(() => {
+    if (selected.size === 0 || reviewing) return;
+    const itemId = singleItemOf(snap.dets, selected);
+    if (!itemId) return;
+    if (!itemById.has(itemId)) {
+      toast("That count is for an item that is not in this project's item library, so it has no details to show. Use “Change to…” to give it one that is.");
+      return;
+    }
+    setActiveItemId(itemId);
+    setCardOpen(true);
+    setScrollTo({ id: itemId, n: Date.now() });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
+
   const stepItem = (dir: 1 | -1) => {
     if (itemDets.length === 0) return toast('There are none of this item on this sheet.');
     const next = itemDets[stepIndex(itemDets.length, itemDets.findIndex((d) => selected.has(d.id)), dir)];
@@ -494,12 +511,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                 ref={viewRef} page={page} pageW={pageDims.w} pageH={pageDims.h} markers={markers} styles={styles}
                 activeItemId={activeItemId} selected={selected} tool={tool} readOnly={readOnly}
                 onPlace={place}
-                onPick={(id, add) => {
-                  setSelected((cur) => { if (!id) return add ? cur : new Set(); const n = new Set(add ? cur : []); if (add && cur.has(id)) n.delete(id); else n.add(id); return n; });
-                  // Clicking a count makes its item the active one, shows it in the panel, and offers what you can do with it.
-                  const d = id && !add ? snap.dets.find((x) => x.id === id) : null;
-                  if (d) { setActiveItemId(d.item_type_id); setCardOpen(true); setScrollTo({ id: d.item_type_id, n: Date.now() }); }
-                }}
+                onPick={(id, add) => setSelected((cur) => { if (!id) return add ? cur : new Set(); const n = new Set(add ? cur : []); if (add && cur.has(id)) n.delete(id); else n.add(id); return n; })}
                 onErase={(id) => store?.erase([id])}
                 onBox={(ids, add) => setSelected((cur) => new Set(add ? [...cur, ...ids] : ids))}
                 onZoom={setZoomPct}
