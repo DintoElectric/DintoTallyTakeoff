@@ -122,7 +122,7 @@ export function Symbol({ shape, glyph, active, big }: { shape: MarkerShape; glyp
   );
 }
 
-export function Dialog({ title, onClose, children, wide }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean }) {
+export function Dialog({ title, onClose, children, wide, className }: { title: string; onClose: () => void; children: ReactNode; wide?: boolean; className?: string }) {
   useEffect(() => {
     const on = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', on);
@@ -130,7 +130,7 @@ export function Dialog({ title, onClose, children, wide }: { title: string; onCl
   }, [onClose]);
   return (
     <div className="dialog-backdrop" style={{ zIndex: 50 }} onPointerDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className={`dialog${wide ? ' wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
+      <div className={`dialog${wide ? ' wide' : ''}${className ? ` ${className}` : ''}`} role="dialog" aria-modal="true" aria-label={title}>
         {children}
       </div>
     </div>
