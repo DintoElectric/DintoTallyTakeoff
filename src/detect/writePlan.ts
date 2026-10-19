@@ -3,6 +3,7 @@
 import type { Detection } from '../../shared/types.ts';
 import { inZones, type Zone } from '../../shared/zones.ts';
 import type { TagHit } from './tagScan.ts';
+import { inBubble, type GridBubble } from './gridBubbles.ts';
 
 export const CONF_TAG = 0.98;      // exact tag text or a drawing note: not flagged
 export const CONF_SHORT = 0.7;     // short letter-only codes: always flagged for review
@@ -26,15 +27,18 @@ export interface PlanInput {
   /** Start fresh: erase every earlier automatic count on the sheet ('auto'), or every count including hand-placed ones ('all'). */
   reset?: false | 'auto' | 'all';
   ignorePast: boolean;
+  /** Leave out the lettered and numbered grid-line bubbles: no new counts on them, and earlier automatic counts on them go. */
+  leaveOutGrid?: boolean;
+  bubbles?: GridBubble[];
   newId: () => string;
 }
 export type Op = { op: 'delete'; id: string } | { op: 'add'; detection: Record<string, unknown> };
-export interface Plan { ops: Op[]; added: number; removedPast: number; removedDropped: number; erased: number }
+export interface Plan { ops: Op[]; added: number; removedPast: number; removedDropped: number; removedGrid: number; erased: number }
 
 export function planSheetWrite(p: PlanInput): Plan {
   const ops: Op[] = [];
-  let removedPast = 0, removedDropped = 0, erased = 0;
-  const live = p.hits.filter((h) => !(p.ignorePast && h.past) && p.itemIdByCode.has(h.code));
+  let removedPast = 0, removedDropped = 0, removedGrid = 0, erased = 0;
+  const live = p.hits.filter((h) => !(p.ignorePast && h.past) && !(p.leaveOutGrid && h.grid) && p.itemIdByCode.has(h.code));
   const tickedItems = new Set(p.itemIdByCode.values());
   const keep: Detection[] = [];
   for (const d of p.existing) {
@@ -45,10 +49,15 @@ export function planSheetWrite(p: PlanInput): Plan {
       continue;
     }
     const pastNow = p.ignorePast && d.source === 'auto' && d.status !== 'rejected' && inZones(d.x, d.y, p.zones);
+    const onGrid = !!p.leaveOutGrid && d.source === 'auto' && d.status !== 'rejected' && !!p.bubbles && inBubble(d.x, d.y, p.bubbles);
     if (p.dropItemIds?.has(d.item_type_id) && d.source === 'auto' && d.status !== 'rejected') {
       // Short codes are not counted any more; earlier automatic counts of them go. Manual counts are never touched.
       ops.push({ op: 'delete', id: d.id });
       removedDropped++;
+    } else if (onGrid) {
+      // An earlier automatic count sitting on a grid bubble (a column or row letter or number), even a confirmed one. Manual counts are never touched.
+      ops.push({ op: 'delete', id: d.id });
+      removedGrid++;
     } else if (pastNow) {
       // An earlier automatic count inside an exclusion zone (past a matchline, or outlined by hand), even a confirmed one. Manual counts are never touched.
       ops.push({ op: 'delete', id: d.id });
@@ -70,5 +79,5 @@ export function planSheetWrite(p: PlanInput): Plan {
     } });
     added++;
   }
-  return { ops, added, removedPast, removedDropped, erased };
+  return { ops, added, removedPast, removedDropped, removedGrid, erased };
 }

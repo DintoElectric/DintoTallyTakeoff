@@ -19,6 +19,7 @@ export type TagKind = 'tag' | 'short' | 'room' | 'note';
 export interface TagHit {
   code: string; x: number; y: number; kind: TagKind; h?: number;
   past?: boolean;      // beyond a matchline
+  grid?: boolean;      // inside a grid-line bubble (the lettered or numbered circle at the end of a column or row line)
   labels?: string[];   // printed labels owned by this fixture tag (circuit, zone, panel)
   suffixes?: string[]; // short words written after the tag on its own line ("BR-22 LS" -> LS)
   conf?: number;       // confidence override used when the count is saved
