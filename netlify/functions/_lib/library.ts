@@ -51,3 +51,19 @@ export async function copyLibrary(q: Q, fromProject: string, toProject: string, 
   }
   return { copied, skipped };
 }
+
+/**
+ * Deletes an item's counts: on every sheet, or on one sheet. `autoOnly` keeps the counts placed by hand.
+ * Each affected sheet's version moves on, so anyone with that sheet open picks the change up.
+ */
+export async function clearItemCounts(q: Q, itemId: string, opts: { sheetId?: string | null; autoOnly?: boolean } = {}): Promise<{ deleted: number; sheets: number }> {
+  const sheetId = opts.sheetId ?? null;
+  const autoOnly = opts.autoOnly === true;
+  const gone = await q(
+    `delete from detections
+      where item_type_id = $1 and ($2::uuid is null or sheet_id = $2::uuid) and ($3::boolean = false or source = 'auto')
+      returning sheet_id`, [itemId, sheetId, autoOnly]);
+  const sheets = [...new Set(gone.rows.map((r) => r.sheet_id as string))];
+  for (const sid of sheets) await q(`update sheets set version = version + 1 where id = $1`, [sid]);
+  return { deleted: gone.rows.length, sheets: sheets.length };
+}
