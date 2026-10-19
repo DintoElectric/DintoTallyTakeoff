@@ -22,6 +22,7 @@ export interface ScheduleRow {
   spec?: string;            // ready-made spec line
   count?: number;           // how many the schedule lists (devices, outlets); shown in the review, not stored
   preselect?: boolean;      // false: listed in the review but not ticked (a legend of another discipline)
+  lengthFt?: number;        // feet per fixture, when set by a reader (otherwise worked out from the description)
 }
 
 interface Cell { s: string; x0: number; x1: number; cx: number; y: number; h: number }
