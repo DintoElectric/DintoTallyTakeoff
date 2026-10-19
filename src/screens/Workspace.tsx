@@ -7,12 +7,12 @@ import {
 import type { CategoryRow, CountRow, DrawingFileRow, ItemTypeRow, ProjectRow, SheetRow } from '../../shared/types.ts';
 import { api, ApiError } from '../auth/api.ts';
 import { useAuth } from '../auth/AuthProvider.tsx';
-import { Seg, Symbol, TopBar, plural, useToast } from '../app/ui.tsx';
+import { Check, Dialog, Seg, Symbol, TopBar, plural, useToast } from '../app/ui.tsx';
 import { navigate, paths } from '../app/router.ts';
 import { useFetch } from '../app/useFetch.ts';
 import { DrawingView, type DrawingViewHandle, type ItemStyle, type MarkerData, type Tool } from '../viewer/DrawingView.tsx';
 import { loadFilePdf } from '../viewer/pdf.ts';
-import { getStore, useSheetStore } from './sheetStore.ts';
+import { flushAll, getStore, useSheetStore } from './sheetStore.ts';
 import { extractRuns } from '../detect/pageRuns.ts';
 import { findMatchlines, zonesFromMatchlines } from '../detect/matchlines.ts';
 import { inZones, type Zone, type ZonePoint } from '../../shared/zones.ts';
@@ -21,6 +21,7 @@ import AreaNameDialog from './AreaNameDialog.tsx';
 import AutoCountDialog from './AutoCountDialog.tsx';
 import { ItemDialog } from './ItemDialog.tsx';
 import SimilarDialog from './SimilarDialog.tsx';
+import { stepIndex } from '../app/step.ts';
 import ExportDialog from './ExportDialog.tsx';
 
 const STATUS_DOT = { not_counted: 'not_counted', needs_review: 'needs_review', reviewed: 'reviewed' } as const;
@@ -54,6 +55,10 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [activeItemId, setActiveItemId] = useState<string | null>(null);
   const [scope, setScope] = useState<'sheet' | 'all'>('sheet');
   const [onlyActive, setOnlyActive] = useState(false);
+  const [cardOpen, setCardOpen] = useState(false);                       // the active item's details and actions, in the panel
+  const [scrollTo, setScrollTo] = useState<{ id: string; n: number } | null>(null); // bring an item's row into view after a marker is clicked
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [keepHand, setKeepHand] = useState(false);
   const [hideMarkers, setHideMarkers] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [zoomPct, setZoomPct] = useState(100);
@@ -372,6 +377,41 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const saveText = snap.save.kind === 'saving' ? 'Saving…' : snap.save.kind === 'error' ? (snap.save.message ?? "Couldn't save. Retrying…") : snap.save.at ? `Saved ${fmtTime(snap.save.at)}` : '';
   const editorHint = snap.lastEditor && snap.lastEditor.id !== me?.id && Date.now() - new Date(snap.lastEditor.at).getTime() < 5 * 60 * 1000 ? `Also open: ${snap.lastEditor.name}` : null;
   const activeItem = activeItemId ? itemById.get(activeItemId) : null;
+
+  // The active item's counts: on this sheet (in reading order, for stepping through them) and in the whole project.
+  const itemDets = useMemo(
+    () => (activeItemId ? snap.dets.filter((d) => d.item_type_id === activeItemId && d.status !== 'rejected').sort((a, b) => a.y - b.y || a.x - b.x) : []),
+    [snap.dets, activeItemId],
+  );
+  const itemOtherSheets = useMemo(() => otherSheetCounts.filter((c) => c.item_type_id === activeItemId && c.n > 0), [otherSheetCounts, activeItemId]);
+  const itemInProject = itemDets.length + itemOtherSheets.reduce((n, c) => n + c.n, 0);
+  const itemSheetCount = itemOtherSheets.length + (itemDets.length > 0 ? 1 : 0);
+  useEffect(() => { if (scrollTo) document.getElementById(`item-row-${scrollTo.id}`)?.scrollIntoView({ block: 'nearest' }); }, [scrollTo]);
+
+  const stepItem = (dir: 1 | -1) => {
+    if (itemDets.length === 0) return toast('There are none of this item on this sheet.');
+    const next = itemDets[stepIndex(itemDets.length, itemDets.findIndex((d) => selected.has(d.id)), dir)];
+    setSelected(new Set([next.id]));
+    viewRef.current?.centerOn(next.x, next.y, 6);
+  };
+  const deleteItemOnSheet = () => {
+    if (!store || readOnly || !activeItem || itemDets.length === 0) return;
+    store.erase(itemDets.map((d) => d.id)); // one step: Ctrl+Z brings them all back
+    setSelected(new Set());
+    toast(`${plural(itemDets.length, 'count')} of ${activeItem.code} deleted from this sheet. Ctrl+Z brings them back.`);
+  };
+  async function deleteItemEverywhere() {
+    if (!activeItem) return;
+    try {
+      await flushAll(); // the sheet's waiting edits go first, so they are not lost or left behind
+      const r = await api<{ deleted: number; sheets: number }>(`/items/${activeItem.id}/clear`, { body: { auto_only: keepHand } });
+      setConfirmClear(false);
+      setSelected(new Set());
+      await store?.load(true);
+      void countsQ.reload(); void sheetsQ.reload(); void areaTotalsQ.reload();
+      toast(`${plural(r.deleted, 'count')} of ${activeItem.code} deleted from ${plural(r.sheets, 'sheet')}.`);
+    } catch (e) { toast(e instanceof ApiError ? e.message : 'Could not delete those counts.'); }
+  }
   const sheetLabel = sheet ? [sheet.number, sheet.title].filter(Boolean).join(' · ') || `Page ${sheet.page}` : '…';
 
   return (
@@ -437,7 +477,12 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                 ref={viewRef} page={page} pageW={pageDims.w} pageH={pageDims.h} markers={markers} styles={styles}
                 activeItemId={activeItemId} selected={selected} tool={tool} readOnly={readOnly}
                 onPlace={place}
-                onPick={(id, add) => setSelected((cur) => { if (!id) return add ? cur : new Set(); const n = new Set(add ? cur : []); if (add && cur.has(id)) n.delete(id); else n.add(id); return n; })}
+                onPick={(id, add) => {
+                  setSelected((cur) => { if (!id) return add ? cur : new Set(); const n = new Set(add ? cur : []); if (add && cur.has(id)) n.delete(id); else n.add(id); return n; });
+                  // Clicking a count makes its item the active one, shows it in the panel, and offers what you can do with it.
+                  const d = id && !add ? snap.dets.find((x) => x.id === id) : null;
+                  if (d) { setActiveItemId(d.item_type_id); setCardOpen(true); setScrollTo({ id: d.item_type_id, n: Date.now() }); }
+                }}
                 onErase={(id) => store?.erase([id])}
                 onBox={(ids, add) => setSelected((cur) => new Set(add ? [...cur, ...ids] : ids))}
                 onZoom={setZoomPct}
@@ -555,6 +600,29 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             {tool === 'add' && !activeItem && items.length > 0 && <div className="hint">Pick an item type below, then click the drawing.</div>}
           </div>
           <div className="items">
+            {cardOpen && activeItem && (
+              <div className="item-card" role="region" aria-label={`${activeItem.code} details`}>
+                <div className="row-between">
+                  <span className="row" style={{ gap: 8, minWidth: 0 }}><Symbol shape={activeItem.marker_shape} glyph={activeItem.marker_glyph} /><b>{activeItem.code}</b></span>
+                  <button className="btn btn-ghost" style={{ padding: '0 6px', minHeight: 24 }} onClick={() => setCardOpen(false)} aria-label="Close details">✕</button>
+                </div>
+                <div style={{ fontSize: 13 }}>{activeItem.name}</div>
+                {activeItem.spec && <div className="dim" style={{ fontSize: 12 }}>{activeItem.spec}</div>}
+                <div className="dim num" style={{ fontSize: 12 }}>{itemDets.length} on this sheet · {plural(itemInProject, 'count')} on {plural(itemSheetCount, 'sheet')}</div>
+                <div className="btns">
+                  <button className="btn btn-secondary" aria-pressed={onlyActive} onClick={() => setOnlyActive(!onlyActive)}>{onlyActive ? 'Show all items' : 'Show only this item'}</button>
+                  <button className="btn btn-secondary" disabled={itemDets.length === 0} onClick={() => stepItem(-1)} aria-label="Previous one on this sheet">◀</button>
+                  <button className="btn btn-secondary" disabled={itemDets.length === 0} onClick={() => stepItem(1)}>Next ▶</button>
+                  <button className="btn btn-secondary" disabled={itemDets.length === 0} onClick={() => setSelected(new Set(itemDets.map((d) => d.id)))}>Select all here</button>
+                </div>
+                {!readOnly && (
+                  <div className="btns">
+                    <button className="btn btn-secondary" disabled={itemDets.length === 0} onClick={deleteItemOnSheet}>Delete on this sheet</button>
+                    <button className="btn btn-secondary" disabled={itemInProject === 0} onClick={() => setConfirmClear(true)}>Delete everywhere…</button>
+                  </div>
+                )}
+              </div>
+            )}
             {itemsQ.loading && !itemsQ.data && <div className="muted" style={{ padding: 12 }}><span className="spinner" /> Loading…</div>}
             {!itemsQ.loading && items.length === 0 && (
               <div className="empty">
@@ -569,7 +637,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                 {g.items.map((it) => {
                   const c = shown.get(it.id) ?? { n: 0, flagged: 0 };
                   return (
-                    <button key={it.id} className={`item-row${it.id === activeItemId ? ' sel' : ''}`} onClick={() => setActiveItemId(it.id)} aria-pressed={it.id === activeItemId}>
+                    <button key={it.id} id={`item-row-${it.id}`} className={`item-row${it.id === activeItemId ? ' sel' : ''}`} onClick={() => { setActiveItemId(it.id); setCardOpen(true); }} aria-pressed={it.id === activeItemId}>
                       <Symbol shape={it.marker_shape} glyph={it.marker_glyph} active={it.id === activeItemId} />
                       <span style={{ minWidth: 0 }}><div className="n1">{it.name}</div><div className="n2">{[it.code, it.spec].filter(Boolean).join(' · ')}</div></span>
                       {c.flagged > 0 ? <span className="tag tag-outline">{c.flagged} to review</span> : <span />}
@@ -611,6 +679,19 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       </div>
 
       {pendingArea && <AreaNameDialog names={allAreaNames} onSave={(n) => void saveArea(n)} onCancel={() => { setPendingArea(null); setTool('select'); }} />}
+      {confirmClear && activeItem && (
+        <Dialog title="Delete counts" onClose={() => setConfirmClear(false)}>
+          <div className="dialog-title">Delete every count of {activeItem.code}?</div>
+          <div className="muted" style={{ fontSize: 13 }}>
+            {plural(itemInProject, 'count')} on {plural(itemSheetCount, 'sheet')} will be deleted. This can't be undone with Ctrl+Z. The item stays in the library.
+          </div>
+          <Check checked={keepHand} onChange={setKeepHand}>Keep the counts I placed by hand (delete only the automatic ones)</Check>
+          <div className="dialog-actions">
+            <button className="btn btn-secondary" onClick={() => setConfirmClear(false)}>Cancel</button>
+            <button className="btn btn-primary" onClick={() => void deleteItemEverywhere()}>Delete counts</button>
+          </div>
+        </Dialog>
+      )}
       {similarBox && sheet && activeItem && (
         <SimilarDialog current={sheet} box={similarBox} sheets={sheets.filter((s) => s.count_enabled && s.kind !== 'schedule' && s.kind !== 'legend')} files={filesQ.data?.files ?? []}
           item={activeItem} store={store} onClose={() => { setSimilarBox(null); setTool('select'); }} onDone={(m) => { setSimilarBox(null); setTool('select'); toast(m); void countsQ.reload(); void sheetsQ.reload(); }} />
