@@ -655,3 +655,104 @@ test('schedule sheets: titled ones are marked, plans with only a schedule on the
   assert.deepEqual(scheduleHeadings(['SITE LIGHTING SCHEDULE', 'REFER TO DRY TYPE TRANSFORMER SCHEDULE', 'SCHEDULE', 'see schedule', 'AREA A EQUIPMENT SCHEDULE (by room)', 'IN SCHEDULE', 'SHOWN IN SCHEDULE', 'SITE LIGHTING SCHEDULE']),
     ['SITE LIGHTING SCHEDULE', 'AREA A EQUIPMENT SCHEDULE (by room)']);
 });
+
+import { darkSmall, dropCounted, findSimilar, symbolSignature, tightTemplate } from '../src/detect/symbolSearch.ts';
+// A fire-alarm-style symbol: a circle, an S curve and two small ticks, drawn at several places among noise.
+function symbolPage() {
+  const P = (x0: number, y0: number, x1: number, y1: number, n: number, fill = false, lum = 0): PrimT => ({ x0, y0, x1, y1, n, fill, lum });
+  const sym = (ox: number, oy: number): PrimT[] => [P(ox, oy + 8, ox + 15.6, oy + 23.4, 19), P(ox + 6.4, oy + 10.4, ox + 7.6, oy + 15.7, 5), P(ox + 7.6, oy + 15.7, ox + 8.8, oy + 21, 5), P(ox + 6.9, oy, ox + 6.9, oy + 2.3, 2), P(ox + 9.3, oy, ox + 9.3, oy + 6, 2)];
+  const prims: PrimT[] = [];
+  const at = [[100, 100], [400, 120], [250, 500], [700, 640]];
+  for (const [x, y] of at) prims.push(...sym(x, y));
+  prims.push(...sym(100, 100));                                                    // CAD often draws a shape twice on top of itself
+  prims.push(P(0, 300, 900, 300, 2), P(50, 0, 50, 900, 2));                        // long wall and grid lines: not part of any symbol
+  prims.push(P(110, 90, 118, 98, 2, false, 0.6), P(300, 300, 340, 340, 30, true, 0.7)); // gray hatching and a pale fill: ignored
+  prims.push(P(500, 50, 515.6, 65.4, 19));                                         // a lone circle of the same size, without the S: not the symbol
+  prims.push(P(402, 118, 404, 119, 2), P(398, 125, 399, 126, 2));                  // stray marks next to the second symbol
+  return prims;
+}
+test('similar symbols: every copy of a boxed symbol is found, and nothing that only looks a bit like it', () => {
+  const prims = symbolPage();
+  const t = tightTemplate(prims, { x0: 95, y0: 95, x1: 125, y1: 130 })!;           // the estimator's loose box around the first one
+  assert.ok(t && t.sig.length === 5, `5 shapes, not ${t?.sig.length}`);           // the doubled-up shape counts once
+  assert.ok(Math.abs(t.w - 15.6) < 0.2 && Math.abs(t.h - 23.4) < 0.2);              // the box shrank to the symbol
+  const found = findSimilar(darkSmall(prims), t.sig, t.w, t.h);
+  assert.equal(found.length, 4);
+  assert.deepEqual(found.map((m) => [Math.round(m.x), Math.round(m.y)]).sort((a, b) => a[0] - b[0]), [[108, 112], [408, 132], [258, 512], [708, 652]].sort((a, b) => a[0] - b[0]));
+  assert.ok(found.every((m) => m.score >= 0.85));
+});
+test('similar symbols: a symbol with a part missing scores lower and needs a looser setting; a bare circle is no match', () => {
+  const prims = symbolPage().filter((p) => !(p.x0 > 395 && p.x0 < 420 && p.n === 5));  // the S curve removed from the second symbol
+  const t = tightTemplate(prims, { x0: 95, y0: 95, x1: 125, y1: 130 })!;
+  const strict = findSimilar(darkSmall(prims), t.sig, t.w, t.h, { minScore: 0.85 });
+  const loose = findSimilar(darkSmall(prims), t.sig, t.w, t.h, { minScore: 0.6 });
+  assert.equal(strict.length, 3); assert.equal(loose.length, 4);
+  // one shape alone (a circle) is too generic to search for
+  assert.deepEqual(findSimilar(darkSmall(prims), [{ x0: 0, y0: 0, x1: 15.6, y1: 15.4, n: 19, fill: false }], 15.6, 15.4), []);
+  assert.equal(tightTemplate(prims, { x0: 800, y0: 800, x1: 850, y1: 850 }), null);            // an empty box
+});
+test('similar symbols: counts that are already there are not added twice', () => {
+  const m = [{ x: 108, y: 112, score: 1 }, { x: 408, y: 132, score: 1 }, { x: 258, y: 512, score: 1 }];
+  assert.deepEqual(dropCounted(m, [{ x: 109, y: 111 }], 9).map((q) => q.x), [408, 258]);
+  assert.equal(dropCounted(m, [], 9).length, 3);
+  assert.equal(symbolSignature([], { x0: 0, y0: 0, x1: 10, y1: 10 }).length, 0);
+});
+
+import { isCountableDiscipline, legendCategory, parseLegendPage } from '../src/detect/legendParse.ts';
+function legendPage() {
+  const W = 3000, H = 2000;
+  const run = (str: string, x0: number, x1: number, y: number): PageRun => ({ str, cx: (x0 + x1) / 2 / W, cy: y / H, w: (x1 - x0) / W, h: 9.5 / H, rotated: false });
+  const runs: PageRun[] = [
+    run('INITIATING DEVICES:', 200, 320, 90),
+    run('F', 205, 212, 130), run('MANUAL PULL STATION', 240, 345, 130),                         // a symbol letter, a gap, the description
+    run('MM', 800, 812, 245), run('MONITOR MODULE', 826, 892, 235),                              // letters set as a subscript, lower than the line
+    run('AD', 800, 812, 330), run('J', 830, 836, 330), run('CONNECTION TO AUTOMATIC DOORS.', 860, 1000, 330), // two sets of letters: the specific one wins
+    run('FF', 800, 812, 420), run('CONNECTION TO ELECTRIFIED FURNITURE, REQUIREMENTS TO BE', 840, 1100, 410), run('CONFIRMED WITH FURNITURE MANUFACTURER.', 840, 1060, 424), // wrapped: one entry
+    run('CR', 1205, 1217, 520), run('CARD READER', 1245, 1310, 520),               // another column, no heading above it
+    run('SYMBOL', 205, 240, 600), run('DEVICE TYPE', 270, 340, 600), run('N/A', 205, 225, 640), run('REFER TO DETAILS', 260, 350, 640), // table headings and "N/A": not devices
+    // an abbreviation list: four entries stacked a line apart, no heading
+    run('AFF', 1500, 1520, 700), run('ABOVE FINISHED FLOOR', 1560, 1680, 700), run('AFG', 1500, 1520, 712), run('ABOVE FINISHED GRADE', 1560, 1680, 712),
+    run('AHU', 1500, 1520, 724), run('AIR HANDLING UNIT', 1560, 1660, 724), run('AIC', 1500, 1520, 736), run('AMPERE INTERRUPTING CAPACITY', 1560, 1730, 736),
+    // a sentence: words with an ordinary space between them are not symbol and description
+    run('SHALL', 1000, 1030, 900), run('DETERMINE', 1034, 1090, 900),
+    // the title block strip at the right edge
+    run('E', 2800, 2810, 800), run('SPECIALTY', 2840, 2900, 800),
+  ];
+  return { runs, W, H };
+}
+test('legend: symbol letters and descriptions are paired; headings name the group; noise is left out', () => {
+  const { runs, W, H } = legendPage();
+  const rows = parseLegendPage(runs, W, H, 'Fire alarm');
+  assert.deepEqual(rows.map((r) => r.code), ['AD', 'CR', 'F', 'FF', 'MM']);
+  const by = (c: string) => rows.find((r) => r.code === c)!;
+  assert.equal(by('F').name, 'MANUAL PULL STATION'); assert.equal(by('F').category, 'Initiating devices');   // from the heading above
+  assert.equal(by('CR').category, 'Fire alarm');                                                              // no heading: the sheet's group
+  assert.equal(by('MM').name, 'MONITOR MODULE');                                                              // the subscript sat lower than the line
+  assert.equal(by('AD').name, 'CONNECTION TO AUTOMATIC DOORS.');                                              // not "J"
+  assert.equal(by('FF').name, 'CONNECTION TO ELECTRIFIED FURNITURE, REQUIREMENTS TO BE');                     // the first line names it ...
+  assert.match(by('FF').spec!, /CONFIRMED WITH FURNITURE MANUFACTURER/);                                      // ... the rest is the spec
+  assert.ok(!rows.some((r) => ['SYMBOL', 'N/A', 'AFF', 'AFG', 'AHU', 'AIC', 'SHALL', 'E'].includes(r.code)));
+  assert.equal(new Set(rows.map((r) => r.key)).size, rows.length);
+});
+test('legend: group names and which disciplines are ticked by default', () => {
+  assert.equal(legendCategory('FIRE ALARM LEGEND'), 'Fire alarm');
+  assert.equal(legendCategory('ELECTRICAL LEGEND AND ABBREVIATIONS'), 'Electrical');
+  assert.equal(legendCategory('GENERAL NOTES, LEGEND, AND ABBREVIATIONS'), 'Legend');
+  for (const n of ['E0.0', 'FA0.00', 'SE0.00', 'T0.00', 'ES.01', 'EQ1.00', 'M0.2']) assert.equal(isCountableDiscipline(n), true, n);   // mechanical equipment is counted too
+  for (const n of ['G-002', 'A0.05', 'S0.03', 'P0.1', 'C-201', null]) assert.equal(isCountableDiscipline(n), false, String(n));
+});
+
+test('equipment schedules: only a first-column tag is equipment, one item per tag, named from the table', () => {
+  const T = (title: string, rows: string[][]) => ({ title, headers: ['UNIT NUMBER', 'LOCATION', 'SERVICE', 'CFM'], xs: [], headerY: 0, rows });
+  const rows = textTablesToRows([
+    T('PACKAGED ROOF TOP UNIT SCHEDULE (DX)', [['RTU-1', 'ROOF', 'RECEIVING', '4,000'], ['RTU-6', 'ROOF', 'PLENUM', '10,000']]),
+    T('SEMI CUSTOM ROOF TOP UNIT SCHEDULE (DX) (CONT.)', [['RTU-6', 'R-454B', '350 A', '9']]),            // the same unit, second section, messier columns
+    T('FAN SCHEDULE', [['EF-1', 'ROOF', 'GENERAL EXHAUST', '1000'], ['R-454B', 'ROOF', 'X', '1'], ['ADD-01', '09/03/2026', 'x', 'y']]), // a refrigerant name and an addendum number are not equipment
+    T('VARIABLE FREQUENCY DRIVE SCHEDULE', [['VFD-1', 'RTU-1', 'SUPPLY FAN', '5']]),                      // RTU-1 here is what the drive serves, not a new unit
+    { ...T('', [['EF-9', 'ROOF', 'X', '1']]) },                                                             // a table with no "SCHEDULE" title is not read
+  ]);
+  assert.deepEqual(rows.map((r) => r.code).sort(), ['EF-1', 'RTU-1', 'RTU-6', 'VFD-1']);
+  assert.equal(rows.find((r) => r.code === 'RTU-6')!.name, 'Packaged roof top unit, ROOF, PLENUM');       // the cleaner first reading wins
+  assert.equal(rows.find((r) => r.code === 'EF-1')!.category, 'Fan');
+  assert.equal(rows.find((r) => r.code === 'VFD-1')!.name, 'Variable frequency drive, RTU-1, SUPPLY FAN');
+});
