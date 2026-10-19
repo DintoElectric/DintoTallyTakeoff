@@ -5,7 +5,7 @@ import { HttpError, handle, json, methodNotAllowed, notFound, readJson, segments
 import { oneOf, onlyKeys, reqStr, str, uuid } from './_lib/validate.ts';
 import { deleteKeys, keys } from './_lib/blobs.ts';
 import { transaction } from './_lib/db.ts';
-import { claimItems, copyLibrary } from './_lib/library.ts';
+import { claimItems, clearItemCounts, copyLibrary } from './_lib/library.ts';
 
 const SHAPES = ['rect', 'circle', 'square', 'diamond'] as const;
 
@@ -90,6 +90,17 @@ export default handle(async (req: Request, _ctx: Context) => {
   }
 
   const id = uuid(seg[1], 'item id');
+
+  // POST /api/items/:id/clear  { sheet_id?, auto_only? }: delete this item's counts, everywhere or on one sheet.
+  if (seg[2] === 'clear' && req.method === 'POST') {
+    await requireRole('estimator');
+    const b = await readJson(req);
+    onlyKeys(b, ['sheet_id', 'auto_only']);
+    const [exists] = await listItems(id);
+    if (!exists) throw notFound('That item');
+    const sheetId = b.sheet_id ? uuid(b.sheet_id, 'sheet id') : null;
+    return json(await transaction((q) => clearItemCounts(q, id, { sheetId, autoOnly: b.auto_only === true })));
+  }
 
   if (req.method === 'PATCH') {
     await requireRole('estimator');
