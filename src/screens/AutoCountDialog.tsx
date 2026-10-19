@@ -41,7 +41,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
   // The grid marks that would otherwise have been counted: a tag, or a short code that is in the library.
   const wouldCount = (h: { grid?: boolean; past?: boolean; kind: string; code: string }) => !!h.grid && !(ignorePast && h.past) && (h.kind !== 'short' || byCode.has(h.code.toUpperCase()));
   const gridMarks = useMemo(() => scans.flatMap((sc) => sc.hits.filter(wouldCount)), [scans, ignorePast, byCode]); // eslint-disable-line react-hooks/exhaustive-deps
-  const gridSheets = useMemo(() => scans.filter((sc) => sc.hits.some(wouldCount)).length, [scans, ignorePast, byCode]); // eslint-disable-line react-hooks/exhaustive-deps
+  const gridBubbleTotal = useMemo(() => scans.reduce((n, sc) => n + (sc.bubbles?.length ?? 0), 0), [scans]);
   const pastCount = useMemo(() => scans.reduce((n, sc) => n + sc.hits.filter((h) => h.past).length, 0), [scans]);
   const pastSheets = useMemo(() => scans.filter((sc) => sc.hits.some((h) => h.past)).length, [scans]);
   // Library matches first, then drawing notes, then other tags, then short codes, then room numbers.
@@ -264,11 +264,12 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
                 )}
               </div>
             )}
-            {(gridMarks.length > 0 || !leaveOutGrid) && (
-              <Check checked={leaveOutGrid} disabled={phase === 'write'} onChange={setLeaveOutGrid}>
-                Leave out grid-line bubbles ({plural(gridMarks.length, 'mark')}: {[...new Set(gridMarks.map((h) => h.code))].slice(0, 6).join(', ')}{new Set(gridMarks.map((h) => h.code)).size > 6 ? '…' : ''}). Removes earlier counts on them.
-              </Check>
-            )}
+            {/* always shown, like the other two options, so it is clear that it exists and what it found */}
+            <Check checked={leaveOutGrid} disabled={phase === 'write'} onChange={setLeaveOutGrid}>
+              Leave out grid-line bubbles ({gridMarks.length > 0
+                ? `${plural(gridMarks.length, 'mark')} would be counted: ${[...new Set(gridMarks.map((h) => h.code))].slice(0, 6).join(', ')}${new Set(gridMarks.map((h) => h.code)).size > 6 ? '…' : ''}`
+                : gridBubbleTotal > 0 ? `${plural(gridBubbleTotal, 'bubble')} found, none would be counted` : 'none found on these sheets'}). Removes earlier counts on them.
+            </Check>
             {pastCount > 0 && (
             <Check checked={ignorePast} disabled={phase === 'write'} onChange={setIgnorePast}>
               Leave out {plural(pastCount, 'mark')} past matchlines (on {plural(pastSheets, 'sheet')}). They belong to the neighbouring sheet.
