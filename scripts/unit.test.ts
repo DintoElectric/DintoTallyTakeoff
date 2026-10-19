@@ -839,3 +839,45 @@ test('fixture length from the schedule: stated lengths are read, ambiguous or va
   assert.equal(lengthFeetFromText('LED WRAPAROUND STRIP', '75R-4-L50-8-30'), null);                                                                          // L50 is a lumen code
   assert.equal(lengthFeetFromText('LED 2X4 TROFFER, 4 FOOT LONG LAMP'), null);                                                                              // not a linear fixture type
 });
+
+import { findGridBubbles, inBubble } from '../src/detect/gridBubbles.ts';
+// a page 3000 x 2000 pt; shapes as the extractor reports them, text as normalized runs
+const GW = 3000, GH = 2000;
+const ring = (cx: number, cy: number, d: number): PrimT => P(cx - d / 2, cy - d / 2, cx + d / 2, cy + d / 2, 5);
+const gridRun = (s: string, x: number, y: number) => ({ str: s, cx: x / GW, cy: y / GH, w: 0.004, h: 0.004, rotated: false });
+test('grid bubbles: a lettered column and a numbered row are found; repeated devices, a tight key list and a room tag are not', () => {
+  const prims: PrimT[] = []; const runs: any[] = [];
+  const put = (label: string, x: number, y: number, d: number) => { prims.push(ring(x, y, d)); runs.push(gridRun(label, x, y)); };
+  ['D', 'E', 'F', 'G', 'H', 'J', 'K'].forEach((l, i) => put(l, 574, 212 + i * 285, 36));          // the lettered lines down the side
+  ['2', '3', '4', '5', '6'].forEach((l, i) => put(l, 800 + i * 300, 90, 36));                       // the numbered lines along the top
+  put('H.3', 574, 212 + 4 * 285 + 70, 36);                                                          // a sub-line, under two diameters from its neighbour
+  for (let i = 0; i < 6; i++) put('S', 900 + i * 60, 1000, 13.5);                                   // six smoke detectors in a row: same label, small
+  for (let i = 0; i < 4; i++) put('S', 1500, 600 + i * 120, 36);                                    // same size as a bubble, in a column, but all the same label
+  ['R1', 'R2', 'SF', 'SJ'].forEach((l, i) => put(l, 236, 150 + i * 21, 12));                        // a key list: small and tight
+  ['A', 'B', 'C'].forEach((l, i) => put(l, 2000, 300 + i * 40, 36));                                // distinct labels but touching each other: not spaced like a grid
+  ['P101', 'P102', 'P103'].forEach((l, i) => put(l, 2400, 400 + i * 200, 36));                      // room tags: not grid labels
+  const b = findGridBubbles(prims, runs, GW, GH);
+  const labels = b.map((x) => x.label).sort();
+  assert.deepEqual(labels, ['2', '3', '4', '5', '6', 'D', 'E', 'F', 'G', 'H', 'H.3', 'J', 'K'].sort());
+  // a count whose text sits on a bubble is "in" it; one beside a device is not
+  assert.equal(inBubble(574 / GW, (212 + 2 * 285) / GH, b), true);
+  assert.equal(inBubble(900 / GW, 1000 / GH, b), false);
+  assert.equal(inBubble(1500 / GW, 600 / GH, b), false);
+  // only two lines of a grid visible: not enough to call it a grid
+  assert.deepEqual(findGridBubbles([ring(100, 100, 36), ring(100, 400, 36)], [gridRun('A', 100, 100), gridRun('B', 100, 400)], GW, GH), []);
+});
+test('grid bubbles: Auto-count leaves them out and clears earlier automatic counts on them, never hand-placed ones', () => {
+  const bubbles = [{ x: 0.2, y: 0.1, rx: 0.006, ry: 0.009, label: 'F' }];
+  const base = { zones: [], itemIdByCode: new Map([['F', 'itF'], ['D9', 'itD9']]), ambiguous: new Set<string>(), clearItemIds: new Set<string>(), ignorePast: true, bubbles, newId: () => 'new' } as any;
+  const hits = [{ code: 'F', x: 0.2, y: 0.1, kind: 'short', grid: true }, { code: 'F', x: 0.6, y: 0.6, kind: 'short' }, { code: 'D9', x: 0.5, y: 0.5, kind: 'tag' }];
+  const existing = [det('grid-auto', 'itF', 0.1, 'auto', 'unreviewed', 0.2), det('grid-confirmed', 'itF', 0.1, 'auto', 'confirmed', 0.2), det('grid-manual', 'itF', 0.1, 'manual', 'confirmed', 0.2), det('real-F', 'itF', 0.6, 'auto', 'confirmed', 0.6)];
+  const on = planSheetWrite({ ...base, leaveOutGrid: true, hits, existing });
+  assert.equal(on.added, 1);                                                          // the real F at (0.6, 0.6) is already counted (kept); only D9 is new
+  assert.deepEqual(on.ops.filter((o: any) => o.op === 'delete').map((o: any) => o.id).sort(), ['grid-auto', 'grid-confirmed']);
+  assert.equal(on.removedGrid, 2);                                                    // the hand-placed one stays; so does the real F
+  assert.ok(!on.ops.some((o: any) => o.op === 'add' && o.detection.x === 0.2));         // no new count on the bubble
+  const off = planSheetWrite({ ...base, leaveOutGrid: false, hits, existing: [existing[3]] });
+  assert.equal(off.removedGrid, 0);
+  assert.ok(off.ops.some((o: any) => o.op === 'add' && o.detection.x === 0.2));         // switched off: the bubble is counted, as before
+  assert.equal(planSheetWrite({ ...base, leaveOutGrid: false, hits: [], existing }).ops.filter((o: any) => o.op === 'delete').length, 0); // and nothing earlier is removed
+});
