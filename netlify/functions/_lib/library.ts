@@ -36,7 +36,7 @@ export async function claimItems(q: Q, projectId: string, itemIds: string[] | nu
 /** Copies one project's library into another (items and categories), leaving out what the target already has. */
 export async function copyLibrary(q: Q, fromProject: string, toProject: string, actorId: string): Promise<{ copied: number; skipped: number }> {
   const src = await q(
-    `select i.code, i.name, i.spec, i.unit, i.marker_shape, i.marker_glyph, c.name as cat
+    `select i.code, i.name, i.spec, i.unit, i.marker_shape, i.marker_glyph, i.length_ft, c.name as cat
        from item_types i left join item_categories c on c.id = i.category_id
       where i.project_id = $1 order by i.code, i.created_at, i.id`, [fromProject]);
   let copied = 0, skipped = 0;
@@ -44,9 +44,9 @@ export async function copyLibrary(q: Q, fromProject: string, toProject: string, 
     if ((await sameItem(q, toProject, it.code, it.name)).rows[0]) { skipped++; continue; }
     const cat = it.cat ? await categoryIn(q, toProject, it.cat) : null;
     await q(
-      `insert into item_types (code, name, spec, category_id, unit, marker_shape, marker_glyph, created_by, project_id)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [it.code, it.name, it.spec, cat, it.unit, it.marker_shape, it.marker_glyph, actorId, toProject]);
+      `insert into item_types (code, name, spec, category_id, unit, marker_shape, marker_glyph, created_by, project_id, length_ft)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [it.code, it.name, it.spec, cat, it.unit, it.marker_shape, it.marker_glyph, actorId, toProject, it.length_ft]);
     copied++;
   }
   return { copied, skipped };
