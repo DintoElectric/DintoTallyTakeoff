@@ -813,3 +813,29 @@ test('selection: the item of the selected counts, only when they all share one',
   assert.equal(singleItemOf(dets, new Set()), null);                 // nothing selected
   assert.equal(singleItemOf(dets, new Set(['zzz'])), null);          // an id that is not a count here
 });
+
+import { lengthFeetFromText } from '../src/detect/lengthText.ts';
+test('fixture length from the schedule: stated lengths are read, ambiguous or variable ones give nothing', () => {
+  // the lighting schedule you sent (LBA)
+  assert.equal(lengthFeetFromText('SURFACE OR CHAIN MOUNTED, NOMINAL 3" X 3" X 4\'L LED STRIPLIGHT WITH WHITE STEEL HOUSING, DIFFUSING LENS AND INTEGRAL DRIVER.', 'ZL1D-L48-SMR-5000LM-FST-MVOLT-35K-80CRI-WH', '5337 LM'), 4);
+  assert.equal(lengthFeetFromText('SURFACE OR CHAIN MOUNTED, NOMINAL 3" X 3" X 8\'L LED STRIPLIGHT WITH WHITE STEEL HOUSING', 'TZL1D-L96-SMR-10000LM'), 8);
+  assert.equal(lengthFeetFromText("SURFACE MOUNTED, NOMINAL 8' L STRIP LIGHT WITH WIDE DISTRIBUTION, FROSTED LENS AND INTEGRAL DRIVER.", 'FEM L96 12000LM IMAFL WD'), 8);
+  assert.equal(lengthFeetFromText('SEALED AND GASKETED, NOMINAL 2\'X2\' LED FLAT PANEL LUMINAIRE WITH OVERLAPPING DOORFRAME'), null);       // a panel, not a linear fixture
+  assert.equal(lengthFeetFromText('RECESSED, NOMINAL 4"W X 4"D, CONTINUOUS LIGHTSLOT WITH SEAMLESS, FLUSH LENS', 'S4RD-LOP-LENGTH', '700 LM/LF'), null);   // per-foot rated: the plans decide
+  assert.equal(lengthFeetFromText('UNDER-COUNTER LED STRIP LIGHT', 'LLI-ANG-W-F-3.5W-35K-24V', '240 LM/LF'), null);
+  assert.equal(lengthFeetFromText('PENDANT MOUNTED, DIRECT/INDIRECT LINEAR LED PENDANT', 'LPX-4-B-SP-F-F-S8', '776/746 LM'), null);              // no length stated anywhere
+  // the PSEB schedule
+  assert.equal(lengthFeetFromText('LED 4 INCH DIRECT PENDANT SLOT, NOMINAL 4 INCH WIDE X 5 INCH TALL X 4 FEET LONG, EXTRUDED ALUMINUM HOUSING'), 4);
+  assert.equal(lengthFeetFromText('LED DIRECT/INDIRECT PENDANT SLOT WITH MICRO-LOUVER INSERTS, NOMINAL 1-1/2 INCH WIDE X 3 INCH TALL X 8 FOOT LONG EXTRUDED ALUMINUM HOUSING'), 8);
+  assert.equal(lengthFeetFromText('LED VAPOR-TIGHT LINEAR PENDANT, NOMINAL 4 FOOT LONG X 5-1/2 INCH TALL. ELECTRICAL CONTRACTOR TO PROVIDE LENGTH OF STAINLESS STEEL HANGER CHAIN AS REQUIRED.', '96-4-L62-8-30-DFR'), 4);   // L62 is not a length
+  assert.equal(lengthFeetFromText('LED WRAPAROUND, NOMINAL 4-1/2 INCH WIDE X 4 INCH TALL X 4 FOOT LONG STEEL HOUSING, FIXTURE TO BE WALL-MOUNTED 6 INCHES ABOVE DOOR HEADER.', 'WL4-40L-EZ1'), 4);
+  assert.equal(lengthFeetFromText('LED 4 FOOT LINEAR SLOT MODULE FOR USE IN TYPE T2/T3 TRACK SYSTEM, NOMINAL 3/4 INCH TALL X 4 FOOT LONG', 'PIVHLO-FH-4FT-SW-80CRI'), 4);
+  assert.equal(lengthFeetFromText('DUAL-CIRCUIT SURFACE MOUNTED LOW VOLTAGE TRACK SYSTEM, NOMINAL 1-1/2 INCH WIDE X 2 INCH TALL X 6 FOOT LONG EXTRUDED ALUMINUM'), 6);
+  assert.equal(lengthFeetFromText('LED LINEAR GRAZER, NOMINAL 1-1/2 INCH WIDE, PROVIDE 1 FOOT AND 4 FOOT FIXTURES MOUNTED END-TO-END AS REQUIRED FOR CONTINUOUS RUN LENGTHS INDICATED ON DRAWINGS'), null);
+  assert.equal(lengthFeetFromText('LED SURFACE MOUNTED LINEAR GRAZER, PROVIDE 2 FOOT, 3 FOOT, AND 4 FOOT FIXTURES MOUNTED END-TO-END'), null);                  // several lengths: it depends
+  assert.equal(lengthFeetFromText('LED 4 INCH DIRECT/INDIRECT PENDANT SLOT, NOMINAL 4 INCH WIDE, PROVIDE CONTINUOUS LENGTHS AS INDICATED ON ARCHITECTURAL DRAWINGS. PROVIDE ANY NOMINAL 6-FOOT FIXTURES AS A SINGLE HOUSING'), null);
+  // catalog only
+  assert.equal(lengthFeetFromText('LED LINEAR PENDANT', 'PIVS-CR-6FT0IN-UNV'), 6);
+  assert.equal(lengthFeetFromText('LED WRAPAROUND STRIP', '75R-4-L50-8-30'), null);                                                                          // L50 is a lumen code
+  assert.equal(lengthFeetFromText('LED 2X4 TROFFER, 4 FOOT LONG LAMP'), null);                                                                              // not a linear fixture type
+});

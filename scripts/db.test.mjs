@@ -134,6 +134,8 @@ console.log('db.test OK');
   // two projects
   const t = await seed(true);
   await t.d.exec(readFileSync(`${dir}/${last}`, 'utf8'));
+  for (const f of files.filter((x) => x > last)) await t.d.exec(readFileSync(`${dir}/${f}`, 'utf8'));
+  for (const f of files.filter((x) => x > last)) await t.d.exec(readFileSync(`${dir}/${f}`, 'utf8')); // and everything after it, as the real database has
   const items = (await t.d.query(`select id, code, project_id, category_id from item_types order by code, project_id`)).rows;
   const byCode = (c) => items.filter((i) => i.code === c);
   assert.equal(byCode('A1').length, 1); assert.equal(byCode('A1')[0].project_id, t.pA);                 // used in A only: goes to A
@@ -171,6 +173,8 @@ console.log('db.test OK');
   // one project: the whole library is its library
   const one = await seed(false);
   await one.d.exec(readFileSync(`${dir}/${last}`, 'utf8'));
+  for (const f of files.filter((x) => x > last)) await one.d.exec(readFileSync(`${dir}/${f}`, 'utf8'));
+  for (const f of files.filter((x) => x > last)) await one.d.exec(readFileSync(`${dir}/${f}`, 'utf8'));
   assert.equal((await one.d.query(`select count(*)::int n from item_types where project_id is null`)).rows[0].n, 0);
   assert.equal((await one.d.query(`select count(*)::int n from item_categories where project_id is null`)).rows[0].n, 0);
   assert.equal((await one.d.query(`select count(*)::int n from item_types where project_id = $1`, [one.pA])).rows[0].n, 4);
@@ -206,5 +210,16 @@ console.log('db.test OK');
   assert.equal((await cc.query(`select count(*)::int n from detections where item_type_id = $1`, [itA])).rows[0].n, 1);
   assert.deepEqual(await clearItemCounts(q2, itA), { deleted: 1, sheets: 1 });
   assert.deepEqual(await clearItemCounts(q2, itA), { deleted: 0, sheets: 0 });                                     // nothing left: fine
+  // linear fixtures: a length in feet per fixture, optional, positive, and kept when a library is copied
+  const L = new P();
+  for (const f of files) await L.exec(readFileSync(`${dir}/${f}`, 'utf8'));
+  const lp1 = (await L.query(`insert into projects (name, created_by) values ('A','u') returning id`)).rows[0].id;
+  const lp2 = (await L.query(`insert into projects (name, created_by) values ('B','u') returning id`)).rows[0].id;
+  await L.query(`insert into item_types (code,name,created_by,project_id,length_ft) values ('BC-14','strip','u',$1,4), ('BC-18','strip','u',$1,8.5), ('B1','panel','u',$1,null)`, [lp1]);
+  assert.deepEqual((await L.query(`select code, length_ft::float8 as len from item_types order by code`)).rows.map((r) => [r.code, r.len]), [['B1', null], ['BC-14', 4], ['BC-18', 8.5]]);
+  await assert.rejects(L.query(`insert into item_types (code,name,created_by,project_id,length_ft) values ('X','x','u',$1,0)`, [lp1]));
+  await assert.rejects(L.query(`insert into item_types (code,name,created_by,project_id,length_ft) values ('Y','y','u',$1,-3)`, [lp1]));
+  await copyLibrary((t, p2) => L.query(t, p2), lp1, lp2, 'u');
+  assert.deepEqual((await L.query(`select code, length_ft::float8 as len from item_types where project_id = $1 order by code`, [lp2])).rows.map((r) => [r.code, r.len]), [['B1', null], ['BC-14', 4], ['BC-18', 8.5]]);
   console.log('project libraries OK');
 }

@@ -90,3 +90,45 @@ test('excel and word exports add a by-area breakdown, additive by name', async (
   const wb2 = new ExcelJS.Workbook(); await wb2.xlsx.load(Buffer.from(await plain.arrayBuffer()));
   assert.equal(wb2.getWorksheet('By area'), undefined);
 });
+
+test('excel export totals the footage of linear fixtures (count × length) and adds the columns only when some item has a length', async () => {
+  const ExcelJS: any = (await import('exceljs')).default;
+  const read = async (d: any, perSheetColumns: boolean) => {
+    const blob = await buildXlsx(d, aggregate(d, { sheetIds: null }), { sheetIds: null, groupBy: 'floor', perSheetColumns, subtotals: true, detectionLog: false, snapshots: false, preparedBy: 'J' });
+    const wb = new ExcelJS.Workbook();
+    await wb.xlsx.load(Buffer.from(await blob.arrayBuffer()));
+    const sum = wb.getWorksheet('Summary');
+    let header: string[] = []; const byCode = new Map<string, any>(); let allItems: any = null;
+    sum.eachRow((row: any) => {
+      const v = (row.values as any[]).slice(1);
+      if (v[0] === 'Code') header = v.map(String);
+      else if (v[1] === 'All items') allItems = row;
+      else if (typeof v[0] === 'string' && /^(B13|D9)$/.test(v[0])) byCode.set(v[0], row);
+    });
+    return { header, byCode, allItems };
+  };
+  const withLen: any = { ...data, items: data.items.map((i: any) => (i.id === 'a' ? { ...i, length_ft: 4 } : i.id === 'b' ? { ...i, length_ft: 2.5 } : i)) };
+  const agg = aggregate(withLen, { sheetIds: null });
+  assert.equal(agg.hasFeet, true);
+  assert.equal(agg.totalFeet, 38);                                                  // 7 x 4 + 4 x 2.5
+  assert.deepEqual(agg.rows.map((r) => [r.item.code, r.lengthFt, r.totalFeet]), [['B13', 4, 28], ['D9', 2.5, 10]]);
+  for (const perSheetColumns of [true, false]) {
+    const { header, byCode, allItems } = await read(withLen, perSheetColumns);
+    const len = header.indexOf('Length each (ft)') + 1, tot = header.indexOf('Total (ft)') + 1, count = header.indexOf('Total') + 1;
+    assert.ok(len > 0 && tot === len + 1 && count === len - 1, header.join(' | '));      // footage sits right beside the count
+    assert.deepEqual([byCode.get('B13').getCell(count).value, byCode.get('B13').getCell(len).value, byCode.get('B13').getCell(tot).value], [7, 4, 28]);
+    assert.deepEqual([byCode.get('D9').getCell(count).value, byCode.get('D9').getCell(len).value, byCode.get('D9').getCell(tot).value], [4, 2.5, 10]);
+    assert.equal(allItems.getCell(tot).value, 38); assert.equal(allItems.getCell(count).value, 11);
+    assert.equal(byCode.get('B13').getCell(tot).numFmt, '#,##0.0');
+  }
+  // only some items have a length: the others stay blank, the total is still just the linear ones
+  const some: any = { ...data, items: data.items.map((i: any) => (i.id === 'a' ? { ...i, length_ft: 8.5 } : i)) };
+  const one = await read(some, false);
+  const tot = one.header.indexOf('Total (ft)') + 1;
+  assert.equal(one.byCode.get('B13').getCell(tot).value, 59.5);                       // 7 x 8.5
+  assert.ok(!one.byCode.get('D9').getCell(tot).value);                                 // no length: blank, not zero
+  assert.equal(one.allItems.getCell(tot).value, 59.5);
+  // nothing has a length: the export is exactly as before
+  const plain = await read(data, false);
+  assert.ok(!plain.header.includes('Length each (ft)') && !plain.header.includes('Total (ft)'));
+});
