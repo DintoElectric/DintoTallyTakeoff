@@ -144,7 +144,7 @@ export default handle(async (req: Request, _ctx: Context) => {
         from sheets s where s.project_id = ${id} and s.superseded_at is null
        order by s.number nulls last, s.page`;
     const items = await sql<any>`
-      select i.id, i.code, i.name, i.spec, i.category_id, i.unit, i.detection_mode, i.marker_shape, i.marker_glyph,
+      select i.id, i.code, i.name, i.spec, i.category_id, i.unit, i.detection_mode, i.marker_shape, i.marker_glyph, i.length_ft::float8 as length_ft,
              0::int as sample_count, 0::int as detection_count
         from item_types i where i.project_id = ${id} order by i.code`;
     const categories = await sql<any>`select id, name, sort from item_categories where project_id = ${id} order by sort, name`;
