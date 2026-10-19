@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import {
   ArrowCounterClockwise, ArrowClockwise, Cursor, Eraser, Eye, EyeSlash, Polygon, Shapes, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus,
-  PlusCircle, Plus, Selection, Stack, WarningCircle, Crosshair,
+  PlusCircle, Plus, Selection, Stack, WarningCircle, Crosshair, MagnifyingGlass,
 } from '@phosphor-icons/react';
 import type { CategoryRow, CountRow, DrawingFileRow, ItemTypeRow, ProjectRow, SheetRow } from '../../shared/types.ts';
 import { api, ApiError } from '../auth/api.ts';
@@ -22,6 +22,7 @@ import AutoCountDialog from './AutoCountDialog.tsx';
 import { ItemDialog } from './ItemDialog.tsx';
 import SimilarDialog from './SimilarDialog.tsx';
 import { stepIndex } from '../app/step.ts';
+import { searchItems } from '../app/itemSearch.ts';
 import ExportDialog from './ExportDialog.tsx';
 
 const STATUS_DOT = { not_counted: 'not_counted', needs_review: 'needs_review', reviewed: 'reviewed' } as const;
@@ -58,6 +59,9 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [cardOpen, setCardOpen] = useState(false);                       // the active item's details and actions, in the panel
   const [scrollTo, setScrollTo] = useState<{ id: string; n: number } | null>(null); // bring an item's row into view after a marker is clicked
   const [confirmClear, setConfirmClear] = useState(false);
+  const [query, setQuery] = useState('');                              // search the items listed in the panel
+  const [onlyCounted, setOnlyCounted] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
   const [keepHand, setKeepHand] = useState(false);
   const [hideMarkers, setHideMarkers] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -221,6 +225,18 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
     return [...groups.values()].sort((a, b) => a.order - b.order);
   }, [items, categories]);
 
+  // The items listed in the panel: by category, or (when searching) the best matches first.
+  const listGroups = useMemo(() => {
+    const counted = (it: ItemTypeRow) => (shown.get(it.id)?.n ?? 0) > 0;
+    const keep = (list: ItemTypeRow[]) => (onlyCounted ? list.filter(counted) : list);
+    if (query.trim()) {
+      const hits = searchItems(query, keep(items), (it) => categories.find((c) => c.id === it.category_id)?.name ?? '');
+      return [{ name: `${plural(hits.length, 'match', 'matches')} for “${query.trim()}”`, order: 0, items: hits }];
+    }
+    return grouped.map((g) => ({ ...g, items: keep(g.items) })).filter((g) => g.items.length > 0);
+  }, [grouped, items, categories, query, onlyCounted, shown]);
+  const openItem = (id: string) => { setActiveItemId(id); setCardOpen(true); setScrollTo({ id, n: Date.now() }); };
+
   // ----- actions -----
   const place = useCallback((x: number, y: number) => {
     if (!store) return;
@@ -336,6 +352,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); if (!readOnly) store?.redo(); return; }
       if (mod) return;
       const k = e.key.toLowerCase();
+      if (e.key === '/') { e.preventDefault(); searchRef.current?.focus(); searchRef.current?.select(); return; }
       if ((tool === 'zone' || tool === 'area') && draft.length > 0) {
         if (e.key === 'Enter') { e.preventDefault(); finishZone(); return; }
         if (e.key === 'Escape') { setDraft([]); return; }
@@ -575,6 +592,18 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
         <aside className="ws-right" aria-label="Counts">
           <div className="head">
             <div className="row-between"><h5 style={{ margin: 0 }}>Counts</h5><span className="muted num" style={{ fontSize: 13 }}>{plural(totalShown, 'item')}</span></div>
+            <div className="search" style={{ width: '100%' }}>
+              <MagnifyingGlass size={14} />
+              <input ref={searchRef} className="input" style={{ width: '100%' }} placeholder="Search items: a tag, or words (press /)" aria-label="Search the items" value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') { setQuery(''); searchRef.current?.blur(); }
+                  // Enter opens the best match: the same details and actions as clicking one of its counts.
+                  if (e.key === 'Enter') { const top = listGroups[0]?.items[0]; if (top) { openItem(top.id); toast(`${top.code}: ${plural(shown.get(top.id)?.n ?? 0, 'count')} ${scope === 'sheet' ? 'on this sheet' : 'in the project'}.`); } }
+                }} />
+              {query && <button className="btn btn-ghost" style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', padding: '0 6px', minHeight: 24 }} onClick={() => { setQuery(''); searchRef.current?.focus(); }} aria-label="Clear the search">✕</button>}
+            </div>
+            <Check checked={onlyCounted} onChange={setOnlyCounted}>Only items with counts</Check>
             <Seg name="scope" value={scope} onChange={setScope} options={[{ value: 'sheet', label: 'This sheet' }, { value: 'all', label: 'All sheets' }]} />
             {allAreaNames.length > 0 && (
               <select className="input" aria-label="Show counts for an area" value={areaFilter} onChange={(e) => setAreaFilter(e.target.value)}>
@@ -631,13 +660,19 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                 {!readOnly && <button className="btn btn-primary" onClick={() => setShowItemDialog(true)}><Plus size={14} /> Add item type</button>}
               </div>
             )}
-            {grouped.map((g) => (
+            {items.length > 0 && listGroups.length === 0 && (
+              <div className="empty" style={{ padding: 16 }}>
+                <div>{onlyCounted && !query.trim() ? 'Nothing is counted yet in this view.' : `No item matches “${query.trim()}”.`}</div>
+                {onlyCounted && <button className="btn btn-ghost" onClick={() => setOnlyCounted(false)}>Show items with no counts too</button>}
+              </div>
+            )}
+            {listGroups.map((g) => (
               <div key={g.name}>
                 <div className="cat-h">{g.name}</div>
                 {g.items.map((it) => {
                   const c = shown.get(it.id) ?? { n: 0, flagged: 0 };
                   return (
-                    <button key={it.id} id={`item-row-${it.id}`} className={`item-row${it.id === activeItemId ? ' sel' : ''}`} onClick={() => { setActiveItemId(it.id); setCardOpen(true); }} aria-pressed={it.id === activeItemId}>
+                    <button key={it.id} id={`item-row-${it.id}`} className={`item-row${it.id === activeItemId ? ' sel' : ''}`} onClick={() => openItem(it.id)} aria-pressed={it.id === activeItemId}>
                       <Symbol shape={it.marker_shape} glyph={it.marker_glyph} active={it.id === activeItemId} />
                       <span style={{ minWidth: 0 }}><div className="n1">{it.name}</div><div className="n2">{[it.code, it.spec].filter(Boolean).join(' · ')}</div></span>
                       {c.flagged > 0 ? <span className="tag tag-outline">{c.flagged} to review</span> : <span />}
