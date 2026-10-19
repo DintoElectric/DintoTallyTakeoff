@@ -4,6 +4,8 @@ import { api, ApiError } from '../auth/api.ts';
 import { Check, Dialog, plural } from '../app/ui.tsx';
 import { categoryFor, resolveSimilar, specLine, type ScheduleRow } from '../detect/scheduleParse.ts';
 import { readSchedulePage } from '../detect/readSchedulePage.ts';
+import { extractRuns } from '../detect/pageRuns.ts';
+import { isCountableDiscipline, legendCategory, parseLegendPage } from '../detect/legendParse.ts';
 import { loadFilePdf, pdfjs } from '../viewer/pdf.ts';
 
 type Phase = 'pick' | 'read' | 'review' | 'write';
@@ -14,7 +16,8 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
   projectId: string; sheets: SheetRow[]; files: DrawingFileRow[]; items: ItemTypeRow[]; categories: CategoryRow[];
   onClose: () => void; onDone: (summary: string) => void;
 }) {
-  const scheduleSheets = useMemo(() => sheets.filter((s) => s.kind === 'schedule'), [sheets]);
+  // Schedules define fixture and device types in tables; legends define them by symbol. Both are read here.
+  const scheduleSheets = useMemo(() => sheets.filter((s) => s.kind === 'schedule' || s.kind === 'legend'), [sheets]);
   const [phase, setPhase] = useState<Phase>(scheduleSheets.length ? 'read' : 'pick');
   const [chosen, setChosen] = useState<Set<string>>(new Set(scheduleSheets.map((s) => s.id)));
   const [progress, setProgress] = useState({ done: 0, total: 0, label: '' });
@@ -45,7 +48,17 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
     if (!f) return [];
     const pdf = await loadFilePdf({ id: f.id, chunk_count: f.chunk_count });
     const page = await pdf.getPage(sh.page);
-    try { return await readSchedulePage(page, pdfjs.OPS, onlyIfLooksLikeOne); } finally { page.cleanup(); }
+    try {
+      if (sh.kind === 'legend') {
+        const vp = page.getViewport({ scale: 1 });
+        const rows = parseLegendPage(await extractRuns(page), vp.width, vp.height, legendCategory(sh.title));
+        const countable = isCountableDiscipline(sh.number);
+        return countable ? rows : rows.map((r) => ({ ...r, preselect: false }));
+      }
+      const rows = await readSchedulePage(page, pdfjs.OPS, onlyIfLooksLikeOne);
+      // Door, finish and structural schedules (A, S, P ...) can look like equipment lists: listed, but not ticked.
+      return isCountableDiscipline(sh.number) ? rows : rows.map((r) => ({ ...r, preselect: false }));
+    } finally { page.cleanup(); }
   }
 
   async function read(ids: Set<string>, onlyIfLooksLikeOne = false) {
@@ -64,7 +77,7 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
       const unique = all.filter((r) => (seen.has(rkey(r)) ? false : (seen.add(rkey(r)), true)));
       resolveSimilar(unique);
       setRows(unique);
-      setInc(new Set(unique.filter((r) => !r.removed && !existingFor(r)).map(rkey)));
+      setInc(new Set(unique.filter((r) => !r.removed && r.preselect !== false && !existingFor(r)).map(rkey)));
       setPhase('review');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'The schedule could not be read.');
@@ -127,13 +140,13 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
   const removed = rows.filter((r) => r.removed).length;
 
   return (
-    <Dialog title="Read schedule" onClose={phase === 'write' ? () => undefined : onClose} wide>
-      <div className="dialog-title">Read schedule</div>
+    <Dialog title="Read schedules and legends" onClose={phase === 'write' ? () => undefined : onClose} wide>
+      <div className="dialog-title">Read schedules and legends</div>
 
       {phase === 'pick' && (
         <>
           <div className="muted" style={{ fontSize: 13 }}>
-            {scheduleSheets.length === 0 ? "No sheet is marked as a schedule. Choose the sheet(s) that hold the schedule table." : 'Choose the sheet(s) to read.'}
+            {scheduleSheets.length === 0 ? "No sheet is marked as a schedule. Choose the sheet(s) that hold a schedule table or a symbol legend." : 'Choose the sheet(s) to read.'}
           </div>
           <div style={{ maxHeight: 260, overflow: 'auto' }} className="stack">
             {sheets.map((s) => (

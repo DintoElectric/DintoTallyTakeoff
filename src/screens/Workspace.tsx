@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import {
   ArrowCounterClockwise, ArrowClockwise, Cursor, Eraser, Eye, EyeSlash, Polygon, Shapes, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus,
-  PlusCircle, Plus, Selection, Stack, WarningCircle,
+  PlusCircle, Plus, Selection, Stack, WarningCircle, Crosshair,
 } from '@phosphor-icons/react';
 import type { CategoryRow, CountRow, DrawingFileRow, ItemTypeRow, ProjectRow, SheetRow } from '../../shared/types.ts';
 import { api, ApiError } from '../auth/api.ts';
@@ -20,6 +20,7 @@ import { areaKey, areaNames, assignAreas, type AreaCountRow, type AreaRow } from
 import AreaNameDialog from './AreaNameDialog.tsx';
 import AutoCountDialog from './AutoCountDialog.tsx';
 import { ItemDialog } from './ItemDialog.tsx';
+import SimilarDialog from './SimilarDialog.tsx';
 import ExportDialog from './ExportDialog.tsx';
 
 const STATUS_DOT = { not_counted: 'not_counted', needs_review: 'needs_review', reviewed: 'reviewed' } as const;
@@ -57,6 +58,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [zoomPct, setZoomPct] = useState(100);
   const [showItemDialog, setShowItemDialog] = useState(false);
+  const [similarBox, setSimilarBox] = useState<{ a: { x: number; y: number }; b: { x: number; y: number } } | null>(null); // example symbol boxed for Count similar
   const [showExport, setShowExport] = useState(false);
   const [showAuto, setShowAuto] = useState(false);
   const [reviewing, setReviewing] = useState(false);
@@ -341,6 +343,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       if (k === 'v') setTool('select');
       else if (k === 'a' && !readOnly) setTool('add');
       else if (k === 'b') setTool('box');
+      else if (k === 'm' && !readOnly) setTool('similar');
       else if (k === 'z' && !readOnly) setTool('zone');
       else if (k === 'n' && !readOnly) setTool('area');
       else if (k === 'e' && !readOnly) setTool('erase');
@@ -407,6 +410,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             <button className={`tool${tool === 'select' ? ' on' : ''}`} onClick={() => setTool('select')} aria-label="Select (V)" title="Select (V)"><Cursor size={18} /></button>
             <button className={`tool${tool === 'add' ? ' on' : ''}`} onClick={() => setTool('add')} disabled={readOnly} aria-label="Add count (A)" title="Add count (A)"><PlusCircle size={18} /></button>
             <button className={`tool${tool === 'box' ? ' on' : ''}`} onClick={() => setTool('box')} aria-label="Box select (B)" title="Box select (B)"><Selection size={18} /></button>
+            <button className={`tool${tool === 'similar' ? ' on' : ''}`} onClick={() => setTool('similar')} disabled={readOnly} aria-label="Count similar symbols (M)" title="Count similar symbols (M): choose an item on the right, then drag a box around one symbol"><Crosshair size={18} /></button>
             <button className={`tool${tool === 'zone' ? ' on' : ''}`} onClick={() => { setTool('zone'); setDraft([]); }} disabled={readOnly} aria-label="Outline an area to ignore (Z)" title="Outline an area to ignore (Z)"><Polygon size={18} /></button>
             <button className={`tool${tool === 'area' ? ' on' : ''}`} onClick={() => { setTool('area'); setDraft([]); }} disabled={readOnly} aria-label="Outline a named count area (N)" title="Outline a named count area (N)"><Shapes size={18} /></button>
             <button className={`tool${tool === 'erase' ? ' on' : ''}`} onClick={() => setTool('erase')} disabled={readOnly} aria-label="Erase (E)" title="Erase (E)"><Eraser size={18} /></button>
@@ -443,6 +447,11 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                 draft={draft}
                 onZonePoint={(x, y) => setDraft((d) => [...d, { x, y }])}
                 onZoneFinish={finishZone}
+                onSimilarBox={(a, b) => {
+                  if (!activeItemId) return toast('Pick the item type on the right first: the symbols found are counted as it.');
+                  if (Math.abs(a.x - b.x) < 0.002 || Math.abs(a.y - b.y) < 0.002) return toast('Drag a box around one symbol.');
+                  setSimilarBox({ a, b });
+                }}
               />
             ) : (
               <div className="viewport-msg">
@@ -602,6 +611,10 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       </div>
 
       {pendingArea && <AreaNameDialog names={allAreaNames} onSave={(n) => void saveArea(n)} onCancel={() => { setPendingArea(null); setTool('select'); }} />}
+      {similarBox && sheet && activeItem && (
+        <SimilarDialog current={sheet} box={similarBox} sheets={sheets.filter((s) => s.count_enabled && s.kind !== 'schedule' && s.kind !== 'legend')} files={filesQ.data?.files ?? []}
+          item={activeItem} store={store} onClose={() => { setSimilarBox(null); setTool('select'); }} onDone={(m) => { setSimilarBox(null); setTool('select'); toast(m); void countsQ.reload(); void sheetsQ.reload(); }} />
+      )}
       {showItemDialog && (
         <ItemDialog projectId={projectId} categories={categories} onClose={() => setShowItemDialog(false)} onCreated={(it) => { setShowItemDialog(false); setActiveItemId(it.id); void itemsQ.reload(); }} />
       )}

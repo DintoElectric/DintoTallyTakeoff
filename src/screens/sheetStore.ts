@@ -173,6 +173,16 @@ export class SheetStore {
     this.commit({ forward: [{ t: 'add', det }], backward: [{ t: 'remove', id: det.id, det }] }, true);
   }
 
+  /** Places several counts as one step, so a single undo takes them all back. */
+  placeMany(itemId: string, points: { x: number; y: number }[]) {
+    if (points.length === 0) return;
+    const dets: Detection[] = points.map((p) => ({
+      id: crypto.randomUUID(), sheet_id: this.id, item_type_id: itemId, x: p.x, y: p.y, bbox: null,
+      confidence: null, source: 'manual', status: 'confirmed',
+    }));
+    this.commit({ forward: dets.map((det) => ({ t: 'add' as const, det })), backward: dets.map((det) => ({ t: 'remove' as const, id: det.id, det })) }, true);
+  }
+
   erase(ids: string[]) {
     const forward: Change[] = [], backward: Change[] = [];
     for (const id of ids) {
