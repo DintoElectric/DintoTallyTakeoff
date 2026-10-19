@@ -404,7 +404,17 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const itemOtherSheets = useMemo(() => otherSheetCounts.filter((c) => c.item_type_id === activeItemId && c.n > 0), [otherSheetCounts, activeItemId]);
   const itemInProject = itemDets.length + itemOtherSheets.reduce((n, c) => n + c.n, 0);
   const itemSheetCount = itemOtherSheets.length + (itemDets.length > 0 ? 1 : 0);
-  useEffect(() => { if (scrollTo) document.getElementById(`item-row-${scrollTo.id}`)?.scrollIntoView({ block: 'nearest' }); }, [scrollTo]);
+  useEffect(() => {
+    if (!scrollTo) return;
+    // Move only the list (never the page or the panel) so the item's row is in view; the card is at the top of the panel.
+    const list = document.querySelector<HTMLElement>('.ws-right .items'), row = document.getElementById(`item-row-${scrollTo.id}`);
+    if (list && row) {
+      const top = row.offsetTop - list.offsetTop;
+      if (top < list.scrollTop) list.scrollTop = top;
+      else if (top + row.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = top + row.offsetHeight - list.clientHeight;
+    }
+    document.querySelector<HTMLElement>('.ws-right')?.scrollTo?.({ top: 0 });
+  }, [scrollTo]);
 
   // Selecting counts, however it is done (a click, a box, Next ▶, Select all here), shows their item in the panel with its
   // actions. If every selected count is of one item, that item becomes the active one.
@@ -602,11 +612,32 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
 
         {/* right: counts */}
         <aside className="ws-right" aria-label="Counts">
+        {cardOpen && activeItem && (
+          <div className="item-card" role="region" aria-label={`${activeItem.code} details`}>
+            <div className="row-between">
+              <span className="row" style={{ gap: 8, minWidth: 0 }}><Symbol shape={activeItem.marker_shape} glyph={activeItem.marker_glyph} /><b>{activeItem.code}</b></span>
+              <button className="btn btn-ghost" style={{ padding: '0 6px', minHeight: 24 }} onClick={() => setCardOpen(false)} aria-label="Close details">✕</button>
+            </div>
+            <div className="ic-name" title={[activeItem.name, activeItem.spec].filter(Boolean).join(' · ')}>{activeItem.name}</div>
+            <div className="dim num" style={{ fontSize: 12 }}>{itemDets.length} on this sheet · {plural(itemInProject, 'count')} on {plural(itemSheetCount, 'sheet')}</div>
+            <div className="btns">
+              <button className="btn btn-secondary" aria-pressed={onlyActive} onClick={() => setOnlyActive(!onlyActive)}>{onlyActive ? 'Show all items' : 'Show only this item'}</button>
+              <button className="btn btn-secondary" disabled={itemDets.length === 0} onClick={() => stepItem(-1)} aria-label="Previous one on this sheet">◀</button>
+              <button className="btn btn-secondary" disabled={itemDets.length === 0} onClick={() => stepItem(1)}>Next ▶</button>
+            </div>
+            <div className="btns">
+              <button className="btn btn-secondary" disabled={itemDets.length === 0} onClick={() => setSelected(new Set(itemDets.map((d) => d.id)))}>Select all here</button>
+              {!readOnly && <button className="btn btn-secondary" disabled={itemDets.length === 0} onClick={deleteItemOnSheet}>Delete on this sheet</button>}
+              {!readOnly && <button className="btn btn-secondary" disabled={itemInProject === 0} onClick={() => setConfirmClear(true)}>Delete everywhere…</button>}
+            </div>
+          </div>
+        )}
           <div className="head">
             <div className="row-between"><h5 style={{ margin: 0 }}>Counts</h5><span className="muted num" style={{ fontSize: 13 }}>{plural(totalShown, 'item')}</span></div>
-            <div className="search" style={{ width: '100%' }}>
+            <div className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
+            <div className="search" style={{ flex: 1, minWidth: 0, width: 'auto' }}>
               <MagnifyingGlass size={14} />
-              <input ref={searchRef} className="input" style={{ width: '100%' }} placeholder="Search items: a tag, or words (press /)" aria-label="Search the items" value={query}
+              <input ref={searchRef} className="input" style={{ width: '100%' }} placeholder="Search items" title="Press / to search" aria-label="Search the items" value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === 'Escape') { setQuery(''); searchRef.current?.blur(); }
@@ -615,7 +646,8 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                 }} />
               {query && <button className="btn btn-ghost" style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', padding: '0 6px', minHeight: 24 }} onClick={() => { setQuery(''); searchRef.current?.focus(); }} aria-label="Clear the search">✕</button>}
             </div>
-            <Check checked={onlyCounted} onChange={setOnlyCounted}>Only items with counts</Check>
+            <button className="btn btn-secondary" style={{ flex: 'none', minHeight: 36, padding: '0 10px', fontSize: 12.5 }} aria-pressed={onlyCounted} onClick={() => setOnlyCounted(!onlyCounted)} title="Hide the items that have no counts">With counts</button>
+            </div>
             <Seg name="scope" value={scope} onChange={setScope} options={[{ value: 'sheet', label: 'This sheet' }, { value: 'all', label: 'All sheets' }]} />
             {allAreaNames.length > 0 && (
               <select className="input" aria-label="Show counts for an area" value={areaFilter} onChange={(e) => setAreaFilter(e.target.value)}>
@@ -626,7 +658,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             )}
             {selected.size > 0 && (
               <div className="hint" role="status">
-                <span style={{ flex: 1 }}>{plural(selected.size, 'marker')} selected</span>
+                <span style={{ flex: 1, whiteSpace: 'nowrap' }}>{selected.size} selected</span>
                 {!readOnly && (
                   <>
                     <select className="input" style={{ width: 130, minHeight: 28 }} value="" aria-label="Change selected to…" onChange={(e) => { if (e.target.value) { store?.retype([...selected], e.target.value); } }}>
@@ -641,29 +673,6 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             {tool === 'add' && !activeItem && items.length > 0 && <div className="hint">Pick an item type below, then click the drawing.</div>}
           </div>
           <div className="items">
-            {cardOpen && activeItem && (
-              <div className="item-card" role="region" aria-label={`${activeItem.code} details`}>
-                <div className="row-between">
-                  <span className="row" style={{ gap: 8, minWidth: 0 }}><Symbol shape={activeItem.marker_shape} glyph={activeItem.marker_glyph} /><b>{activeItem.code}</b></span>
-                  <button className="btn btn-ghost" style={{ padding: '0 6px', minHeight: 24 }} onClick={() => setCardOpen(false)} aria-label="Close details">✕</button>
-                </div>
-                <div style={{ fontSize: 13 }}>{activeItem.name}</div>
-                {activeItem.spec && <div className="dim" style={{ fontSize: 12 }}>{activeItem.spec}</div>}
-                <div className="dim num" style={{ fontSize: 12 }}>{itemDets.length} on this sheet · {plural(itemInProject, 'count')} on {plural(itemSheetCount, 'sheet')}</div>
-                <div className="btns">
-                  <button className="btn btn-secondary" aria-pressed={onlyActive} onClick={() => setOnlyActive(!onlyActive)}>{onlyActive ? 'Show all items' : 'Show only this item'}</button>
-                  <button className="btn btn-secondary" disabled={itemDets.length === 0} onClick={() => stepItem(-1)} aria-label="Previous one on this sheet">◀</button>
-                  <button className="btn btn-secondary" disabled={itemDets.length === 0} onClick={() => stepItem(1)}>Next ▶</button>
-                  <button className="btn btn-secondary" disabled={itemDets.length === 0} onClick={() => setSelected(new Set(itemDets.map((d) => d.id)))}>Select all here</button>
-                </div>
-                {!readOnly && (
-                  <div className="btns">
-                    <button className="btn btn-secondary" disabled={itemDets.length === 0} onClick={deleteItemOnSheet}>Delete on this sheet</button>
-                    <button className="btn btn-secondary" disabled={itemInProject === 0} onClick={() => setConfirmClear(true)}>Delete everywhere…</button>
-                  </div>
-                )}
-              </div>
-            )}
             {itemsQ.loading && !itemsQ.data && <div className="muted" style={{ padding: 12 }}><span className="spinner" /> Loading…</div>}
             {!itemsQ.loading && items.length === 0 && (
               <div className="empty">
