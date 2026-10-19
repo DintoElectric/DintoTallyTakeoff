@@ -7,6 +7,8 @@ export interface AggOptions { sheetIds: Set<string> | null }
 
 export interface ItemRowAgg {
   item: ItemTypeRow;
+  lengthFt: number | null;   // feet per fixture, for linear fixtures
+  totalFeet: number | null;  // count x length, in feet, across the included sheets
   bySheet: Map<string, number>;
   total: number;
   unreviewed: number;
@@ -28,6 +30,8 @@ export interface AreaAgg {
 
 export interface Agg {
   areas: AreaAgg;
+  hasFeet: boolean;     // some counted item has a length, so the export shows footage
+  totalFeet: number;    // all linear fixtures together, in feet
   sheets: SheetRow[];
   rows: ItemRowAgg[];
   grandTotal: number;
@@ -69,7 +73,7 @@ export function aggregate(data: ExportData, opts: AggOptions): Agg {
     const item = itemById.get(c.item_type_id);
     if (!item) continue;
     let row = rowsMap.get(item.id);
-    if (!row) rowsMap.set(item.id, (row = { item, bySheet: new Map(), total: 0, unreviewed: 0 }));
+    if (!row) rowsMap.set(item.id, (row = { item, lengthFt: item.length_ft ?? null, totalFeet: null, bySheet: new Map(), total: 0, unreviewed: 0 }));
     row.bySheet.set(c.sheet_id, (row.bySheet.get(c.sheet_id) ?? 0) + c.n);
     row.total += c.n;
     grandTotal += c.n;
@@ -96,6 +100,13 @@ export function aggregate(data: ExportData, opts: AggOptions): Agg {
   const rows = [...rowsMap.values()].sort(
     (a, b) => categoryOrder(a.item.category_id) - categoryOrder(b.item.category_id) || a.item.code.localeCompare(b.item.code, undefined, { numeric: true }),
   );
+
+  // Footage of linear fixtures: count x length, one rounding at the end so the column adds up to the total.
+  let totalFeet = 0;
+  for (const r of rows) {
+    if (r.lengthFt && r.lengthFt > 0) { r.totalFeet = Math.round(r.total * r.lengthFt * 10) / 10; totalFeet += r.total * r.lengthFt; }
+  }
+  totalFeet = Math.round(totalFeet * 10) / 10;
 
   const floorMap = new Map<string | null, FloorAgg>();
   for (const s of sheets) {
@@ -136,7 +147,7 @@ export function aggregate(data: ExportData, opts: AggOptions): Agg {
     }
   }
   void areaKey;
-  return { areas: areaAgg, sheets, rows, grandTotal, bySheetTotal, unreviewedBySheet, unreviewedTotal, floors, categoryName, categoryOrder };
+  return { areas: areaAgg, hasFeet: rows.some((r) => r.totalFeet !== null), totalFeet, sheets, rows, grandTotal, bySheetTotal, unreviewedBySheet, unreviewedTotal, floors, categoryName, categoryOrder };
 }
 
 export function safeFileName(name: string, fallback = 'Takeoff'): string {

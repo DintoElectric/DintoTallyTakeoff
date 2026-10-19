@@ -47,23 +47,26 @@ export async function buildXlsx(data: ExportData, agg: Agg, opts: ExportOptions)
     const sheetCols = opts.perSheetColumns ? agg.sheets : [];
     const showUnrev = agg.unreviewedTotal > 0;
     title(ws, data.project.name, `Electrical takeoff · Fixture & device counts · Prepared ${prepared}`);
-    const header = ['Code', 'Description', 'Unit', ...sheetCols.map(sheetLabel), 'Total', ...(showUnrev ? ['Unreviewed'] : [])];
+    const showFeet = agg.hasFeet; // linear fixtures: footage beside the count
+    const header = ['Code', 'Description', 'Unit', ...sheetCols.map(sheetLabel), 'Total', ...(showFeet ? ['Length each (ft)', 'Total (ft)'] : []), ...(showUnrev ? ['Unreviewed'] : [])];
     const hr = ws.addRow(header);
     const hdrRowNo = hr.number;
     headerStyle(hr, 4);
     const nCols = header.length;
     for (const r of agg.rows) {
       const row = ws.addRow([r.item.code, r.item.name + (r.item.spec ? `\n${r.item.spec}` : ''), r.item.unit,
-        ...sheetCols.map((s) => r.bySheet.get(s.id) ?? ''), r.total, ...(showUnrev ? [r.unreviewed || ''] : [])]);
+        ...sheetCols.map((s) => r.bySheet.get(s.id) ?? ''), r.total, ...(showFeet ? [r.lengthFt ?? '', r.totalFeet ?? ''] : []), ...(showUnrev ? [r.unreviewed || ''] : [])]);
       style(row);
       row.alignment = { vertical: 'top', wrapText: true };
       row.eachCell((c: any, i: number) => { if (i >= 4) c.alignment = { horizontal: 'right', vertical: 'top' }; });
+      if (showFeet) { const c0 = 4 + sheetCols.length + 1; row.getCell(c0).numFmt = '#,##0.0'; row.getCell(c0 + 1).numFmt = '#,##0.0'; } // Length each, Total (ft)
       if (showUnrev && r.unreviewed > 0) row.getCell(nCols).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: FLAG_FILL } };
     }
     const lastItemRow = ws.lastRow.number;
     ws.addRow([]);
-    const tot = ws.addRow(['', 'All items', '', ...sheetCols.map((s) => agg.bySheetTotal.get(s.id) ?? 0), agg.grandTotal, ...(showUnrev ? [agg.unreviewedTotal || ''] : [])]);
+    const tot = ws.addRow(['', 'All items', '', ...sheetCols.map((s) => agg.bySheetTotal.get(s.id) ?? 0), agg.grandTotal, ...(showFeet ? ['', agg.totalFeet] : []), ...(showUnrev ? [agg.unreviewedTotal || ''] : [])]);
     style(tot, { bold: true, fill: TOTAL_FILL });
+    if (showFeet) tot.getCell(4 + sheetCols.length + 2).numFmt = '#,##0.0';
     tot.eachCell((c: any, i: number) => { if (i >= 4) c.alignment = { horizontal: 'right' }; });
     if (showUnrev) {
       ws.addRow([]);
