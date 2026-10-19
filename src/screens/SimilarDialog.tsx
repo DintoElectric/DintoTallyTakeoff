@@ -4,11 +4,12 @@ import { BATCH_MAX_OPS } from '../../shared/limits.ts';
 import { api, ApiError } from '../auth/api.ts';
 import { Check, Dialog, plural } from '../app/ui.tsx';
 import { extractPrims, type Prim } from '../detect/primitives.ts';
-import { darkSmall, dropCounted, findSimilar, tightTemplate, type SymbolMatch } from '../detect/symbolSearch.ts';
+import { extractRuns } from '../detect/pageRuns.ts';
+import { buildTemplate, darkSmall, dropCounted, findSimilar, type SymbolMatch, type Template, type TextMark } from '../detect/symbolSearch.ts';
 import { flushAll, getStore, type SheetStore } from './sheetStore.ts';
 import { loadFilePdf, pdfjs } from '../viewer/pdf.ts';
 
-interface PageShapes { prims: Prim[]; width: number; height: number }
+interface PageShapes { prims: Prim[]; texts: TextMark[]; width: number; height: number }
 // Shapes of recently searched sheets, so changing the strictness does not read the drawing again.
 const cache = new Map<string, PageShapes>();
 async function shapesOf(sheet: SheetRow, file: DrawingFileRow): Promise<PageShapes> {
@@ -18,7 +19,9 @@ async function shapesOf(sheet: SheetRow, file: DrawingFileRow): Promise<PageShap
   const page = await pdf.getPage(sheet.page);
   try {
     const r = await extractPrims(page, pdfjs.OPS);
-    const out = { prims: darkSmall(r.prims), width: r.width, height: r.height };
+    // The letters on the page too: a device is often a plain circle or square with its letters inside ("CR", "MM").
+    const texts = (await extractRuns(page)).filter((m) => m.str.trim()).map((m) => ({ s: m.str, x: m.cx * r.width, y: m.cy * r.height }));
+    const out = { prims: darkSmall(r.prims), texts, width: r.width, height: r.height };
     cache.set(sheet.id, out);
     if (cache.size > 6) cache.delete(cache.keys().next().value as string);
     return out;
@@ -27,6 +30,12 @@ async function shapesOf(sheet: SheetRow, file: DrawingFileRow): Promise<PageShap
 
 const STRICT = [{ v: 0.95, label: 'Exact copies only' }, { v: 0.85, label: 'Close (recommended)' }, { v: 0.7, label: 'Loose: partly hidden or crowded symbols' }];
 const label = (s: SheetRow) => s.number ?? `page ${s.page}`;
+/** What the search is looking for, in words, so a wrong box is easy to spot. */
+function describe(t: Template): string {
+  const letters = t.texts.length ? ` with “${t.texts.join(' ')}” in it` : '';
+  if (t.sig.length === 0) return `the text “${t.texts[0]}”`;
+  return `a symbol of ${t.sig.length === 1 ? 'one shape' : `${t.sig.length} shapes`}${letters}, in any orientation`;
+}
 
 interface Row { sheet: SheetRow; matches: SymbolMatch[]; width: number; height: number; skipped: number }
 
@@ -45,7 +54,8 @@ export default function SimilarDialog({ current, box, sheets, files, item, store
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState('');
   const [others, setOthers] = useState(false);
-  const tpl = useRef<NonNullable<ReturnType<typeof tightTemplate>> | null>(null);
+  const tpl = useRef<Template | null>(null);
+  const [looking, setLooking] = useState('');
   const fileById = useMemo(() => new Map(files.map((f) => [f.id, f])), [files]);
   const targets = useMemo(() => [current, ...(others ? sheets.filter((s) => s.id !== current.id) : [])], [current, others, sheets]);
 
@@ -60,9 +70,12 @@ export default function SimilarDialog({ current, box, sheets, files, item, store
         if (!tpl.current) {
           const here = await shapesOf(current, cf);
           const b = { x0: Math.min(box.a.x, box.b.x) * here.width, y0: Math.min(box.a.y, box.b.y) * here.height, x1: Math.max(box.a.x, box.b.x) * here.width, y1: Math.max(box.a.y, box.b.y) * here.height };
-          const t = tightTemplate(here.prims, b);
-          if (!t || t.sig.length < 2) throw new Error('I could not see a symbol in that box. Draw the box tightly around one symbol, so that it holds at least two lines or shapes.');
+          const t = buildTemplate(here.prims, here.texts, b);
+          if (!t) throw new Error('I could not see a symbol in that box. Drag a box around one symbol, including any letters inside it.');
+          if (t.sig.length === 0 && t.texts.length !== 1) throw new Error('That box holds several pieces of text and no symbol. Box one symbol, or one tag.');
+          if (t.sig.length < 2 && t.texts.length === 0) throw new Error('That symbol is a single plain shape with no letters in it, which would match far too much. Include its letters or more of its detail in the box.');
           tpl.current = t;
+          setLooking(describe(t));
         }
         const t = tpl.current;
         await flushAll();
@@ -74,11 +87,11 @@ export default function SimilarDialog({ current, box, sheets, files, item, store
           const f = fileById.get(s.file_id);
           if (!f) continue;
           const shapes = await shapesOf(s, f);
-          const found = findSimilar(shapes.prims, t.sig, t.w, t.h, { minScore: score });
+          const found = findSimilar(shapes.prims, t, { minScore: score, texts: shapes.texts });
           // Already counted as this item (a second run, or hand-placed): left out.
           const { detections } = await api<{ detections: Detection[] }>(`/sheets/${s.id}/detections`);
           const counted = detections.filter((d) => d.item_type_id === item.id && d.status !== 'rejected').map((d) => ({ x: d.x * shapes.width, y: d.y * shapes.height }));
-          const fresh = dropCounted(found, counted, Math.max(t.w, t.h) * 0.6);
+          const fresh = dropCounted(found, counted, Math.max(8, Math.max(t.w, t.h) * 0.6));
           if (found.length > 0 || s.id === current.id) out.push({ sheet: s, matches: fresh, width: shapes.width, height: shapes.height, skipped: found.length - fresh.length });
           await new Promise((r) => setTimeout(r, 0));
         }
@@ -124,6 +137,7 @@ export default function SimilarDialog({ current, box, sheets, files, item, store
       <div className="muted" style={{ fontSize: 13 }}>
         Finds every symbol that looks like the one you boxed, and counts it as <b>{item.code}</b> ({item.name}). Look at the numbers, then add them.
       </div>
+      {looking && <div className="dim" style={{ fontSize: 12 }}>Looking for {looking}.</div>}
       <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
         <div className="field" style={{ minWidth: 260 }}>
           <label htmlFor="sm">How alike</label>
