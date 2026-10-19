@@ -184,5 +184,27 @@ console.log('db.test OK');
   const own = (item, project) => one.d.query(`select 1 from item_types where id = $1 and project_id = $2`, [item, project]);
   assert.equal((await own(one.ids.plain, one.pA)).rows.length, 1);
   assert.equal((await own(t.ids.onlyA, t.pB)).rows.length, 0, "A's item cannot be used on B's sheets");
+  // deleting an item's counts: everywhere, on one sheet, or only the automatic ones
+  const { clearItemCounts } = await import('../netlify/functions/_lib/library.ts');
+  const cc = new P();
+  for (const f of files) await cc.exec(readFileSync(`${dir}/${f}`, 'utf8'));
+  const pr2 = (await cc.query(`insert into projects (name, created_by) values ('C','u') returning id`)).rows[0].id;
+  const mk = async (page) => { const fl = (await cc.query(`insert into drawing_files (project_id,file_name,size_bytes,chunk_count,uploaded_by) values ($1,'f.pdf',1,1,'u') returning id`, [pr2])).rows[0].id; return (await cc.query(`insert into sheets (project_id,file_id,page,page_width_pt,page_height_pt) values ($1,$2,$3,100,100) returning id`, [pr2, fl, page])).rows[0].id; };
+  const sa = await mk(1), sb = await mk(2);
+  const itA = (await cc.query(`insert into item_types (code,name,created_by,project_id) values ('A','a','u',$1) returning id`, [pr2])).rows[0].id;
+  const itB = (await cc.query(`insert into item_types (code,name,created_by,project_id) values ('B','b','u',$1) returning id`, [pr2])).rows[0].id;
+  const put = (s, i, src) => cc.query(`insert into detections (id,sheet_id,item_type_id,x,y,source,status,created_by) values (gen_random_uuid(),$1,$2,0.5,0.5,$3,$4,'u')`, [s, i, src, src === 'manual' ? 'confirmed' : 'unreviewed']);
+  for (const [s2, i, src] of [[sa, itA, 'auto'], [sa, itA, 'manual'], [sb, itA, 'auto'], [sb, itA, 'auto'], [sa, itB, 'auto']]) await put(s2, i, src);
+  const q2 = (t, p) => cc.query(t, p);
+  const ver = async (s2) => (await cc.query(`select version from sheets where id = $1`, [s2])).rows[0].version;
+  const v0 = await ver(sa);
+  assert.deepEqual(await clearItemCounts(q2, itA, { sheetId: sa }), { deleted: 2, sheets: 1 });                  // one sheet: both of its A counts
+  assert.equal(await ver(sa), v0 + 1); assert.equal(await ver(sb), 1);                                            // only the changed sheet moves on
+  assert.equal((await cc.query(`select count(*)::int n from detections where item_type_id = $1`, [itB])).rows[0].n, 1); // another item is untouched
+  await put(sa, itA, 'manual'); await put(sa, itA, 'auto');
+  assert.deepEqual(await clearItemCounts(q2, itA, { autoOnly: true }), { deleted: 3, sheets: 2 });               // everywhere, keeping the hand-placed one
+  assert.equal((await cc.query(`select count(*)::int n from detections where item_type_id = $1`, [itA])).rows[0].n, 1);
+  assert.deepEqual(await clearItemCounts(q2, itA), { deleted: 1, sheets: 1 });
+  assert.deepEqual(await clearItemCounts(q2, itA), { deleted: 0, sheets: 0 });                                     // nothing left: fine
   console.log('project libraries OK');
 }

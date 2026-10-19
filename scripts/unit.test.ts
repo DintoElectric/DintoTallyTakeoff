@@ -756,3 +756,11 @@ test('equipment schedules: only a first-column tag is equipment, one item per ta
   assert.equal(rows.find((r) => r.code === 'EF-1')!.category, 'Fan');
   assert.equal(rows.find((r) => r.code === 'VFD-1')!.name, 'Variable frequency drive, RTU-1, SUPPLY FAN');
 });
+
+import { stepIndex } from '../src/app/step.ts';
+test('stepping through an item\'s counts wraps round and starts sensibly', () => {
+  assert.equal(stepIndex(3, -1, 1), 0); assert.equal(stepIndex(3, -1, -1), 2);   // nothing selected yet
+  assert.equal(stepIndex(3, 0, 1), 1); assert.equal(stepIndex(3, 2, 1), 0);       // forward, wrapping
+  assert.equal(stepIndex(3, 0, -1), 2); assert.equal(stepIndex(3, 2, -1), 1);     // back, wrapping
+  assert.equal(stepIndex(1, 0, 1), 0); assert.equal(stepIndex(0, -1, 1), -1);
+});
