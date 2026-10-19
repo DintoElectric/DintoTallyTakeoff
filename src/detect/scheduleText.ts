@@ -76,7 +76,9 @@ export function readTextTables(runs: PageRun[], prims: Prim[], pageW: number, pa
       if (looksLikeHeader(filled)) { header = { y: row[0].y, texts }; break; }
     }
     if (!header) continue;
-    const title = clean(inX.filter((c) => /SCHEDULE/i.test(c.s) && c.y < header!.y && c.y > header!.y - 80).sort((a, b) => b.y - a.y)[0]?.s ?? '');
+    // The heading is usually just above the header, but a table with a tall multi-line header can sit further below it.
+    const head = (maxUp: number) => cells.filter((c) => /SCHEDULE/i.test(c.s) && c.s.length <= 90 && c.y < header!.y && c.y > header!.y - maxUp && c.cx >= x0 - 120 && c.cx <= x1 + 120).sort((a, b) => b.y - a.y)[0]?.s ?? '';
+    const title = clean(head(80) || head(420));
     out.push({ title, headers: header.texts, xs, rows: [], headerY: header.y, x0, x1 });
   }
   // Rows: below the header, down to the next table in the same columns, or the grand total.

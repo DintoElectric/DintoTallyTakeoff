@@ -83,6 +83,35 @@ function singleDeviceRows(t: TextTable, into: Map<string, ScheduleRow>) {
   into.set(key, blank(initials(name), name, { key, category: 'Security devices', spec: notes.join(' · '), count: t.rows.length }));
 }
 
+const EQUIPMENT_TAG = /^[A-Z]{1,5}-\d{1,3}[A-Z]?$/;
+const NOT_EQUIPMENT = /^(R-\d{3}[A-Z]?|ADD-\d+|REV-\d+)$/; // refrigerant types, addendum numbers
+
+/** "GAS-FIRED CONDENSING HYDRONIC BOILER SCHEDULE" -> "Gas-fired condensing hydronic boiler" */
+function scheduleNoun(title: string): string {
+  const t = clean(title.replace(/\(.*?\)/g, ' ').replace(/\bSCHEDULE\b/gi, ' ').replace(/\bCONT\.?\b/gi, ' '));
+  return t ? t[0].toUpperCase() + t.slice(1).toLowerCase() : 'Equipment';
+}
+
+/**
+ * Equipment schedules (mechanical): every row whose first column is a tag (RTU-1, EF-3, B-1) is one piece of equipment.
+ * Tags that only appear in later columns ("serves RTU-1") are not the equipment itself, so only the first column is read.
+ */
+function equipmentRows(t: TextTable, into: Map<string, ScheduleRow>) {
+  const noun = scheduleNoun(t.title);
+  for (const r of t.rows) {
+    const tag = (r[0] ?? '').trim();
+    if (!EQUIPMENT_TAG.test(tag) || NOT_EQUIPMENT.test(tag)) continue;
+    const words = r.slice(1).map(clean).filter((c) => c && !/^[\d.,/()\s-]+$/.test(c) && c.length <= 40).slice(0, 2); // location, service: not the numbers
+    const name = [noun, ...words].join(', ').slice(0, 160);
+    // One tag is one piece of equipment, even when its schedule continues in a second section. The first reading wins,
+    // unless a later one has a cleaner description (no part numbers or ratings mixed in).
+    const key = `${tag}|equipment`.toUpperCase();
+    const have = into.get(key);
+    const digits = (x: string) => (x.match(/\d/g) ?? []).length;
+    if (!have || digits(have.name) > digits(name) + 2) into.set(key, blank(tag, name, { key, category: noun, count: 1 }));
+  }
+}
+
 export function textTablesToRows(tables: TextTable[]): ScheduleRow[] {
   const into = new Map<string, ScheduleRow>();
   for (const t of tables) {
@@ -91,6 +120,7 @@ export function textTablesToRows(tables: TextTable[]): ScheduleRow[] {
     if (col(t, /^OUTLET TYPE$/) >= 0 && col(t, /^SUBSCRIPT$/) >= 0) outletRows(t, into);
     else if (col(t, /(CAMERA|DEVICE) TYPE$/) >= 0) deviceRows(t, into);
     else if (col(t, /^DEVICE LOCATION$/) >= 0 && col(t, /DOOR|ALARM/) >= 0) singleDeviceRows(t, into);
+    else equipmentRows(t, into);
     // Door schedules list door openings, not kinds of device, so they make no library items.
   }
   return [...into.values()];

@@ -21,6 +21,7 @@ export interface ScheduleRow {
   category?: string;        // library category
   spec?: string;            // ready-made spec line
   count?: number;           // how many the schedule lists (devices, outlets); shown in the review, not stored
+  preselect?: boolean;      // false: listed in the review but not ticked (a legend of another discipline)
 }
 
 interface Cell { s: string; x0: number; x1: number; cx: number; y: number; h: number }
