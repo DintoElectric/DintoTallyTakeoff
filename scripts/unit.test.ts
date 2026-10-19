@@ -803,3 +803,13 @@ test('similar symbols: a box holding only a tag finds that tag; several pieces o
   const m = [{ x: 108, y: 112, score: 1 }, { x: 408, y: 132, score: 1 }, { x: 258, y: 512, score: 1 }];
   assert.deepEqual(dropCounted(m, [{ x: 109, y: 111 }], 9).map((q) => q.x), [408, 258]);
 });
+
+import { singleItemOf } from '../src/app/selection.ts';
+test('selection: the item of the selected counts, only when they all share one', () => {
+  const dets = [{ id: 'a', item_type_id: 'I1' }, { id: 'b', item_type_id: 'I1' }, { id: 'c', item_type_id: 'I2' }];
+  assert.equal(singleItemOf(dets, new Set(['a'])), 'I1');
+  assert.equal(singleItemOf(dets, new Set(['a', 'b'])), 'I1');       // several of one item: that item
+  assert.equal(singleItemOf(dets, new Set(['a', 'c'])), null);       // a mix: no single item
+  assert.equal(singleItemOf(dets, new Set()), null);                 // nothing selected
+  assert.equal(singleItemOf(dets, new Set(['zzz'])), null);          // an id that is not a count here
+});
