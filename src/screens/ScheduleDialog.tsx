@@ -4,6 +4,7 @@ import { api, ApiError } from '../auth/api.ts';
 import { Check, Dialog, plural } from '../app/ui.tsx';
 import { categoryFor, resolveSimilar, specLine, type ScheduleRow } from '../detect/scheduleParse.ts';
 import { readSchedulePage } from '../detect/readSchedulePage.ts';
+import { lengthFeetFromText } from '../detect/lengthText.ts';
 import { extractRuns } from '../detect/pageRuns.ts';
 import { isCountableDiscipline, legendCategory, parseLegendPage } from '../detect/legendParse.ts';
 import { loadFilePdf, pdfjs } from '../viewer/pdf.ts';
@@ -34,6 +35,8 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
     return m;
   }, [items]);
 
+  // Feet per fixture for linear fixtures, when the schedule states it plainly (4'L, 8 FOOT LONG, L96 ...).
+  const rowLength = (r: ScheduleRow) => r.lengthFt ?? lengthFeetFromText(r.description, r.catalog, `${r.lumens} ${r.watts}`);
   // A row's identity: its code, unless the schedule repeats codes for different items (IPC: ceiling and wall mounted).
   const rkey = (r: ScheduleRow) => r.key ?? r.code;
   const norm = (x: string) => x.replace(/\s+/g, ' ').trim().toUpperCase();
@@ -111,14 +114,14 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
         try {
           if (existing) {
             if (updateExisting) {
-              await api(`/items/${existing.id}`, { method: 'PATCH', body: { name: r.name, spec: specLine(r) } });
+              await api(`/items/${existing.id}`, { method: 'PATCH', body: { name: r.name, spec: specLine(r), ...(existing.length_ft == null && rowLength(r) != null ? { length_ft: rowLength(r) } : {}) } });
               updated++;
             } else skipped++;
           } else {
             await api('/items', {
               body: {
                 project_id: projectId, code: r.code, name: r.name.slice(0, 200), spec: specLine(r) || null, unit: 'EA',
-                category_id: catId.get(catOf(r).toLowerCase()) ?? null, marker_shape: 'circle', marker_glyph: r.code.slice(0, 2),
+                category_id: catId.get(catOf(r).toLowerCase()) ?? null, marker_shape: 'circle', marker_glyph: r.code.slice(0, 2), length_ft: rowLength(r),
               },
             });
             added++;
@@ -196,7 +199,7 @@ export default function ScheduleDialog({ projectId, sheets, files, items, catego
                           <td style={{ fontWeight: 500 }}>{r.code}{lib && <span className="tag tag-neutral" style={{ marginLeft: 6 }}>In library</span>}{r.removed && <span className="tag tag-outline" style={{ marginLeft: 6 }}>Removed</span>}</td>
                           <td style={{ fontSize: 12 }}>{r.category ?? categoryFor(r.mounting)}</td>
                           <td style={{ maxWidth: 280 }}>{r.name}</td>
-                          <td style={{ fontSize: 12 }}>{r.spec ?? [r.lumens, r.watts, r.manufacturer !== '-' ? r.manufacturer : ''].filter((x) => x && x !== '-' && x !== 'N/A').join(' · ')}</td>
+                          <td style={{ fontSize: 12 }}>{r.spec ?? [r.lumens, r.watts, r.manufacturer !== '-' ? r.manufacturer : ''].filter((x) => x && x !== '-' && x !== 'N/A').join(' · ')}{rowLength(r) != null && <span className="tag tag-outline" style={{ marginLeft: 6 }} title="Feet per fixture, from the schedule. The export totals footage from it.">{rowLength(r)} ft each</span>}</td>
                           <td className="num" style={{ fontSize: 12 }}>{r.count ?? ''}</td>
                         </tr>
                       );

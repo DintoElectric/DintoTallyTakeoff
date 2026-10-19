@@ -620,6 +620,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             </div>
             <div className="ic-name" title={[activeItem.name, activeItem.spec].filter(Boolean).join(' · ')}>{activeItem.name}</div>
             <div className="dim num" style={{ fontSize: 12 }}>{itemDets.length} on this sheet · {plural(itemInProject, 'count')} on {plural(itemSheetCount, 'sheet')}</div>
+            {activeItem.length_ft != null && <div className="dim num" style={{ fontSize: 12 }}>{activeItem.length_ft} ft each · {Math.round(itemDets.length * activeItem.length_ft * 10) / 10} ft on this sheet · {Math.round(itemInProject * activeItem.length_ft * 10) / 10} ft in the project</div>}
             <div className="btns">
               <button className="btn btn-secondary" aria-pressed={onlyActive} onClick={() => setOnlyActive(!onlyActive)}>{onlyActive ? 'Show all items' : 'Show only this item'}</button>
               <button className="btn btn-secondary" disabled={itemDets.length === 0} onClick={() => stepItem(-1)} aria-label="Previous one on this sheet">◀</button>

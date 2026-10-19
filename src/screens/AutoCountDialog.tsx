@@ -41,6 +41,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
   const pastSheets = useMemo(() => scans.filter((sc) => sc.hits.some((h) => h.past)).length, [scans]);
   // Library matches first, then drawing notes, then other tags, then short codes, then room numbers.
   const [showShort, setShowShort] = useState(false);
+  const [emOpen, setEmOpen] = useState(false); // the emergency options start folded up so the tag table has the room
   const rows: CodeRow[] = useMemo(() => {
     const rank = (r: CodeRow) => (r.kind === 'room' ? 4 : byCode.has(r.code.toUpperCase()) ? 0 : r.kind === 'note' ? 1 : r.kind === 'tag' ? 2 : 3);
     // Short letter-only marks (S, OS, CR, MM ...) are easily mixed up with other text, so they are counted only when this
@@ -195,10 +196,15 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
   }
 
   const totalSelected = rows.filter((r) => inc.has(r.code)).reduce((n, r) => n + r.total, 0);
+  // The folded emergency section says what it holds, and flags a marker that still needs a decision.
+  const emToReview = candidates.filter((c) => !markers.has(c.pattern)).length;
+  const emSummary = candidates.length === 0 && markers.size === 0
+    ? 'none found'
+    : `${emTotal > 0 ? `${emTotal} fixture${emTotal === 1 ? '' : 's'} counted separately` : 'nothing counted separately'} · ${markers.size} marker${markers.size === 1 ? '' : 's'} ticked`;
   const failed = scans.filter((s) => s.error);
 
   return (
-    <Dialog title="Auto-count" onClose={phase === 'write' ? () => undefined : onClose} wide>
+    <Dialog title="Auto-count" onClose={phase === 'write' ? () => undefined : onClose} wide className="ac">
       <div className="dialog-title">Auto-count {plural(sheets.length, 'sheet')}</div>
 
       {phase === 'scan' && (
@@ -212,53 +218,11 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
       {phase !== 'scan' && (
         <>
           <div className="muted" style={{ fontSize: 13 }}>
-            Found {plural(rows.length, 'tag type')}.{libraryDriven ? ' The tags that match your item library are ticked; the rest are unticked.' : ' New tags are added to your item library; you can rename them there.'}
-            Counts are marked unreviewed until you confirm them.
+            Found {plural(rows.length, 'tag type')}.{libraryDriven ? ' The tags in your item library are ticked.' : ' New tags are added to your item library; you can rename them there.'} Counts stay unreviewed until you confirm them.
           </div>
-          {exTotals.auto + exTotals.manual > 0 && (
-            <div className="stack" style={{ gap: 8 }}>
-              <div style={{ fontWeight: 500 }}>Earlier counts on these sheets</div>
-              <div className="muted" style={{ fontSize: 13 }}>
-                {plural(exTotals.auto, 'automatic count')}{exTotals.confirmed ? ` (${exTotals.confirmed} confirmed)` : ''}{exTotals.manual ? ` and ${plural(exTotals.manual, 'count')} placed by hand` : ''}.
-              </div>
-              <Check checked={resetAuto} disabled={phase === 'write'} onChange={(v) => { setResetAuto(v); if (!v) setResetManual(false); }}>
-                Start fresh: erase the {plural(exTotals.auto, 'earlier automatic count')} first, confirmed ones included, then count again.
-              </Check>
-              {exTotals.manual > 0 && (
-                <Check checked={resetManual} disabled={phase === 'write' || !resetAuto} onChange={setResetManual}>
-                  <span style={resetManual ? { color: 'var(--color-accent-300)' } : undefined}>Also erase the {plural(exTotals.manual, 'count')} placed by hand. This cannot be undone.</span>
-                </Check>
-              )}
-            </div>
-          )}
-          {pastCount > 0 && (
-            <Check checked={ignorePast} disabled={phase === 'write'} onChange={setIgnorePast}>
-              Leave out {plural(pastCount, 'mark')} past matchlines (on {plural(pastSheets, 'sheet')}). They belong to the neighbouring sheet.
-            </Check>
-          )}
-          <div className="stack" style={{ gap: 8 }}>
-            <div style={{ fontWeight: 500 }}>Emergency fixtures{emTotal > 0 ? ` · ${emTotal} found` : ''}</div>
-            <div className="muted" style={{ fontSize: 13 }}>
-              {candidates.length > 0
-                ? 'These labels beside fixtures look like emergency markings, each next to a normal version of the same label. Tick the ones that mean emergency; those fixtures are counted separately.'
-                : 'No emergency labels were found automatically. If your drawings mark emergency fixtures with a label, type it below.'}
-            </div>
-            {candidates.map((c) => (
-              <Check key={c.pattern} checked={markers.has(c.pattern)} disabled={phase === 'write'} onChange={(v) => setMarkers((cur) => { const n = new Set(cur); if (v) n.add(c.pattern); else n.delete(c.pattern); return n; })}>
-                <span><b>{c.pattern.startsWith('+') ? `“${c.pattern.slice(1)}” after the tag` : c.pattern}</b> <span className="dim">({c.count} fixtures, e.g. {c.examples.slice(0, 3).join(', ')}; {c.partner ? `normal: ${c.partner}` : c.pattern.startsWith('+') ? 'possible: a word written after the tag; tick it only if it means emergency (not, for example, night light)' : 'possible: starts with E, no normal version found'})</span></span>
-              </Check>
-            ))}
-            <input className="input" style={{ minHeight: 30, padding: '3px 8px' }} aria-label="Other emergency labels" placeholder="Other emergency labels, e.g. EM#, NL  (# stands for a number)" value={customText} disabled={phase === 'write'} onChange={(e) => setCustomText(e.target.value)} />
-          </div>
-          {shortMarks > 0 && (
-            <div className="dim" style={{ fontSize: 12 }}>
-              {plural(shortMarks, 'short letter-only mark')} ({shortRows.slice(0, 6).map((r) => `${r.code} ${r.total}`).join(', ')}{shortRows.length > 6 ? '…' : ''}) {showShort ? 'are listed below, not ticked' : 'are not counted'}:
-              they are easily confused with other text. Devices such as CR, DC or MM are counted once they are in this project's library.
-              <button className="btn btn-ghost" style={{ padding: '0 6px' }} onClick={() => setShowShort((v) => !v)}>{showShort ? 'Hide them' : 'Show them to add some'}</button>
-            </div>
-          )}
-          {failed.length > 0 && <div className="err-text">{plural(failed.length, 'sheet')} couldn't be read: {failed.map((f) => f.sheet.number ?? `page ${f.sheet.page}`).join(', ')}.</div>}
-          <div style={{ maxHeight: 340, overflow: 'auto' }}>
+
+          {/* the tags to count come first and take the room */}
+          <div className="ac-table">
             <table className="table">
               <thead><tr><th /><th>Tag</th><th>Library item</th><th>Emergency</th><th className="right">Found</th></tr></thead>
               <tbody>
@@ -279,6 +243,59 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
                 {rows.length === 0 && <tr><td colSpan={5} className="muted">No tags were found. Sheets drawn as pictures (scans) have no text to read.</td></tr>}
               </tbody>
             </table>
+          </div>
+
+          <div className="ac-options">
+            {exTotals.auto + exTotals.manual > 0 && (
+              <div className="stack" style={{ gap: 4 }}>
+                <Check checked={resetAuto} disabled={phase === 'write'} onChange={(v) => { setResetAuto(v); if (!v) setResetManual(false); }}>
+                  Start fresh: erase the {plural(exTotals.auto, 'earlier automatic count')}{exTotals.confirmed ? ` (${exTotals.confirmed} confirmed)` : ''} first, then count again.
+                </Check>
+                {exTotals.manual > 0 && (
+                  <Check checked={resetManual} disabled={phase === 'write' || !resetAuto} onChange={setResetManual}>
+                    <span style={resetManual ? { color: 'var(--color-accent-300)' } : undefined}>Also erase the {plural(exTotals.manual, 'count')} placed by hand. This cannot be undone.</span>
+                  </Check>
+                )}
+              </div>
+            )}
+            {pastCount > 0 && (
+            <Check checked={ignorePast} disabled={phase === 'write'} onChange={setIgnorePast}>
+              Leave out {plural(pastCount, 'mark')} past matchlines (on {plural(pastSheets, 'sheet')}). They belong to the neighbouring sheet.
+            </Check>
+          )}
+
+            <div className="ac-section">
+              <button type="button" className="ac-head" aria-expanded={emOpen} onClick={() => setEmOpen((v) => !v)}>
+                <span className="ac-caret">{emOpen ? '▾' : '▸'}</span>
+                <span style={{ fontWeight: 500 }}>Emergency fixtures</span>
+                <span className="dim" style={{ fontSize: 12 }}>{emSummary}</span>
+                {emToReview > 0 && <span className="tag tag-outline">{emToReview} to review</span>}
+              </button>
+              {emOpen && (
+                <div className="stack" style={{ gap: 8, padding: '6px 0 2px 18px' }}>
+            <div className="muted" style={{ fontSize: 13 }}>
+              {candidates.length > 0
+                ? 'These labels beside fixtures look like emergency markings, each next to a normal version of the same label. Tick the ones that mean emergency; those fixtures are counted separately.'
+                : 'No emergency labels were found automatically. If your drawings mark emergency fixtures with a label, type it below.'}
+            </div>
+            {candidates.map((c) => (
+              <Check key={c.pattern} checked={markers.has(c.pattern)} disabled={phase === 'write'} onChange={(v) => setMarkers((cur) => { const n = new Set(cur); if (v) n.add(c.pattern); else n.delete(c.pattern); return n; })}>
+                <span><b>{c.pattern.startsWith('+') ? `“${c.pattern.slice(1)}” after the tag` : c.pattern}</b> <span className="dim">({c.count} fixtures, e.g. {c.examples.slice(0, 3).join(', ')}; {c.partner ? `normal: ${c.partner}` : c.pattern.startsWith('+') ? 'possible: a word written after the tag; tick it only if it means emergency (not, for example, night light)' : 'possible: starts with E, no normal version found'})</span></span>
+              </Check>
+            ))}
+            <input className="input" style={{ minHeight: 30, padding: '3px 8px' }} aria-label="Other emergency labels" placeholder="Other emergency labels, e.g. EM#, NL  (# stands for a number)" value={customText} disabled={phase === 'write'} onChange={(e) => setCustomText(e.target.value)} />
+
+                </div>
+              )}
+            </div>
+          {shortMarks > 0 && (
+            <div className="dim" style={{ fontSize: 12 }}>
+              {plural(shortMarks, 'short letter-only mark')} ({shortRows.slice(0, 6).map((r) => `${r.code} ${r.total}`).join(', ')}{shortRows.length > 6 ? '…' : ''}) {showShort ? 'are listed below, not ticked' : 'are not counted'}:
+              they are easily confused with other text. Devices such as CR, DC or MM are counted once they are in this project's library.
+              <button className="btn btn-ghost" style={{ padding: '0 6px' }} onClick={() => setShowShort((v) => !v)}>{showShort ? 'Hide them' : 'Show them to add some'}</button>
+            </div>
+          )}
+          {failed.length > 0 && <div className="err-text">{plural(failed.length, 'sheet')} couldn't be read: {failed.map((f) => f.sheet.number ?? `page ${f.sheet.page}`).join(', ')}.</div>}
           </div>
         </>
       )}

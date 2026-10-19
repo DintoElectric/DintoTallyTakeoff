@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { CategoryRow, ItemTypeRow, MarkerShape } from '../../shared/types.ts';
 import { api, ApiError } from '../auth/api.ts';
 import { Dialog, Seg, Symbol } from '../app/ui.tsx';
+import { lengthFeetFromText } from '../detect/lengthText.ts';
 
 const SHAPES: MarkerShape[] = ['circle', 'square', 'rect', 'diamond'];
 
@@ -13,11 +14,14 @@ export function ItemDialog({ projectId, categories, defaultCategoryId, onClose, 
   const [name, setName] = useState('');
   const [spec, setSpec] = useState('');
   const [unit, setUnit] = useState('EA');
+  const [length, setLength] = useState('');                    // feet per fixture, for linear fixtures
   const [categoryId, setCategoryId] = useState(defaultCategoryId ?? '');
   const [shape, setShape] = useState<MarkerShape>('circle');
   const [glyph, setGlyph] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  const suggested = lengthFeetFromText(name, spec);
 
   async function save() {
     if (!code.trim() || !name.trim()) return setErr('Code and description are both required.');
@@ -25,7 +29,7 @@ export function ItemDialog({ projectId, categories, defaultCategoryId, onClose, 
     setErr(null);
     try {
       const { item } = await api<{ item: ItemTypeRow }>('/items', {
-        body: { project_id: projectId, code, name, spec: spec || null, unit: unit || 'EA', category_id: categoryId || null, marker_shape: shape, marker_glyph: glyph || null },
+        body: { project_id: projectId, code, name, spec: spec || null, unit: unit || 'EA', category_id: categoryId || null, marker_shape: shape, marker_glyph: glyph || null, length_ft: length.trim() ? Number(length) : null },
       });
       onCreated(item);
     } catch (e) {
@@ -45,6 +49,14 @@ export function ItemDialog({ projectId, categories, defaultCategoryId, onClose, 
         <div className="field" style={{ flex: 1 }}><label htmlFor="in">Description</label><input id="in" className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="2x4 LED troffer" /></div>
       </div>
       <div className="field"><label htmlFor="is">Spec (optional)</label><input id="is" className="input" value={spec} onChange={(e) => setSpec(e.target.value)} /></div>
+      <div className="field">
+        <label htmlFor="il">Length each, in feet (linear fixtures only)</label>
+        <div className="row" style={{ gap: 8 }}>
+          <input id="il" className="input" style={{ width: 110 }} type="number" min="0" step="0.5" value={length} onChange={(e) => setLength(e.target.value)} placeholder="4" />
+          {!length.trim() && suggested != null && <button type="button" className="btn btn-ghost" onClick={() => setLength(String(suggested))}>Use {suggested} ft from the description</button>}
+        </div>
+        <div className="dim" style={{ fontSize: 12, marginTop: 4 }}>The Excel export totals feet as count × length.</div>
+      </div>
       <div className="row">
         <div className="field" style={{ flex: 1 }}>
           <label htmlFor="icat">Category</label>

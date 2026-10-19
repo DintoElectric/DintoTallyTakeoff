@@ -6,6 +6,7 @@ import { useAuth } from '../auth/AuthProvider.tsx';
 import { Dialog, Seg, Symbol, TopBar, plural, useToast } from '../app/ui.tsx';
 import { useFetch } from '../app/useFetch.ts';
 import { paths } from '../app/router.ts';
+import { lengthFeetFromText } from '../detect/lengthText.ts';
 import { ItemDialog } from './ItemDialog.tsx';
 
 const SHAPES: MarkerShape[] = ['circle', 'square', 'rect', 'diamond'];
@@ -19,13 +20,14 @@ function Editor({ item, categories, canEdit, isAdmin, onSaved, onDeleted }: {
   const [confirm, setConfirm] = useState(false);
   useEffect(() => setF(item), [item]);
   const cat = categories.find((c) => c.id === f.category_id)?.name ?? 'Uncategorized';
-  const dirty = JSON.stringify([f.code, f.name, f.spec, f.unit, f.category_id, f.detection_mode, f.marker_shape, f.marker_glyph]) !==
-    JSON.stringify([item.code, item.name, item.spec, item.unit, item.category_id, item.detection_mode, item.marker_shape, item.marker_glyph]);
+  const dirty = JSON.stringify([f.code, f.name, f.spec, f.unit, f.category_id, f.detection_mode, f.marker_shape, f.marker_glyph, f.length_ft ?? null]) !==
+    JSON.stringify([item.code, item.name, item.spec, item.unit, item.category_id, item.detection_mode, item.marker_shape, item.marker_glyph, item.length_ft ?? null]);
+  const suggested = lengthFeetFromText(f.name, f.spec ?? '');
 
   async function save() {
     setBusy(true);
     try {
-      await api(`/items/${item.id}`, { method: 'PATCH', body: { code: f.code, name: f.name, spec: f.spec ?? '', unit: f.unit, category_id: f.category_id, detection_mode: f.detection_mode, marker_shape: f.marker_shape, marker_glyph: f.marker_glyph ?? '' } });
+      await api(`/items/${item.id}`, { method: 'PATCH', body: { code: f.code, name: f.name, spec: f.spec ?? '', unit: f.unit, category_id: f.category_id, detection_mode: f.detection_mode, marker_shape: f.marker_shape, marker_glyph: f.marker_glyph ?? '', length_ft: f.length_ft ?? null } });
       toast('Item saved.');
       onSaved();
     } catch (e) { toast(e instanceof ApiError ? e.message : 'Could not save the item.'); }
@@ -50,6 +52,14 @@ function Editor({ item, categories, canEdit, isAdmin, onSaved, onDeleted }: {
       </div>
       <div className="field"><label htmlFor="en">Description</label><input id="en" className="input" value={f.name} disabled={!canEdit} onChange={(e) => setF({ ...f, name: e.target.value })} /></div>
       <div className="field"><label htmlFor="es">Spec</label><input id="es" className="input" value={f.spec ?? ''} disabled={!canEdit} onChange={(e) => setF({ ...f, spec: e.target.value })} /></div>
+      <div className="field">
+        <label htmlFor="el">Length each, in feet (linear fixtures only)</label>
+        <div className="row" style={{ gap: 8 }}>
+          <input id="el" className="input" style={{ width: 110 }} type="number" min="0" step="0.5" value={f.length_ft ?? ''} disabled={!canEdit} onChange={(e) => setF({ ...f, length_ft: e.target.value === '' ? null : Number(e.target.value) })} placeholder="none" />
+          {canEdit && f.length_ft == null && suggested != null && <button type="button" className="btn btn-ghost" onClick={() => setF({ ...f, length_ft: suggested })}>Use {suggested} ft from the description</button>}
+        </div>
+        <div className="dim" style={{ fontSize: 12, marginTop: 4 }}>The Excel export totals feet as count × length. Leave empty for fixtures counted by the piece, or for runs whose length comes from the plans.</div>
+      </div>
       <div className="row" style={{ alignItems: 'flex-end' }}>
         <div className="field"><label>Marker</label><Seg name="eshape" value={f.marker_shape} onChange={(v) => canEdit && setF({ ...f, marker_shape: v })} options={SHAPES.map((s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) }))} /></div>
         <div className="field" style={{ width: 70 }}><label htmlFor="eg">Letters</label><input id="eg" className="input" maxLength={2} value={f.marker_glyph ?? ''} disabled={!canEdit} onChange={(e) => setF({ ...f, marker_glyph: e.target.value.toUpperCase() })} /></div>
