@@ -48,7 +48,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
   const [showShort, setShowShort] = useState(false);
   const [emOpen, setEmOpen] = useState(false); // the emergency options start folded up so the tag table has the room
   const rows: CodeRow[] = useMemo(() => {
-    const rank = (r: CodeRow) => (r.kind === 'room' ? 4 : byCode.has(r.code.toUpperCase()) ? 0 : r.kind === 'note' || r.kind === 'camera' ? 1 : r.kind === 'tag' ? 2 : 3);
+    const rank = (r: CodeRow) => (r.kind === 'room' ? 4 : byCode.has(r.code.toUpperCase()) ? 0 : r.kind === 'note' || r.kind === 'camera' || r.kind === 'outlet' ? 1 : r.kind === 'tag' ? 2 : 3);
     // Short letter-only marks (S, OS, CR, MM ...) are easily mixed up with other text, so they are counted only when this
     // project's library has them (a security device CR, a fire alarm module MM), or when you ask to see them.
     return [...discover(effective)].filter((r) => r.kind !== 'short' || byCode.has(r.code.toUpperCase()) || showShort)
@@ -84,9 +84,9 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
         // With a library (for example from a fixture schedule) only tags that match it are pre-ticked, so grid
         // labels and other look-alikes stay out. With no matches yet, every tag is pre-ticked to get you started.
         // Room numbers are never pre-ticked.
-        const lib = found.filter((r) => r.kind !== 'room' && r.kind !== 'note' && r.kind !== 'camera' && byCode.has(r.code.toUpperCase()));
+        const lib = found.filter((r) => r.kind !== 'room' && r.kind !== 'note' && r.kind !== 'camera' && r.kind !== 'outlet' && byCode.has(r.code.toUpperCase()));
         setLibraryDriven(lib.length > 0);
-        const notes = found.filter((r) => r.kind === 'note' || r.kind === 'camera'); // drawing notes and cameras (found from their labels) are always counted
+        const notes = found.filter((r) => r.kind === 'note' || r.kind === 'camera' || r.kind === 'outlet'); // drawing notes, cameras and triangle outlets are always counted
         setInc(new Set([...(lib.length > 0 ? lib : found.filter((r) => r.kind === 'tag')), ...notes].map((r) => r.code)));
         // Only markers with a normal twin are pre-ticked; "possible" ones (no twin) are left for the estimator.
         setMarkers(new Set(discoverMarkers(res.flatMap((sc) => sc.hits.filter((h) => !h.past))).filter((c) => c.partner !== null).map((c) => c.pattern)));
@@ -119,7 +119,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
       await flushAll(); // save any edits still waiting to be sent, so they are not lost or left out of a fresh start
       // 1. Resolve each chosen tag to a library item, creating items for new tags.
       let noteCat: string | undefined;
-      let camCat: string | undefined;
+      const devCats = new Map<string, string>(); // Cameras, Outlets
       const resolved = new Map<string, ItemTypeRow>();
       const ambiguous = new Set<string>();
       for (const r of rows.filter((x) => inc.has(x.code))) {
@@ -131,10 +131,11 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
         }
         setStatus(`Adding ${r.code} to the library…`);
         const isNote = r.kind === 'note';
-        const isCamera = r.kind === 'camera';
-        if (isCamera && camCat === undefined) {
+        const isCamera = r.kind === 'camera' || r.kind === 'outlet'; // found from a symbol and its label: named, with their own category
+        const catName = r.kind === 'outlet' ? 'Outlets' : 'Cameras';
+        if (isCamera && !devCats.has(catName)) {
           const { categories } = await api<{ categories: CategoryRow[] }>(`/categories?project=${projectId}`);
-          camCat = categories.find((c) => c.name.toLowerCase() === 'cameras')?.id ?? (await api<{ category: CategoryRow }>('/categories', { body: { project_id: projectId, name: 'Cameras' } })).category.id;
+          devCats.set(catName, categories.find((c) => c.name.toLowerCase() === catName.toLowerCase())?.id ?? (await api<{ category: CategoryRow }>('/categories', { body: { project_id: projectId, name: catName } })).category.id);
         }
         if (isNote && noteCat === undefined) {
           const { categories } = await api<{ categories: CategoryRow[] }>(`/categories?project=${projectId}`);
@@ -143,7 +144,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
         const { item } = await api<{ item: ItemTypeRow }>('/items', {
           body: {
             project_id: projectId, code: r.code, name: (names[r.code] ?? '').trim() || (isCamera ? r.name ?? r.code : isNote ? `Drawing note ${r.code}` : r.code),
-            category_id: isCamera ? camCat : isNote ? noteCat : null, marker_shape: isCamera ? r.shape ?? 'circle' : isNote ? 'diamond' : r.kind === 'short' ? 'square' : 'circle', marker_glyph: isNote ? null : isCamera ? r.glyph ?? r.code.slice(0, 2) : r.code.slice(0, 2),
+            category_id: isCamera ? devCats.get(catName) ?? null : isNote ? noteCat : null, marker_shape: isCamera ? r.shape ?? 'circle' : isNote ? 'diamond' : r.kind === 'short' ? 'square' : 'circle', marker_glyph: isNote ? null : isCamera ? r.glyph ?? r.code.slice(0, 2) : r.code.slice(0, 2),
           },
         });
         resolved.set(r.code, item);
@@ -243,8 +244,8 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
                   return (
                     <tr key={r.code}>
                       <td><Check checked={inc.has(r.code)} disabled={phase === 'write'} onChange={(v) => setInc((cur) => { const n = new Set(cur); if (v) n.add(r.code); else n.delete(r.code); return n; })}><span className="sr-only">Count {r.code}</span></Check></td>
-                      <td style={{ fontWeight: 500 }}>{r.code}{r.kind === 'short' && <span className="tag tag-outline" style={{ marginLeft: 8 }} title="Short letter-only codes can match ordinary text. They are flagged for review.">Short code</span>}{r.kind === 'note' && <span className="tag tag-accent" style={{ marginLeft: 8 }} title="A number or letters inside a hexagon on the plan.">Drawing note</span>}{r.kind === 'camera' && <span className="tag tag-accent" style={{ marginLeft: 8 }} title="Found from the label printed beside the camera (its type over its ID). Its mounting is read from the word beside it (PM) and the mounting lines off its ring.">Camera</span>}{r.kind === 'room' && <span className="tag tag-neutral" style={{ marginLeft: 8 }} title="A room name sits just above it and it appears once. Tick it only if it is really a device.">Looks like a room number</span>}</td>
-                      <td>{lib ? <span className="muted">{lib[0].name.length > 50 ? `${lib[0].name.slice(0, 50)}…` : lib[0].name}{lib.length > 1 ? ` (+${lib.length - 1} variant${lib.length === 2 ? '' : 's'}: flagged for review)` : ''}</span> : <input className="input" style={{ minHeight: 30, padding: '3px 8px', width: '100%', minWidth: 230 }} placeholder={r.kind === 'note' ? `Drawing note ${r.code}` : 'Description (optional)'} aria-label={`Description for ${r.code}`} value={names[r.code] ?? (r.kind === 'camera' ? r.name ?? '' : '')} disabled={phase === 'write'} onChange={(e) => setNames({ ...names, [r.code]: e.target.value })} />}</td>
+                      <td style={{ fontWeight: 500 }}>{r.code}{r.kind === 'short' && <span className="tag tag-outline" style={{ marginLeft: 8 }} title="Short letter-only codes can match ordinary text. They are flagged for review.">Short code</span>}{r.kind === 'note' && <span className="tag tag-accent" style={{ marginLeft: 8 }} title="A number or letters inside a hexagon on the plan.">Drawing note</span>}{r.kind === 'outlet' && <span className="tag tag-accent" style={{ marginLeft: 8 }} title="A triangle with its label beside it. A circle around it is the ceiling version; a hollow triangle is a different device.">Outlet</span>}{r.kind === 'camera' && <span className="tag tag-accent" style={{ marginLeft: 8 }} title="Found from the label printed beside the camera (its type over its ID). Its mounting is read from the word beside it (PM) and the mounting lines off its ring.">Camera</span>}{r.kind === 'room' && <span className="tag tag-neutral" style={{ marginLeft: 8 }} title="A room name sits just above it and it appears once. Tick it only if it is really a device.">Looks like a room number</span>}</td>
+                      <td>{lib ? <span className="muted">{lib[0].name.length > 50 ? `${lib[0].name.slice(0, 50)}…` : lib[0].name}{lib.length > 1 ? ` (+${lib.length - 1} variant${lib.length === 2 ? '' : 's'}: flagged for review)` : ''}</span> : <input className="input" style={{ minHeight: 30, padding: '3px 8px', width: '100%', minWidth: 230 }} placeholder={r.kind === 'note' ? `Drawing note ${r.code}` : 'Description (optional)'} aria-label={`Description for ${r.code}`} value={names[r.code] ?? (r.kind === 'camera' || r.kind === 'outlet' ? r.name ?? '' : '')} disabled={phase === 'write'} onChange={(e) => setNames({ ...names, [r.code]: e.target.value })} />}</td>
                       <td>{r.kind === 'tag' && (emByCode.get(r.code) ?? 0) > 0 && !/^XL/i.test(r.code) && (byCode.get(r.code.toUpperCase())?.length ?? 0) <= 1 ? (
                         <Check checked={!splitOff.has(r.code)} disabled={phase === 'write'} onChange={(v) => setSplitOff((cur) => { const n = new Set(cur); if (v) n.delete(r.code); else n.add(r.code); return n; })}>{emByCode.get(r.code)} as {emergencyCode(r.code, activeMarkers)}</Check>
                       ) : <span className="dim">{r.kind === 'tag' && /^XL/i.test(r.code) ? 'exit sign' : ''}</span>}</td>
