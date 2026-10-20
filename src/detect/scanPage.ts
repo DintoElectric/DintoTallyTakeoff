@@ -1,6 +1,6 @@
 // The per-page scan used by Auto-count: tags, drawing notes (hexagons), room numbers, and matchlines.
 import { findGridBubbles, inBubble, type GridBubble } from './gridBubbles.ts';
-import { cameraCode, cameraName, findCameras, MOUNT_SHAPE } from './symbolContext.ts';
+import { cameraCode, cameraName, findCameras, MOUNT_CODE, MOUNT_SHAPE } from './symbolContext.ts';
 import { darkSmall } from './symbolSearch.ts';
 import { extractRuns, type PageRun } from './pageRuns.ts';
 import { extractPrims, type OpsLike } from './primitives.ts';
@@ -42,7 +42,7 @@ export async function scanPage(page: PageForRuns & PageForPrims, OPS: OpsLike, s
     const cams = findCameras(darkSmall(prims), marks).filter((c) => c.x / width >= R.x0 && c.x / width <= R.x1 && c.y / height >= R.y0 && c.y / height <= R.y1);
     // the "F" printed as a camera's type is not a count of the F item
     hits = hits.filter((h) => !(h.code === 'F' && cams.some((c) => Math.abs(h.x * width - c.label.x) < 6 && Math.abs(h.y * height - c.label.y) < 6)));
-    for (const c of cams) hits.push({ code: cameraCode(c.kind, c.mount), x: c.x / width, y: c.y / height, kind: 'camera', name: cameraName(c.kind, c.mount), shape: MOUNT_SHAPE[c.mount], glyph: c.kind === 'F' ? 'F' : c.kind.slice(0, 2), conf: c.ring ? 0.95 : 0.6 });
+    for (const c of cams) hits.push({ code: cameraCode(c.kind, c.mount), x: c.x / width, y: c.y / height, kind: 'camera', name: cameraName(c.kind, c.mount), shape: MOUNT_SHAPE[c.mount], glyph: `${c.kind}${MOUNT_CODE[c.mount][0]}`, conf: c.ring ? 0.95 : 0.6 }); // glyph: 360W, 180P, FC (type and mounting)
     for (const n of notes) hits.push({ code: n.label, x: n.x, y: n.y, kind: 'note' });
   } catch (e) {
     console.warn('Drawing-note detection failed for a sheet; counting tags only', e);

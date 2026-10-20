@@ -236,8 +236,11 @@ function search(ix: Index, t: Template, minScore: number, minWeighted: number, t
  * A curved shape's box centre moves a little when it is turned, so the anchor's position is only roughly right. The short
  * straight segments (a camera's rings are made of dozens) have exact midpoints, so the position is refined from those.
  */
-function searchRotated(ix: Index, t: Template, minScore: number, minWeighted: number): SymbolMatch[] {
-  if (t.sig.length < 6 || t.texts.length > 0) return [];
+function searchRotated(ix: Index, t: Template, minScore: number, minWeighted: number, texts: TextMark[]): SymbolMatch[] {
+  // A symbol with letters or a number beside it (an outlet's triangle and its "2") is told apart by them, so even one shape will
+  // do; the letters stay upright when the symbol turns, so they are checked as text beside it. Without letters, a symbol needs
+  // enough shapes that a turn cannot be matched by chance.
+  if (t.sig.length === 0 || (t.texts.length === 0 && t.sig.length < 6)) return [];
   const mx = t.w / 2, my = t.h / 2;
   const wt = (area: number) => Math.max(1, area) ** WEIGHT_POWER;
   const tp = t.sig.map((s) => {
@@ -304,7 +307,10 @@ function searchRotated(ix: Index, t: Template, minScore: number, minWeighted: nu
           }
           if (best) { used.add(best); m++; mw += wt(p.area); }
         }
-        const win = ix.around(Cx, Cy, reach);
+        if (t.texts.length) { const h = Math.max(t.w, t.h) / 2; if (!hasLetters({ x0: Cx - h, y0: Cy - h, x1: Cx + h, y1: Cy + h }, texts, t.texts, t.inside === true)) continue; }
+        // For a small symbol with letters, count only what lies wholly within its reach (a wall crossing nearby is not part of it), as
+        // the exact search does. A complex symbol keeps the stricter count of everything centred nearby.
+        const win = ix.around(Cx, Cy, reach).filter((r) => !t.texts.length || used.has(r) || Math.max(Math.hypot(r.x0 - Cx, r.y0 - Cy), Math.hypot(r.x1 - Cx, r.y0 - Cy), Math.hypot(r.x0 - Cx, r.y1 - Cy), Math.hypot(r.x1 - Cx, r.y1 - Cy)) <= reach + 1);
         const score = (2 * m) / (tp.length + win.length);
         if (score < minScore) continue;
         // a matched shape weighs the same on both sides (a turned wedge's box is bigger, but it is the same wedge); only the extras count for themselves
@@ -338,7 +344,7 @@ export function findSimilar(prims: Prim[], template: Template, opts: SymbolSearc
   const ix = indexOf(prims);
   const all: SymbolMatch[] = [];
   for (const o of orientations(template)) all.push(...search(ix, o, minScore, minWeighted, texts));
-  all.push(...searchRotated(ix, template, minScore, minWeighted));
+  all.push(...searchRotated(ix, template, minScore, minWeighted, texts));
   // One symbol, one match: drop weaker matches that overlap a better one.
   all.sort((m, n) => n.score - m.score);
   const kept: SymbolMatch[] = [];
