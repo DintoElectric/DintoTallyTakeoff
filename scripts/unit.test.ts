@@ -947,3 +947,60 @@ test('similar symbols: a line drawn twice a hair apart counts once, and a small 
   const cut = buildTemplate(darkSmall(page), texts, { x0: 96, y0: 96, x1: 112, y1: 124 });
   assert.ok(cut && findSimilar(darkSmall(page), cut, { texts }).length >= 3);
 });
+
+import { findCameras, cameraCode, cameraName } from '../src/detect/symbolContext.ts';
+import { discover } from '../src/detect/codeRows.ts';
+// ---- cameras counted from the label printed beside them ----
+const segPrim = (ax: number, ay: number, bx: number, by: number): PrimT => ({ x0: Math.min(ax, bx), y0: Math.min(ay, by), x1: Math.max(ax, bx), y1: Math.max(ay, by), n: 2, fill: false, lum: 0, pts: [ax, ay, bx, by] });
+/** A camera ring drawn as CAD does: dozens of tiny straight segments, an outer and an inner ring. */
+const ringOf = (cx: number, cy: number): PrimT[] => {
+  const out: PrimT[] = [];
+  for (const [r, count] of [[13.5, 28], [9, 20]] as const) for (let k = 0; k < count; k++) {
+    const a0 = (k / count) * 2 * Math.PI, a1 = ((k + 1) / count) * 2 * Math.PI;
+    out.push(segPrim(cx + r * Math.cos(a0), cy + r * Math.sin(a0), cx + r * Math.cos(a1), cy + r * Math.sin(a1)));
+  }
+  return out;
+};
+/** A mounting line off the ring at `deg`, `len` long. */
+const stemAt = (cx: number, cy: number, deg: number, len = 9): PrimT => { const a = (deg * Math.PI) / 180; return segPrim(cx + 13.5 * Math.cos(a), cy + 13.5 * Math.sin(a), cx + (13.5 + len) * Math.cos(a), cy + (13.5 + len) * Math.sin(a)); };
+const stack = (cx: number, cy: number, kind: string, id = '01-43') => [{ s: kind, x: cx + 34, y: cy - 6 }, { s: id, x: cx + 34, y: cy + 8 }];
+
+test('cameras: found from the label beside them, and sorted by how they are mounted', () => {
+  const prims: PrimT[] = [...ringOf(200, 200), ...ringOf(500, 200), stemAt(500, 200, 90), ...ringOf(800, 200), stemAt(800, 200, 225, 7), ...ringOf(1100, 200), ...ringOf(1400, 200)];
+  const texts = [
+    ...stack(200, 200, '360°', '01-10'),                                   // a bare ring: ceiling
+    ...stack(500, 200, '360°', '01-11'),                                   // a line straight off the ring: wall
+    ...stack(800, 200, '180°', '01-12'),                                   // a line off a diagonal: wall
+    ...stack(1100, 200, '360°', '01-13'), { s: 'PM', x: 1066, y: 200 },    // PM beside it: pole
+    ...stack(1400, 200, 'F', '01-14'),                                     // an F over an ID: a fixed camera
+  ];
+  const cams = findCameras(prims, texts);
+  const codes = cams.map((c) => cameraCode(c.kind, c.mount)).sort();
+  assert.deepEqual(codes, ['180-WALL', '360-CLG', '360-PM', '360-WALL', 'F-CLG']);
+  const pm = cams.find((c) => c.mount === 'pole')!;
+  assert.equal(pm.mountFrom, 'text');
+  assert.ok(Math.hypot(pm.x - 1100, pm.y - 200) < 2, 'the position is the ring centre');
+  assert.equal(cameraName('180', 'wall'), '180° camera, wall mounted');
+});
+test('cameras: a word beside the symbol beats the lines, and belongs to the nearer ring', () => {
+  const prims = [...ringOf(200, 200), stemAt(200, 200, 180), ...ringOf(330, 200)];
+  const texts = [...stack(200, 200, '360°', '01-20'), { s: 'PM', x: 172, y: 200 }, ...stack(330, 200, '360°', '01-21'), { s: 'WM', x: 360, y: 218 }];
+  const cams = findCameras(prims, texts).sort((a, b) => a.x - b.x);
+  assert.deepEqual(cams.map((c) => [c.mount, c.mountFrom]), [['pole', 'text'], ['wall', 'text']]);   // PM beats the drawn line; WM is the second camera's
+});
+test('cameras: a degree sign is not a camera without its ID under it (a 90° dimension beside a pipe drawn as a ring)', () => {
+  const prims = [...ringOf(200, 200)];
+  assert.equal(findCameras(prims, [{ s: '90°', x: 234, y: 194 }]).length, 0);                       // a dimension: no ID under it
+  assert.equal(findCameras(prims, [{ s: 'F', x: 234, y: 194 }]).length, 0);                         // a lone F
+  assert.equal(findCameras([], [{ s: 'HOT WATER 120°', x: 100, y: 100 }]).length, 0);
+  assert.equal(findCameras([], [{ s: 'F', x: 100, y: 100 }, { s: '75', x: 100, y: 112 }]).length, 0);                 // a strobe: F over its candela rating, not an ID
+  // a camera whose ring was not found is still counted, from its label stack, with no ring
+  const lone = findCameras([], stack(600, 600, '360°', 'C12'));
+  assert.equal(lone.length, 1); assert.equal(lone[0].ring, null); assert.equal(lone[0].mount, 'ceiling');
+});
+test('cameras: Auto-count lists each bucket as its own row, named, with a marker shape that shows the mounting', () => {
+  const hit = (code: string, kind: string, name: string, shape: string) => ({ code, kind, x: 0.5, y: 0.5, name, shape, glyph: '36' } as any);
+  const rows = discover([{ sheet: { id: 's1' } as any, zones: [], hits: [hit('360-CLG', 'camera', '360° camera, ceiling mounted', 'circle'), hit('360-CLG', 'camera', '360° camera, ceiling mounted', 'circle'), hit('360-WALL', 'camera', '360° camera, wall mounted', 'square')] }]);
+  assert.deepEqual(rows.map((r) => [r.code, r.kind, r.total, r.shape]), [['360-CLG', 'camera', 2, 'circle'], ['360-WALL', 'camera', 1, 'square']]);
+  assert.equal(rows[0].name, '360° camera, ceiling mounted');
+});
