@@ -161,7 +161,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
           setStatus(`Adding ${emCode} (emergency ${r.code}) to the library…`);
           try {
             emItem = (await api<{ item: ItemTypeRow }>('/items', {
-              body: { project_id: projectId, code: emCode, name: `${base.name}, emergency`.slice(0, 200), spec: base.spec, category_id: base.category_id, unit: base.unit, marker_shape: base.marker_shape, marker_glyph: base.marker_glyph },
+              body: { project_id: projectId, code: emCode, name: `${base.name}, emergency`.slice(0, 200), spec: base.spec, category_id: base.category_id, unit: base.unit, length_ft: base.length_ft ?? null, /* an emergency strip is as long as its normal twin, so its footage is counted too */ marker_shape: base.marker_shape, marker_glyph: base.marker_glyph },
             })).item;
             emCreated++;
           } catch (e) {
