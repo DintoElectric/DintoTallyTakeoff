@@ -2,6 +2,7 @@
 import { findGridBubbles, inBubble, type GridBubble } from './gridBubbles.ts';
 import { cameraCode, cameraName, findCameras, MOUNT_CODE, MOUNT_SHAPE } from './symbolContext.ts';
 import { darkSmall } from './symbolSearch.ts';
+import { findTriangles, triangleCode, triangleName } from './triangles.ts';
 import { extractRuns, type PageRun } from './pageRuns.ts';
 import { extractPrims, type OpsLike } from './primitives.ts';
 import { findHexNotes } from './notes.ts';
@@ -43,6 +44,16 @@ export async function scanPage(page: PageForRuns & PageForPrims, OPS: OpsLike, s
     // the "F" printed as a camera's type is not a count of the F item
     hits = hits.filter((h) => !(h.code === 'F' && cams.some((c) => Math.abs(h.x * width - c.label.x) < 6 && Math.abs(h.y * height - c.label.y) < 6)));
     for (const c of cams) hits.push({ code: cameraCode(c.kind, c.mount), x: c.x / width, y: c.y / height, kind: 'camera', name: cameraName(c.kind, c.mount), shape: MOUNT_SHAPE[c.mount], glyph: `${c.kind}${MOUNT_CODE[c.mount][0]}`, conf: c.ring ? 0.95 : 0.6 }); // glyph: 360W, 180P, FC (type and mounting)
+    // Outlets drawn as a triangle with a label beside it ("2", "4", "WAP", "IPC"): the triangle and its label are the device,
+    // a circle around it makes it the ceiling version, and a hollow triangle is another device again. The label's own text hit
+    // (a WAP or M4 read as a tag) is replaced by the outlet, placed on the triangle, so nothing is counted twice.
+    const dark = darkSmall(prims);
+    const outlets = findTriangles(dark, marks, knownCodes ? new Set([...knownCodes].map((c) => c.toUpperCase())) : undefined).filter((t) => t.label && t.x / width >= R.x0 && t.x / width <= R.x1 && t.y / height >= R.y0 && t.y / height <= R.y1);
+    hits = hits.filter((h) => !outlets.some((t) => t.labelAt && Math.abs(h.x * width - t.labelAt.x) < 3 && Math.abs(h.y * height - t.labelAt.y) < 3));
+    for (const t of outlets) {
+      const code = triangleCode(t);
+      if (code) hits.push({ code, x: t.x / width, y: t.y / height, kind: 'outlet', name: triangleName(t), shape: t.circled ? 'circle' : t.solid ? 'square' : 'diamond', glyph: (t.label ?? '').toUpperCase().slice(0, 8), conf: 0.95 });
+    }
     for (const n of notes) hits.push({ code: n.label, x: n.x, y: n.y, kind: 'note' });
   } catch (e) {
     console.warn('Drawing-note detection failed for a sheet; counting tags only', e);
