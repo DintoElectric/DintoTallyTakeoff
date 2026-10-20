@@ -62,7 +62,7 @@ function Editor({ item, categories, canEdit, isAdmin, onSaved, onDeleted }: {
       </div>
       <div className="row" style={{ alignItems: 'flex-end' }}>
         <div className="field"><label>Marker</label><Seg name="eshape" value={f.marker_shape} onChange={(v) => canEdit && setF({ ...f, marker_shape: v })} options={SHAPES.map((s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) }))} /></div>
-        <div className="field" style={{ width: 70 }}><label htmlFor="eg">Letters</label><input id="eg" className="input" maxLength={2} value={f.marker_glyph ?? ''} disabled={!canEdit} onChange={(e) => setF({ ...f, marker_glyph: e.target.value.toUpperCase() })} /></div>
+        <div className="field" style={{ width: 120 }}><label htmlFor="eg">Letters (up to 8)</label><input id="eg" className="input" maxLength={8} value={f.marker_glyph ?? ''} disabled={!canEdit} onChange={(e) => setF({ ...f, marker_glyph: e.target.value.toUpperCase() })} /></div>
       </div>
       <div className="field">
         <label>Detection</label>

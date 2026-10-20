@@ -69,7 +69,7 @@ export function ItemDialog({ projectId, categories, defaultCategoryId, onClose, 
       </div>
       <div className="row" style={{ alignItems: 'flex-end' }}>
         <div className="field"><label>Marker shape</label><Seg name="shape" value={shape} onChange={setShape} options={SHAPES.map((s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) }))} /></div>
-        <div className="field" style={{ width: 90 }}><label htmlFor="ig">Letters (1–2)</label><input id="ig" className="input" maxLength={2} value={glyph} onChange={(e) => setGlyph(e.target.value)} /></div>
+        <div className="field" style={{ width: 130 }}><label htmlFor="ig">Letters (up to 8)</label><input id="ig" className="input" maxLength={8} value={glyph} onChange={(e) => setGlyph(e.target.value)} /></div>
       </div>
       {err && <div className="err-text" role="alert">{err}</div>}
       <div className="dialog-actions">
