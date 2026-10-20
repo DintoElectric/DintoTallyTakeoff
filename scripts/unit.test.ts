@@ -1024,3 +1024,41 @@ test('similar symbols: a symbol with a number beside it is found however it is t
   assert.ok(!at(700) && !at(900), 'another number, or another shape, is not this symbol');
   assert.equal(found.length, 3);
 });
+
+import { findTriangles, triangleCode, outletLabel } from '../src/detect/triangles.ts';
+// ---- outlets drawn as a triangle with a label beside it ----
+/** A triangle as CAD draws it: three separate lines, each twice; a solid one has its black laid over it as a filled box. */
+const triangle = (cx: number, cy: number, deg: number, solid: boolean, side = 10.4): PrimT[] => {
+  const R = side / Math.sqrt(3); const v = [0, 120, 240].map((k) => { const a = ((deg + 90 + k) * Math.PI) / 180; return [cx + R * Math.cos(a), cy + R * Math.sin(a)]; });
+  const out: PrimT[] = [];
+  for (let i = 0; i < 3; i++) { const [a, b] = [v[i], v[(i + 1) % 3]]; out.push(segPrim(a[0], a[1], b[0], b[1]), segPrim(b[0], b[1], a[0], a[1])); }
+  if (solid) { const xs = v.map((p) => p[0]), ys = v.map((p) => p[1]); out.push({ x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys), n: 4, fill: true, lum: 0 }); }
+  return out;
+};
+const circleRing = (cx: number, cy: number, r = 8.4, count = 28): PrimT[] => Array.from({ length: count }, (_, k) => { const a0 = (k / count) * 2 * Math.PI, a1 = ((k + 1) / count) * 2 * Math.PI; return segPrim(cx + r * Math.cos(a0), cy + r * Math.sin(a0), cx + r * Math.cos(a1), cy + r * Math.sin(a1)); });
+
+test('triangle outlets: the triangle and its label are the device; a circle makes it the ceiling version, a hollow one is another device', () => {
+  const prims = [
+    ...triangle(100, 100, 0, true),                              // solid, "2": TRI-2
+    ...triangle(300, 100, 90, true),                             // the same outlet turned: still TRI-2
+    ...triangle(500, 100, 0, false),                             // hollow, "4": TRIO-4
+    ...triangle(700, 100, 0, true), ...circleRing(700, 100),     // in a circle, "IPC": the ceiling camera outlet
+    ...triangle(900, 100, 0, true),                              // plain "IPC": the wall one
+    ...triangle(1100, 100, 0, true), ...circleRing(1100, 100),   // "IPC-PM": pendant, already says so
+  ];
+  const texts = [{ s: '2', x: 100, y: 88 }, { s: '2', x: 312, y: 100 }, { s: '4', x: 500, y: 88 }, { s: 'IPC', x: 718, y: 100 }, { s: 'IPC', x: 918, y: 100 }, { s: 'IPC-PM', x: 1122, y: 100 }];
+  const codes = findTriangles(prims, texts).map(triangleCode).sort();
+  assert.deepEqual(codes, ['IPC', 'IPC-CLG', 'IPC-PM', 'TRI-2', 'TRI-2', 'TRIO-4']);
+});
+test('triangle outlets: a revision delta, a flat fire alarm speaker, and words or ratings beside a triangle are not outlets', () => {
+  const flat: PrimT[] = [segPrim(486, 107, 477.5, 107), segPrim(477.5, 107, 481.8, 102.8), segPrim(481.8, 102.8, 486, 107)];   // 8.6, 6, 6: a speaker under a strobe
+  const prims = [...triangle(100, 100, 0, false, 14), ...flat, ...triangle(700, 100, 0, true), ...triangle(900, 100, 0, true), ...triangle(1100, 100, 0, true)];
+  const texts = [{ s: '1', x: 100, y: 101 },   // inside: a revision delta
+    { s: '75', x: 482, y: 114 },                // a strobe's candela rating, beside the flat speaker triangle
+    { s: '100', x: 700, y: 88 }, { s: 'MORE', x: 900, y: 88 }, { s: 'IPTV', x: 1100, y: 88 }];
+  const found = findTriangles(prims, texts);
+  assert.deepEqual(found.filter((t) => t.label).map((t) => t.label), []);                                // none without the library
+  assert.deepEqual(findTriangles(prims, texts, new Set(['IPTV'])).filter((t) => t.label).map((t) => t.label), ['IPTV']);   // a library code is fine
+  assert.ok(outletLabel('2') && outletLabel('F2') && outletLabel('4AC') && outletLabel('WAP') && outletLabel('IPC-PM') && outletLabel('PT4'));
+  assert.ok(!outletLabel('100') && !outletLabel('MORE') && !outletLabel('HANGING') && !outletLabel('SHWP-2'));
+});
