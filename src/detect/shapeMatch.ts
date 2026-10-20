@@ -8,7 +8,7 @@ const SIZE_MAX = 60;      // ignore long lines (walls, grid): symbols are small
 const DARK = 0.35;        // only dark linework and dark fills carry the symbol; gray hatching does not
 const TOL = 1.5;          // points of position tolerance between two drawings of the same symbol
 
-export interface SigPrim { x0: number; y0: number; x1: number; y1: number; n: number; fill: boolean }
+export interface SigPrim { x0: number; y0: number; x1: number; y1: number; n: number; fill: boolean; d?: number } // d: diameter, unchanged by turning
 export type Signature = SigPrim[];
 
 /** Salient shapes around a tag, positions relative to the tag center, in points. */
@@ -69,6 +69,25 @@ export function similarity(a: Signature, b: Signature): number {
   if (a.length === 0 || b.length === 0) return 0;
   const { dx, dy } = align(a, b);
   return (2 * matches(a, b, dx, dy)) / (a.length + b.length);
+}
+
+/**
+ * Like `similarity`, but big shapes count for more than small ones: each shape is weighted by its size raised to `power`
+ * (0 = every shape equal, 1 = by area). A camera symbol is a ring of 60 tiny segments plus two wedges; by count alone the
+ * wedges barely register, but they are what tells a two-wedge camera from a four-wedge one.
+ */
+export function weightedSimilarity(a: Signature, b: Signature, power = 0.5): number {
+  if (a.length === 0 && b.length === 0) return 1;
+  if (a.length === 0 || b.length === 0) return 0;
+  const w = (p: SigPrim) => Math.max(1, (p.x1 - p.x0) * (p.y1 - p.y0)) ** power;
+  const { dx, dy } = align(a, b);
+  const used = new Array<boolean>(b.length).fill(false);
+  let matched = 0;
+  for (const p of a) {
+    for (let j = 0; j < b.length; j++) if (!used[j] && same(p, b[j], dx, dy)) { used[j] = true; matched += w(p); break; }
+  }
+  const total = a.reduce((n, p) => n + w(p), 0) + b.reduce((n, p) => n + w(p), 0);
+  return (2 * matched) / total;
 }
 
 // Meaningful shapes: solid fills and outlines with 3 or more points. Short stray line segments are noise.

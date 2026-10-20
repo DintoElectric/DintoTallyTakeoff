@@ -6,6 +6,7 @@ export interface Prim {
   n: number;       // number of points in the path
   fill: boolean;
   lum: number;     // luminance 0 (black) .. 1 (white) of the paint that is visible (fill if filled, else stroke)
+  pts?: number[];  // the path's points as x,y pairs (curves: their end points), only kept for small shapes when asked for
 }
 
 export interface OpsLike {
@@ -30,7 +31,8 @@ function lumOf(hex: unknown): number {
   return (0.299 * parseInt(m[1], 16) + 0.587 * parseInt(m[2], 16) + 0.114 * parseInt(m[3], 16)) / 255;
 }
 
-export async function extractPrims(page: PageLike, OPS: OpsLike): Promise<{ prims: Prim[]; width: number; height: number }> {
+/** `keepPoints` also keeps the points of small shapes (a symbol search needs them to tell a turned symbol from another). */
+export async function extractPrims(page: PageLike, OPS: OpsLike, opts: { keepPoints?: boolean } = {}): Promise<{ prims: Prim[]; width: number; height: number }> {
   const vp = page.getViewport({ scale: 1 });
   const ol = await page.getOperatorList({ annotationMode: 0 });
   const FILL = new Set([OPS.fill, OPS.eoFill, OPS.fillStroke, OPS.eoFillStroke, OPS.closeFillStroke, OPS.closeEOFillStroke]);
@@ -65,13 +67,18 @@ export async function extractPrims(page: PageLike, OPS: OpsLike): Promise<{ prim
       }
       if (pts.length < 4) continue;
       let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+      // Points are kept only for what a symbol search can use: dark paint and a small shape (a dense page has 300,000 shapes).
+      const out: number[] | null = opts.keepPoints && pts.length <= 160 && (FILL.has(paint) ? fillL : strokeL) <= 0.35 ? [] : null;
       for (let j = 0; j < pts.length; j += 2) {
         const X = ctm[0] * pts[j] + ctm[2] * pts[j + 1] + ctm[4];
         const Y = ctm[1] * pts[j] + ctm[3] * pts[j + 1] + ctm[5];
         if (X < x0) x0 = X; if (X > x1) x1 = X; if (Y < y0) y0 = Y; if (Y > y1) y1 = Y;
+        if (out) out.push(X, Y);
       }
       const fill = FILL.has(paint);
-      prims.push({ x0, y0, x1, y1, n: pts.length / 2, fill, lum: fill ? fillL : strokeL });
+      const prim: Prim = { x0, y0, x1, y1, n: pts.length / 2, fill, lum: fill ? fillL : strokeL };
+      if (out && x1 - x0 <= 60 && y1 - y0 <= 60) prim.pts = out;
+      prims.push(prim);
     }
   }
   return { prims, width: vp.width, height: vp.height };
