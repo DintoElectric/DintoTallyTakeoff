@@ -38,7 +38,7 @@ function lengthOrNull(v: unknown): number | null {
 }
 
 function glyph(v: unknown): string | null {
-  const g = str(v, 'Symbol letters', { max: 2 });
+  const g = str(v, 'Symbol letters', { max: 8 });
   return g ? g.toUpperCase() : null;
 }
 
