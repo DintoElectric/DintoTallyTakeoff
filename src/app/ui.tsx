@@ -113,10 +113,10 @@ export function Seg<T extends string>({ value, onChange, options, name }: { valu
   );
 }
 
-/** Symbol tile: marker shape + 1-2 letter glyph, exactly as drawn on the sheet (Part 1). */
+/** Symbol tile: marker shape + its letters. Up to two letters sit inside the shape; longer ones ("360W") widen it into a pill. */
 export function Symbol({ shape, glyph, active, big }: { shape: MarkerShape; glyph: string | null; active?: boolean; big?: boolean }) {
   return (
-    <div className={`sym${active ? ' active' : ''}${big ? ' big' : ''}`} aria-hidden="true">
+    <div className={`sym${active ? ' active' : ''}${big ? ' big' : ''}${(glyph?.length ?? 0) > 2 ? ' long' : ''}`} aria-hidden="true">
       <span className={shape}><b>{glyph ?? ''}</b></span>
     </div>
   );
