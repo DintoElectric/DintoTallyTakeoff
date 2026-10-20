@@ -1004,3 +1004,23 @@ test('cameras: Auto-count lists each bucket as its own row, named, with a marker
   assert.deepEqual(rows.map((r) => [r.code, r.kind, r.total, r.shape]), [['360-CLG', 'camera', 2, 'circle'], ['360-WALL', 'camera', 1, 'square']]);
   assert.equal(rows[0].name, '360° camera, ceiling mounted');
 });
+
+test('similar symbols: a symbol with a number beside it is found however it is turned; the number stays upright and must match', () => {
+  const tri = (cx: number, cy: number, deg: number): PrimT => { const a = (deg * Math.PI) / 180, c = Math.cos(a), s = Math.sin(a); return camPrim(([[0, -5], [5, 4], [-5, 4]] as Pt[]).map(([x, y]): Pt => [cx + c * x - s * y, cy + s * x + c * y]), true); };
+  const square = (cx: number, cy: number): PrimT => camPrim([[cx - 5, cy - 5], [cx + 5, cy - 5], [cx + 5, cy + 5], [cx - 5, cy + 5]], true);
+  const page = [tri(100, 100, 0), tri(300, 100, 180), tri(500, 100, 35), tri(700, 100, 0), square(900, 100), P(0, 160, 1000, 160, 2)];
+  const texts = [
+    { s: '2', x: 100, y: 107.5 },   // pointing up, its number just below (the example)
+    { s: '2', x: 300, y: 92.5 },    // turned over: pointing down, its number now above
+    { s: '2', x: 506, y: 94 },      // turned 35 degrees, the number still upright, as close beside it as in the example
+    { s: '3', x: 700, y: 107.5 },   // the same triangle with another number: another device
+    { s: '2', x: 900, y: 108.5 },   // a square with a 2: another symbol
+  ];
+  const t = buildTemplate(darkSmall(page), texts, { x0: 92, y0: 92, x1: 108, y1: 110 })!;
+  assert.deepEqual([t.sig.length, t.texts], [1, ['2']]);
+  const found = findSimilar(darkSmall(page), t, { texts });
+  const at = (x: number) => found.some((m) => Math.abs(m.x - x) < 8 && Math.abs(m.y - 100) < 8);
+  assert.ok(at(100) && at(300) && at(500), `pointing up, down and turned: ${JSON.stringify(found.map((m) => [Math.round(m.x), Math.round(m.y)]))}`);
+  assert.ok(!at(700) && !at(900), 'another number, or another shape, is not this symbol');
+  assert.equal(found.length, 3);
+});
