@@ -881,3 +881,69 @@ test('grid bubbles: Auto-count leaves them out and clears earlier automatic coun
   assert.ok(off.ops.some((o: any) => o.op === 'add' && o.detection.x === 0.2));         // switched off: the bubble is counted, as before
   assert.equal(planSheetWrite({ ...base, leaveOutGrid: false, hits: [], existing }).ops.filter((o: any) => o.op === 'delete').length, 0); // and nothing earlier is removed
 });
+
+// ---- a camera-like symbol: two rings of tiny segments, solid wedges, and curved outlines whose point count differs on every drawing ----
+type Pt = [number, number];
+const camPrim = (pts: Pt[], fill = false): PrimT => {
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  return { x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys), n: pts.length, fill, lum: 0, pts: pts.flat() }; // pts: as extractPrims keeps them
+};
+/** The symbol's shapes as point lists around (0,0): `wedges` 2 (top and bottom, lens arcs at the sides) or 4; `outlineN` points on each wedge outline. */
+function cameraShapes(wedges: 2 | 4, outlineN: number): { pts: Pt[]; fill: boolean }[] {
+  const out: { pts: Pt[]; fill: boolean }[] = [];
+  for (const [r, count] of [[12.2, 28], [9, 20], [6.5, 16]] as const) for (let k = 0; k < count; k++) { // the rings (the outer one encloses the wedges, as a real camera's does): short straight segments
+    const a0 = (k / count) * 2 * Math.PI, a1 = ((k + 1) / count) * 2 * Math.PI;
+    out.push({ pts: [[r * Math.cos(a0), r * Math.sin(a0)], [r * Math.cos(a1), r * Math.sin(a1)]], fill: false });
+  }
+  const wedge = (a: number) => { // a quad (the solid wedge) and its curved outline, on the ring at angle a
+    const at = (r: number, da: number): Pt => [r * Math.cos(a + da), r * Math.sin(a + da)];
+    out.push({ pts: [at(7.5, -0.45), at(11.3, -0.45), at(11.3, 0.45), at(7.5, 0.45)], fill: true });
+    out.push({ pts: Array.from({ length: outlineN }, (_, i) => at(7.5 + 3.8 * Math.abs(Math.sin((i / (outlineN - 1)) * Math.PI)), -0.45 + (0.9 * i) / (outlineN - 1))), fill: false });
+  };
+  wedge(-Math.PI / 2); wedge(Math.PI / 2);
+  if (wedges === 4) { wedge(0); wedge(Math.PI); }
+  else for (const a of [0, Math.PI]) out.push({ pts: Array.from({ length: 12 }, (_, i) => [8.5 * Math.cos(a + (i / 11 - 0.5) * 0.9), 8.5 * Math.sin(a + (i / 11 - 0.5) * 0.9)] as Pt), fill: false }); // a thin lens arc
+  return out;
+}
+/** Put a copy on the page: turned by `deg`, optionally mirrored, centred at (cx, cy). */
+const plant = (shapes: ReturnType<typeof cameraShapes>, cx: number, cy: number, deg = 0, mirror = false): PrimT[] => {
+  const c = Math.cos((deg * Math.PI) / 180), s = Math.sin((deg * Math.PI) / 180);
+  return shapes.map((sh) => camPrim(sh.pts.map(([x, y]): Pt => { const X = mirror ? -x : x; return [cx + c * X - s * y, cy + s * X + c * y]; }), sh.fill));
+};
+
+test('similar symbols: a curve is a curve however many points its outline has, and a copy turned by any angle (or mirrored) is found', () => {
+  const page: PrimT[] = [
+    ...plant(cameraShapes(2, 46), 200, 200),             // the one the user boxes
+    ...plant(cameraShapes(2, 10), 400, 200),             // the same symbol, its outlines drawn with 10 points instead of 46
+    ...plant(cameraShapes(2, 59), 600, 200, 90),         // a quarter turn
+    ...plant(cameraShapes(2, 37), 800, 200, 33),         // turned by an odd amount
+    ...plant(cameraShapes(2, 20), 1000, 200, 147, true), // turned and mirrored
+    ...plant(cameraShapes(2, 25), 1200, 200, 250),
+    ...plant(cameraShapes(4, 46), 200, 400),             // a different device: four wedges
+    ...plant(cameraShapes(4, 30), 400, 400, 45),
+    P(0, 300, 1500, 300, 2), P(100, 0, 100, 600, 2),     // walls
+  ];
+  const t = buildTemplate(darkSmall(page), [], { x0: 185, y0: 185, x1: 215, y1: 215 })!;
+  assert.ok(t.sig.length >= 40);
+  const found = findSimilar(darkSmall(page), t);
+  const at = (x: number, y: number) => found.some((m) => Math.hypot(m.x - x, m.y - y) < 8);
+  for (const x of [200, 400, 600, 800, 1000, 1200]) assert.ok(at(x, 200), `the two-wedge camera at x=${x} should be found`);
+  assert.ok(!at(200, 400) && !at(400, 400), 'the four-wedge camera is a different device');
+  assert.equal(found.length, 6);
+  // and the other way round: boxing a four-wedge camera finds the four-wedge ones (one of them turned 45 degrees), not the two-wedge ones
+  const t4 = buildTemplate(darkSmall(page), [], { x0: 185, y0: 385, x1: 215, y1: 415 })!;
+  const found4 = findSimilar(darkSmall(page), t4);
+  assert.equal(found4.length, 2);
+  assert.ok(found4.some((m) => Math.hypot(m.x - 200, m.y - 400) < 8) && found4.some((m) => Math.hypot(m.x - 400, m.y - 400) < 8));
+});
+test('similar symbols: a line drawn twice a hair apart counts once, and a small symbol is judged by the plain score', () => {
+  const sq = (ox: number, oy: number, dbl = false): PrimT[] => [P(ox, oy, ox + 15.7, oy, 2), P(ox, oy + 15.7, ox + 15.7, oy + 15.7, 2), P(ox, oy, ox, oy + 15.7, 2), P(ox + 15.7, oy, ox + 15.7, oy + 15.7, 2), ...(dbl ? [P(ox + 16.4, oy, ox + 16.4, oy + 15.7, 2)] : [])];
+  const page = [...sq(100, 100), ...sq(300, 100, true), ...sq(500, 100)];
+  const texts = [{ s: 'CR', x: 108, y: 108 }, { s: 'CR', x: 308, y: 108 }, { s: 'CR', x: 508, y: 108 }];
+  const t = buildTemplate(darkSmall(page), texts, { x0: 96, y0: 96, x1: 124, y1: 124 })!;
+  assert.equal(t.sig.length, 4);
+  assert.equal(findSimilar(darkSmall(page), t, { texts }).length, 3);   // the one with the doubled side is still a CR
+  // a box that cuts off one side leaves a 3-shape example; the doubled copy still counts
+  const cut = buildTemplate(darkSmall(page), texts, { x0: 96, y0: 96, x1: 112, y1: 124 });
+  assert.ok(cut && findSimilar(darkSmall(page), cut, { texts }).length >= 3);
+});
