@@ -146,6 +146,17 @@ th.right { text-align: right; }
 .sym.big { width: 64px; height: 64px; }
 .sym.big > span { transform: scale(2.4); }
 .sym.big > span.diamond { transform: rotate(45deg) scale(1.9); }
+/* Longer letters ("360W", "CAM-PM"): the tile widens into a pill so they stay readable; the shape shows as its corners */
+.sym.long { width: auto; min-width: 28px; }
+.sym.long > span { width: auto; min-width: 20px; padding: 0 4px; font-size: 9.5px; letter-spacing: -0.2px; white-space: nowrap; }
+.sym.long > span.circle { border-radius: 10px; }
+.sym.long > span.diamond { transform: none; border-radius: 4px; clip-path: polygon(4px 0, calc(100% - 4px) 0, 100% 50%, calc(100% - 4px) 100%, 4px 100%, 0 50%); }
+.sym.long > span.diamond b { transform: none; }
+.sym.big.long { height: 64px; }
+.sym.big.long > span, .sym.big.long > span.diamond { transform: none; height: 44px; min-width: 44px; padding: 0 12px; font-size: 18px; border-width: 2px; } /* real size, not a scale: a wide label takes its room */
+.sym.big.long > span.circle { border-radius: 22px; }
+.sym.big.long > span.diamond { clip-path: polygon(10px 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 10px 100%, 0 50%); }
+
 .sym.active > span { border-color: var(--color-accent); background: var(--color-accent-900); color: var(--color-accent-200); }
 .empty { padding: 28px 16px; text-align: center; color: var(--color-neutral-400); font-size: 13px; display: flex; flex-direction: column; gap: 10px; align-items: center; }
 .hint { background: var(--color-accent-900); color: var(--color-accent-200); border-radius: 8px; padding: 10px 12px; font-size: 13px; display: flex; gap: 10px; align-items: center; }
