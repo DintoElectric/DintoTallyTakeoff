@@ -19,7 +19,7 @@ async function shapesOf(sheet: SheetRow, file: DrawingFileRow): Promise<PageShap
   const pdf = await loadFilePdf({ id: file.id, chunk_count: file.chunk_count });
   const page = await pdf.getPage(sheet.page);
   try {
-    const r = await extractPrims(page, pdfjs.OPS);
+    const r = await extractPrims(page, pdfjs.OPS, { keepPoints: true }); // the points let a turned symbol be told from another
     // The letters on the page too: a device is often a plain circle or square with its letters inside ("CR", "MM").
     const runs = await extractRuns(page);
     const texts = runs.filter((m) => m.str.trim()).map((m) => ({ s: m.str, x: m.cx * r.width, y: m.cy * r.height }));
