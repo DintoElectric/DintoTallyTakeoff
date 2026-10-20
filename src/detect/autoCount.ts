@@ -39,25 +39,8 @@ export async function scanSheets(
   return out;
 }
 
-export interface CodeRow { code: string; kind: TagKind; total: number; bySheet: Map<string, number> }
-const KIND_RANK: Record<TagKind, number> = { note: 0, tag: 1, short: 2, room: 3 };
-export function discover(scans: SheetScan[]): CodeRow[] {
-  const m = new Map<string, CodeRow & { rooms: number; real: number; notes: number }>();
-  for (const sc of scans) {
-    for (const h of sc.hits) {
-      const r = m.get(h.code) ?? { code: h.code, kind: h.kind, total: 0, bySheet: new Map(), rooms: 0, real: 0, notes: 0 };
-      r.total++;
-      if (h.kind === 'room') r.rooms++;
-      if (h.kind === 'tag') r.real++;
-      if (h.kind === 'note') r.notes++;
-      r.bySheet.set(sc.sheet.id, (r.bySheet.get(sc.sheet.id) ?? 0) + 1);
-      m.set(h.code, r);
-    }
-  }
-  // A code is a room number only if EVERY occurrence looks like one (EM2 is a fixture even if one hit sits under a room name).
-  const rows = [...m.values()].map(({ rooms, real, notes, ...r }) => ({ ...r, kind: (notes > 0 && notes >= r.total - rooms ? 'note' : rooms === r.total ? 'room' : real > 0 ? 'tag' : 'short') as TagKind }));
-  return rows.sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || b.total - a.total || a.code.localeCompare(b.code));
-}
+export { discover, type CodeRow } from './codeRows.ts';
+import { type CodeRow } from './codeRows.ts';
 
 /**
  * Writes the scan for one sheet. Re-running replaces earlier unreviewed auto results for every item found on the

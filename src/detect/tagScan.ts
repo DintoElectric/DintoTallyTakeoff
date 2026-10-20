@@ -15,10 +15,11 @@ export interface Region { x0: number; y0: number; x1: number; y1: number }
 /** Plan area: leaves out the title block and notes column on the right, and the drawing border. */
 export const DEFAULT_COUNT_REGION: Region = { x0: 0.02, y0: 0.03, x1: 0.82, y1: 0.97 };
 
-export type TagKind = 'tag' | 'short' | 'room' | 'note';
+export type TagKind = 'tag' | 'short' | 'room' | 'note' | 'camera';
 export interface TagHit {
   code: string; x: number; y: number; kind: TagKind; h?: number;
   past?: boolean;      // beyond a matchline
+  name?: string; shape?: string; glyph?: string; // a camera: how its library item is named and drawn
   grid?: boolean;      // inside a grid-line bubble (the lettered or numbered circle at the end of a column or row line)
   labels?: string[];   // printed labels owned by this fixture tag (circuit, zone, panel)
   suffixes?: string[]; // short words written after the tag on its own line ("BR-22 LS" -> LS)
