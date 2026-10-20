@@ -65,7 +65,7 @@ export function drawMarker(
   ctx.stroke();
   if (glyph && opts.glyph) { // off by default: letters would cover the tag underneath
     ctx.fillStyle = opts.active ? p.glyphActive : p.glyph;
-    ctx.font = `600 ${Math.round(s * 0.5)}px Inter, system-ui, sans-serif`;
+    ctx.font = `600 ${Math.max(6, Math.round(s * 0.5 * Math.min(1, 2.2 / Math.max(1, glyph.length))))}px Inter, system-ui, sans-serif`; // longer letters get smaller to fit
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(glyph, x, y + 0.5);
