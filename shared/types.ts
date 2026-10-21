@@ -96,13 +96,15 @@ export interface Detection {
   confidence: number | null;
   source: 'auto' | 'manual';
   status: DetectionStatus;
+  /** The ceiling it sits in, read from the ceiling plan: drop (grid), sheetrock, or open. Null when not read. */
+  ceiling?: 'drop' | 'sheetrock' | 'open' | null;
   created_by_name?: string | null;
   confirmed_by_name?: string | null;
 }
 
 export type DetectionOp =
   | { op: 'add'; detection: Omit<Detection, 'sheet_id' | 'created_by_name' | 'confirmed_by_name'> }
-  | { op: 'update'; id: string; fields: Partial<Pick<Detection, 'item_type_id' | 'status' | 'x' | 'y'>> }
+  | { op: 'update'; id: string; fields: Partial<Pick<Detection, 'item_type_id' | 'status' | 'x' | 'y' | 'ceiling'>> }
   | { op: 'delete'; id: string };
 
 export interface CountRow { sheet_id: string; item_type_id: string; n: number; flagged: number }
