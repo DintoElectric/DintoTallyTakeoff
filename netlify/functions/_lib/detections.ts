@@ -5,7 +5,8 @@ import { num, oneOf, onlyKeys, uuid } from './validate.ts';
 import { BATCH_MAX_OPS } from '../../../shared/limits.ts';
 import type { Detection } from '../../../shared/types.ts';
 
-const DET_COLS = `d.id, d.sheet_id, d.item_type_id, d.x, d.y, d.bbox, d.confidence, d.source, d.status,
+const CEILINGS = ['drop', 'sheetrock', 'open'] as const;
+const DET_COLS = `d.id, d.sheet_id, d.item_type_id, d.x, d.y, d.bbox, d.confidence, d.source, d.status, d.ceiling,
                   d.created_by_name, d.confirmed_by_name`;
 
 export async function sheetTotals(sheetId: string) {
@@ -87,15 +88,15 @@ export async function applyBatch(req: Request, sheetId: string, actor: Actor) {
       if (op === 'add') {
         onlyKeys(raw, ['op', 'detection']);
         const d = (raw.detection ?? {}) as Record<string, unknown>;
-        onlyKeys(d, ['id', 'item_type_id', 'x', 'y', 'bbox', 'confidence', 'source', 'status']);
+        onlyKeys(d, ['id', 'item_type_id', 'x', 'y', 'bbox', 'confidence', 'source', 'status', 'ceiling']);
         const source = oneOf(d.source, ['auto', 'manual'] as const, 'Source');
         // Manual placements are confirmed with no confidence; auto detections start unreviewed.
         const status = source === 'manual' ? 'confirmed' : 'unreviewed';
         const confidence = source === 'manual' ? null : d.confidence == null ? null : num(d.confidence, 'Confidence', 0, 1);
         const ins = await q(
           `insert into detections (id, sheet_id, item_type_id, x, y, bbox, confidence, source, status,
-                                   created_by, created_by_name, confirmed_by, confirmed_by_name)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+                                   created_by, created_by_name, confirmed_by, confirmed_by_name, ceiling)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
            on conflict (id) do nothing returning id`,
           [
             uuid(d.id, 'detection id'),
@@ -111,6 +112,7 @@ export async function applyBatch(req: Request, sheetId: string, actor: Actor) {
             actor.name,
             source === 'manual' ? actor.id : null,
             source === 'manual' ? actor.name : null,
+            d.ceiling == null ? null : oneOf(d.ceiling, CEILINGS, 'Ceiling'),
           ],
         );
         if (ins.rows[0]) (source === 'auto' ? (autoAdded = true) : (manualAdded = true));
@@ -118,7 +120,7 @@ export async function applyBatch(req: Request, sheetId: string, actor: Actor) {
         onlyKeys(raw, ['op', 'id', 'fields']);
         const id = uuid(raw.id, 'detection id');
         const f = (raw.fields ?? {}) as Record<string, unknown>;
-        onlyKeys(f, ['item_type_id', 'status', 'x', 'y']);
+        onlyKeys(f, ['item_type_id', 'status', 'x', 'y', 'ceiling']);
         const sets: string[] = [];
         const params: unknown[] = [id, sheetId];
         const add = (col: string, val: unknown) => {
@@ -128,6 +130,7 @@ export async function applyBatch(req: Request, sheetId: string, actor: Actor) {
         if ('item_type_id' in f) add('item_type_id', await ownItem(uuid(f.item_type_id, 'item id')));
         if ('x' in f) add('x', num(f.x, 'x', 0, 1));
         if ('y' in f) add('y', num(f.y, 'y', 0, 1));
+        if ('ceiling' in f) add('ceiling', f.ceiling == null ? null : oneOf(f.ceiling, CEILINGS, 'Ceiling'));
         if ('status' in f) {
           const st = oneOf(f.status, ['unreviewed', 'confirmed', 'rejected'] as const, 'Status');
           add('status', st);
