@@ -1062,3 +1062,26 @@ test('triangle outlets: a revision delta, a flat fire alarm speaker, and words o
   assert.ok(outletLabel('2') && outletLabel('F2') && outletLabel('4AC') && outletLabel('WAP') && outletLabel('IPC-PM') && outletLabel('PT4'));
   assert.ok(!outletLabel('100') && !outletLabel('MORE') && !outletLabel('HANGING') && !outletLabel('SHWP-2'));
 });
+
+import { ceilingIndex } from '../src/detect/ceiling.ts';
+// ---- the ceiling a fixture sits in, from the room's texture on a ceiling plan ----
+test('ceiling types: a grid is a drop ceiling, isolated dashes are sheetrock, neither is open; curves and walls do not fool it', () => {
+  const G = 0.49; const L = (x0: number, y0: number, x1: number, y1: number): PrimT => ({ x0: Math.min(x0, x1), y0: Math.min(y0, y1), x1: Math.max(x0, x1), y1: Math.max(y0, y1), n: 2, fill: false, lum: G });
+  const prims: PrimT[] = [];
+  // a drop ceiling: a 2 ft grid (18 pt) over 0..360 x 0..360
+  for (let v = 0; v <= 360; v += 18) { prims.push(L(0, v, 360, v)); prims.push(L(v, 0, v, 360)); }
+  // sheetrock: dashes at all angles, each standing alone, over 500..800 x 0..300
+  let k = 0; for (let x = 505; x < 800; x += 7) for (let y = 5; y < 300; y += 7) { const a = ((k++ * 37) % 180) * Math.PI / 180; prims.push(L(x, y, x + 1.6 * Math.cos(a) + 0.3, y + 1.6 * Math.sin(a) + 0.3)); }
+  // open: nothing, apart from a door swing drawn as a chain of tiny pieces, and a room's two walls each way
+  for (let i = 0; i < 20; i++) { const a0 = (i / 20) * Math.PI / 2, a1 = ((i + 1) / 20) * Math.PI / 2; prims.push(L(1000 + 30 * Math.cos(a0), 100 + 30 * Math.sin(a0), 1000 + 30 * Math.cos(a1), 100 + 30 * Math.sin(a1))); }
+  prims.push(L(1100, 80, 1200, 80), L(1100, 110, 1200, 110), L(1130, 50, 1130, 150), L(1160, 50, 1160, 150));
+  const ci = ceilingIndex(prims);
+  assert.equal(ci.hasTextures, true);
+  assert.equal(ci.at(180, 180), 'drop');
+  assert.equal(ci.at(650, 150), 'sheetrock');
+  assert.equal(ci.at(1015, 115), 'open');        // the door swing is not speckle
+  assert.equal(ci.at(1145, 95), 'open');         // two walls each way are not a ceiling grid
+  // a sheet with no ceiling textures (a power plan) gets no ceiling at all, not "open" everywhere
+  const plain: PrimT[] = []; for (let i = 0; i < 600; i++) plain.push(L(i * 3, 0, i * 3, 400));
+  assert.equal(ceilingIndex(plain).at(100, 100), null);
+});

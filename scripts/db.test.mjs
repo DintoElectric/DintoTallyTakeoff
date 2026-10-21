@@ -221,5 +221,18 @@ console.log('db.test OK');
   await assert.rejects(L.query(`insert into item_types (code,name,created_by,project_id,length_ft) values ('Y','y','u',$1,-3)`, [lp1]));
   await copyLibrary((t, p2) => L.query(t, p2), lp1, lp2, 'u');
   assert.deepEqual((await L.query(`select code, length_ft::float8 as len from item_types where project_id = $1 order by code`, [lp2])).rows.map((r) => [r.code, r.len]), [['B1', null], ['BC-14', 4], ['BC-18', 8.5]]);
+  // a count's ceiling: drop, sheetrock or open, or empty
+  {
+    const C = new P();
+    for (const f of files) await C.exec(readFileSync(`${dir}/${f}`, 'utf8'));
+    const pr = (await C.query(`insert into projects (name, created_by) values ('C','u') returning id`)).rows[0].id;
+    const fl = (await C.query(`insert into drawing_files (project_id,file_name,size_bytes,chunk_count,uploaded_by) values ($1,'f.pdf',1,1,'u') returning id`, [pr])).rows[0].id;
+    const sh = (await C.query(`insert into sheets (project_id,file_id,page,page_width_pt,page_height_pt) values ($1,$2,1,100,100) returning id`, [pr, fl])).rows[0].id;
+    const it = (await C.query(`insert into item_types (code,name,created_by,project_id) values ('BR-22','troffer','u',$1) returning id`, [pr])).rows[0].id;
+    const put = (c) => C.query(`insert into detections (id,sheet_id,item_type_id,x,y,source,status,created_by,ceiling) values (gen_random_uuid(),$1,$2,0.5,0.5,'auto','unreviewed','u',$3)`, [sh, it, c]);
+    for (const c of ['drop', 'sheetrock', 'open', null]) await put(c);
+    assert.equal((await C.query(`select count(*)::int n from detections where ceiling is null`)).rows[0].n, 1);
+    await assert.rejects(put('carpet'));
+  }
   console.log('project libraries OK');
 }

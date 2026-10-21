@@ -132,3 +132,21 @@ test('excel export totals the footage of linear fixtures (count × length) and a
   const plain = await read(data, false);
   assert.ok(!plain.header.includes('Length each (ft)') && !plain.header.includes('Total (ft)'));
 });
+
+test('excel export adds a Ceiling types tab when counts have their ceiling read', async () => {
+  const ExcelJS: any = (await import('exceljs')).default;
+  const tab = async (d: any) => { const blob = await buildXlsx(d, aggregate(d, { sheetIds: null }), { sheetIds: null, groupBy: 'floor', perSheetColumns: false, subtotals: true, detectionLog: false, snapshots: false, preparedBy: 'J' }); const wb = new ExcelJS.Workbook(); await wb.xlsx.load(Buffer.from(await blob.arrayBuffer())); return wb.getWorksheet('Ceiling types'); };
+  assert.equal(await tab(data), undefined);                                       // no ceilings read: no tab
+  const ceils = ['drop', 'drop', 'sheetrock', null, 'open'];
+  const withC: any = { ...data, detections: data.detections.map((d: any, i: number) => ({ ...d, ceiling: ceils[i % ceils.length] })) };
+  const agg = aggregate(withC, { sheetIds: null });
+  assert.equal(agg.hasCeilings, true);
+  const sum = agg.rows.reduce((n, r) => n + r.byCeiling.drop + r.byCeiling.sheetrock + r.byCeiling.open + r.byCeiling.none, 0);
+  assert.equal(sum, withC.detections.filter((d: any) => d.status !== 'rejected').length);   // every count is in exactly one ceiling column
+  const ws = await tab(withC);
+  assert.ok(ws);
+  let header: string[] = [], all: any[] = [];
+  ws.eachRow((row: any) => { const v = (row.values as any[]).slice(1); if (v[0] === 'Code') header = v; if (v[1] === 'All items') all = v; });
+  assert.deepEqual(header, ['Code', 'Description', 'Unit', 'Drop ceiling', 'Sheetrock', 'Open', 'Not read', 'Total']);
+  assert.equal(all[3] + all[4] + all[5] + all[6], all[7]);
+});
