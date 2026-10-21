@@ -182,7 +182,8 @@ export async function buildXlsx(data: ExportData, agg: Agg, opts: ExportOptions)
   if (opts.detectionLog) {
     const ws = wb.addWorksheet(safeTab('Detections log'));
     title(ws, data.project.name, `One row per detection · Prepared ${prepared}`);
-    const hr = ws.addRow(['Sheet', 'Item code', 'Item', 'X (pt)', 'Y (pt)', 'Confidence', 'Status', 'Source', 'Confirmed by']);
+    const CEIL: Record<string, string> = { drop: 'Drop ceiling', sheetrock: 'Sheetrock', open: 'Open' };
+    const hr = ws.addRow(['Sheet', 'Item code', 'Item', 'X (pt)', 'Y (pt)', 'Confidence', 'Status', 'Source', 'Confirmed by', ...(agg.hasCeilings ? ['Ceiling'] : [])]);
     headerStyle(hr, 4);
     const hdrNo = hr.number;
     const itemById = new Map(data.items.map((i) => [i.id, i]));
@@ -193,7 +194,7 @@ export async function buildXlsx(data: ExportData, agg: Agg, opts: ExportOptions)
       const it = itemById.get(d.item_type_id);
       if (!s || !it) continue;
       const row = ws.addRow([s.number ?? `p${s.page}`, it.code, it.name, Math.round(d.x * s.page_width_pt * 10) / 10, Math.round(d.y * s.page_height_pt * 10) / 10,
-        d.confidence ?? '', d.status === 'unreviewed' ? 'Unreviewed' : 'Confirmed', d.source === 'auto' ? 'Auto' : 'Manual', d.confirmed_by_name ?? '']);
+        d.confidence ?? '', d.status === 'unreviewed' ? 'Unreviewed' : 'Confirmed', d.source === 'auto' ? 'Auto' : 'Manual', d.confirmed_by_name ?? '', ...(agg.hasCeilings ? [d.ceiling ? CEIL[d.ceiling] : ''] : [])]);
       style(row);
       if (d.confidence !== null) row.getCell(6).numFmt = '0%';
       if (d.status === 'unreviewed') row.getCell(7).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: FLAG_FILL } };
