@@ -12,7 +12,7 @@ import { useFetch } from '../app/useFetch.ts';
 import { DrawingView, type DrawingViewHandle, type ItemStyle, type MarkerData, type Tool } from '../viewer/DrawingView.tsx';
 import { loadFilePdf, pdfjs } from '../viewer/pdf.ts';
 import { extractPrims } from '../detect/primitives.ts';
-import { ceilingIndex, CEILING_LABEL, type Ceiling, type CeilingIndex } from '../detect/ceiling.ts';
+import { ceilingIndex, CEILING_LABEL, CEILING_TITLE, type Ceiling, type CeilingIndex } from '../detect/ceiling.ts';
 import { flushAll, getStore, useSheetStore } from './sheetStore.ts';
 import { extractRuns } from '../detect/pageRuns.ts';
 import { findMatchlines, zonesFromMatchlines } from '../detect/matchlines.ts';
@@ -254,9 +254,9 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
     if (!page) return;
     let off = false;
     (async () => {
-      const r = await extractPrims(page, pdfjs.OPS);
+      const [r, runs] = await Promise.all([extractPrims(page, pdfjs.OPS), extractRuns(page)]);
       if (off) return;
-      const ci = ceilingIndex(r.prims);
+      const ci = ceilingIndex(r.prims, { titled: CEILING_TITLE.test(runs.map((m) => m.str).join(' ')) });
       setCeil(ci.hasTextures ? { ci, w: r.width, h: r.height } : null);
       setCeilState(ci.hasTextures ? 'ready' : 'none');
     })().catch(() => { if (!off) setCeilState('none'); });   // no ceiling types on this sheet: nothing is lost

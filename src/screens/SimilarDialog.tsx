@@ -6,7 +6,7 @@ import { Check, Dialog, plural } from '../app/ui.tsx';
 import { extractPrims, type Prim } from '../detect/primitives.ts';
 import { extractRuns } from '../detect/pageRuns.ts';
 import { findGridBubbles, inBubble, type GridBubble } from '../detect/gridBubbles.ts';
-import { ceilingIndex, type CeilingIndex } from '../detect/ceiling.ts';
+import { ceilingIndex, CEILING_TITLE, type CeilingIndex } from '../detect/ceiling.ts';
 import { buildTemplate, darkSmall, dropCounted, findSimilar, type SymbolMatch, type Template, type TextMark } from '../detect/symbolSearch.ts';
 import { flushAll, getStore, type SheetStore } from './sheetStore.ts';
 import { loadFilePdf, pdfjs } from '../viewer/pdf.ts';
@@ -24,7 +24,7 @@ async function shapesOf(sheet: SheetRow, file: DrawingFileRow): Promise<PageShap
     // The letters on the page too: a device is often a plain circle or square with its letters inside ("CR", "MM").
     const runs = await extractRuns(page);
     const texts = runs.filter((m) => m.str.trim()).map((m) => ({ s: m.str, x: m.cx * r.width, y: m.cy * r.height }));
-    const out = { prims: darkSmall(r.prims), texts, bubbles: findGridBubbles(r.prims, runs, r.width, r.height), ceilings: ceilingIndex(r.prims), width: r.width, height: r.height };
+    const out = { prims: darkSmall(r.prims), texts, bubbles: findGridBubbles(r.prims, runs, r.width, r.height), ceilings: ceilingIndex(r.prims, { titled: CEILING_TITLE.test(runs.map((m) => m.str).join(' ')) }), width: r.width, height: r.height };
     cache.set(sheet.id, out);
     if (cache.size > 6) cache.delete(cache.keys().next().value as string);
     return out;
