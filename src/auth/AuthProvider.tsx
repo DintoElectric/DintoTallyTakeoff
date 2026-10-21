@@ -47,10 +47,12 @@ function plainAuthError(e: unknown): string {
     return "That email or password isn't right.";
   }
   if (e instanceof ApiError && e.status === 0) return e.message;
-  if (msg.includes('network') || msg.includes('fetch') || status === 0 || status === undefined) {
+  // Only claim a connection problem when the browser itself failed to make the request.
+  if (e instanceof TypeError || msg.includes('failed to fetch') || msg.includes('network')) {
     return "Can't reach the server. Check your connection and try again.";
   }
-  return 'Something went wrong. Please try again.';
+  const detail = e instanceof Error && e.message ? ` (${e.message})` : '';
+  return `Something went wrong${detail}. Please try again.`;
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -127,10 +129,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setBusy(true);
       setError(null);
       try {
-        await login(email.trim(), password); // no page reload
-        await loadMe();
-      } catch (e) {
-        setError(plainAuthError(e));
+        try {
+          await login(email.trim(), password); // no page reload
+        } catch (e) {
+          setError(plainAuthError(e));
+          return;
+        }
+        try {
+          await loadMe();
+        } catch (e) {
+          console.warn('Account load failed after sign-in', e);
+          const why = e instanceof ApiError ? `${e.message} (code ${e.status})` : 'unknown error';
+          setError(`You're signed in, but the app couldn't load your account: ${why}.`);
+        }
       } finally {
         setBusy(false);
       }
@@ -158,28 +169,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await requestPasswordRecovery(email.trim());
       setNotice('If that email has an account, a reset link is on its way.');
     } catch (e) {
-      setError(plainAuthError(e));
+      const m = e instanceof Error ? e.message.toLowerCase() : '';
+      const st = (e as { status?: number } | null)?.status;
+      // An unknown email gets the same neutral answer as a known one (no account probing).
+      if (st === 404 || m.includes('not found')) setNotice('If that email has an account, a reset link is on its way.');
+      else setError(plainAuthError(e));
     } finally {
       setBusy(false);
     }
   }, []);
+
+  // The password step and the "load my account" step fail for different reasons, so they report differently.
+  const loadAfterPassword = useCallback(
+    async () => {
+      try {
+        await loadMe();
+      } catch (e) {
+        console.warn('Account load failed after setting a password', e);
+        setPhase('signed-out');
+        const why = e instanceof ApiError ? `${e.message} (code ${e.status})` : 'unknown error';
+        setError(`Your password was saved, but the app couldn't load your account: ${why}. Try signing in.`);
+      }
+    },
+    [loadMe],
+  );
 
   const finishInvite = useCallback(
     async (password: string) => {
       setBusy(true);
       setError(null);
       try {
-        if (!inviteToken.current) throw new Error('missing token');
-        await acceptInvite(inviteToken.current, password);
+        if (!inviteToken.current) throw new Error('This invite link was already used. Reload the page and sign in.');
+        try {
+          await acceptInvite(inviteToken.current, password);
+        } catch (e) {
+          console.warn('acceptInvite failed', e);
+          const detail = e instanceof Error && e.message ? ` (${e.message})` : '';
+          setError(`We couldn't finish setting up your account${detail}. If you already set a password, go back and sign in.`);
+          return;
+        }
         inviteToken.current = null;
-        await loadMe();
-      } catch {
-        setError("We couldn't finish setting up your account. The invite may have expired. Ask an admin to send a new one.");
+        await loadAfterPassword();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Something went wrong. Reload the page and try signing in.');
       } finally {
         setBusy(false);
       }
     },
-    [loadMe],
+    [loadAfterPassword],
   );
 
   const finishRecovery = useCallback(
@@ -187,15 +224,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setBusy(true);
       setError(null);
       try {
-        await updateUser({ password });
-        await loadMe();
-      } catch {
-        setError("We couldn't save your new password. The reset link may have expired. Request a new one.");
+        try {
+          await updateUser({ password });
+        } catch (e) {
+          console.warn('updateUser failed', e);
+          const detail = e instanceof Error && e.message ? ` (${e.message})` : '';
+          setError(`We couldn't save your new password${detail}. The reset link may have expired. Request a new one.`);
+          return;
+        }
+        await loadAfterPassword();
       } finally {
         setBusy(false);
       }
     },
-    [loadMe],
+    [loadAfterPassword],
   );
 
   const value = useMemo<AuthCtx>(
