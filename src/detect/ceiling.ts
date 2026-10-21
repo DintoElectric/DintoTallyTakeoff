@@ -2,8 +2,9 @@
 //   drop       a grid of lines in two directions (the 2x2 or 2x4 ceiling grid)
 //   sheetrock  speckled with tiny dashes at all angles (the gypsum board hatch)
 //   open       neither (it may have some dashes or lines, but no grid and no speckle)
-// The texture is drawn in the background colour, the grey the architectural linework is in; fixtures and devices are drawn on
-// top of it in black, so only lines of the background colour are looked at.
+// The texture is drawn in grey: the background linework's grey on some drawings, a lighter grey of its own on others (PSEB's
+// speckle is 0.92 grey over 0.67 walls). Fixtures, devices and text are drawn on top in black, so every light grey is looked
+// at and black never is.
 import type { Prim } from './primitives.ts';
 
 export type Ceiling = 'drop' | 'sheetrock' | 'open';
@@ -26,12 +27,19 @@ export function backgroundLum(prims: Prim[]): number | null {
   return best === null || top < 500 ? null : Number(best);
 }
 
-/** Reads a sheet's ceiling textures once, then answers "what ceiling is at (x, y)?" for every fixture on it. */
-export function ceilingIndex(prims: Prim[]): CeilingIndex {
+/** Is this sheet titled a ceiling plan? ("REFLECTED CEILING PLAN", "LIGHTING CEILING PLAN", "RCP") */
+export const CEILING_TITLE = /\b(?:REFLECTED\s+)?CEILING\s+PLAN\b|\bRCP\b/i;
+
+/**
+ * Reads a sheet's ceiling textures once, then answers "what ceiling is at (x, y)?" for every fixture on it. `titled` says the
+ * sheet calls itself a ceiling plan; then a little texture is enough (a plan with much outside the work, like PSEB's, is only a
+ * few percent textured), where an untitled sheet must be textured all over.
+ */
+export function ceilingIndex(prims: Prim[], opts: { titled?: boolean } = {}): CeilingIndex {
   const bg = backgroundLum(prims);
   if (bg === null) return { at: () => null, hasTextures: false, background: null };
   const lines: Line[] = [];
-  for (const p of prims) if (p.n === 2 && Math.abs(p.lum - bg) < 0.03) lines.push({ x0: p.x0, y0: p.y0, x1: p.x1, y1: p.y1, len: Math.hypot(p.x1 - p.x0, p.y1 - p.y0) });
+  for (const p of prims) if (p.n === 2 && p.lum > 0.15 && p.lum < 0.97) lines.push({ x0: p.x0, y0: p.y0, x1: p.x1, y1: p.y1, len: Math.hypot(p.x1 - p.x0, p.y1 - p.y0) });
   const grid = new Map<string, Line[]>();
   for (const l of lines) {
     // a long line goes in every cell it crosses
@@ -98,8 +106,8 @@ export function ceilingIndex(prims: Prim[]): CeilingIndex {
     const n = new Map<number, number>(); for (const g of seen) { const k = Math.round(g * 2) / 2; n.set(k, (n.get(k) ?? 0) + 1); }
     module = [...n].sort((a, b) => b[1] - a[1])[0][0];
   }
-  // A ceiling plan is textured all over (your lighting ceiling plans: 19% and 34% of the sheet); other plans have a few stray
-  // spots that happen to look like a grid (0.3% to 1%). Below 5% the sheet is not a ceiling plan, and counts get no ceiling.
-  const hasTextures = textured >= 8 && textured >= samples * 0.05;
+  // A sheet titled a ceiling plan needs 1% textured (PSEB's plans are 1% to 4%: much of them is outside the work); an untitled
+  // one must be textured all over (12%), since stray spots on power or fire alarm plans reach 5% or 6%.
+  const hasTextures = textured >= 8 && textured >= samples * (opts.titled ? 0.01 : 0.12);
   return { at: (x, y) => (hasTextures ? classify(x, y) : null), hasTextures, background: bg, textured, samples } as CeilingIndex;
 }
