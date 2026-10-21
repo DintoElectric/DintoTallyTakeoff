@@ -173,11 +173,13 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
             <div className="sheet-grid">
               {sheets.map((s) => (
                 <div key={s.id} className={`sheet-card${s.count_enabled ? ' on' : ''}`}>
-                  <div className="thumb">
-                    <img src={`/api/sheets/${s.id}/thumb`} alt={`Sheet ${s.number ?? s.page}`} loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }} />
+                  {/* the thumbnail opens that drawing; the number and title below still edit in place */}
+                  <button type="button" className="thumb thumb-open" onClick={() => navigate(paths.sheet(projectId, s.id))} aria-label={`Open sheet ${s.number ?? `page ${s.page}`}`} title="Open this drawing">
+                    <img src={`/api/sheets/${s.id}/thumb`} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }} />
                     <span className="tag tag-neutral">{KIND_LABEL[s.kind]}</span>
                     <span className="st">{STATUS_LABEL[s.count_status]}{s.detection_count > 0 ? ` · ${s.detection_count}` : ''}</span>
-                  </div>
+                    <span className="open-hint">Open</span>
+                  </button>
                   <div className="sheet-body">
                     <div>
                       <div className="row" style={{ gap: 6 }}>
@@ -197,7 +199,7 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
           ) : (
             sheets.length > 0 && (
               <table className="table">
-                <thead><tr><th>Page</th><th>Number</th><th>Title</th><th>Kind</th><th>Floor</th><th>Count</th><th className="right">Counted</th></tr></thead>
+                <thead><tr><th>Page</th><th>Number</th><th>Title</th><th>Kind</th><th>Floor</th><th>Count</th><th className="right">Counted</th><th /></tr></thead>
                 <tbody>
                   {sheets.map((s) => (
                     <tr key={s.id}>
@@ -212,6 +214,7 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
                       <td style={{ width: 130 }}><FloorSelect value={s.floor} disabled={!canEdit} onChange={(v) => patch(s, { floor: v })} /></td>
                       <td><Check checked={s.count_enabled} disabled={!canEdit} onChange={(v) => patch(s, { count_enabled: v })}>Count</Check></td>
                       <td className="right num">{s.detection_count}</td>
+                      <td className="right"><button className="btn btn-secondary" style={{ minHeight: 28, padding: '2px 10px' }} onClick={() => navigate(paths.sheet(projectId, s.id))} aria-label={`Open sheet ${s.number ?? `page ${s.page}`}`}>Open</button></td>
                     </tr>
                   ))}
                 </tbody>
