@@ -76,6 +76,12 @@ th.right { text-align: right; }
 .thumb img { max-width: 100%; max-height: 100%; object-fit: contain; }
 .thumb .tag { position: absolute; top: 8px; left: 8px; }
 .thumb .st { position: absolute; bottom: 6px; right: 8px; font-size: 11px; color: var(--color-neutral-400); }
+/* the thumbnail is the way into that drawing */
+.thumb-open { width: 100%; border: 0; padding: 0; margin: 0; font: inherit; color: inherit; cursor: pointer; }
+.thumb-open .open-hint { position: absolute; inset: auto auto 50% 50%; transform: translate(-50%, 50%); padding: 4px 12px; border-radius: 999px; background: var(--color-accent-600); color: #fff; font-size: 12px; font-weight: 500; opacity: 0; transition: opacity .12s; pointer-events: none; }
+.thumb-open:hover .open-hint, .thumb-open:focus-visible .open-hint { opacity: 1; }
+.thumb-open:hover img { opacity: .75; }
+.thumb-open:focus-visible { outline: 2px solid var(--color-accent-400); outline-offset: -2px; }
 .sheet-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
 .sheet-body input.input, .sheet-body select.input { min-height: 30px; padding: 3px 8px; }
 .upload-row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; background: var(--color-surface); border-radius: var(--radius-md); }
