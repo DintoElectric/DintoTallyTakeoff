@@ -121,6 +121,37 @@ export async function buildXlsx(data: ExportData, agg: Agg, opts: ExportOptions)
     setup(ws, hdrNo, 4);
   }
 
+  /* ---------- by ceiling type ---------- */
+  if (agg.hasCeilings) {
+    const ws = wb.addWorksheet(safeTab('Ceiling types'));
+    title(ws, data.project.name, `Counts by the ceiling they sit in · Prepared ${prepared}`);
+    const header = ['Code', 'Description', 'Unit', 'Drop ceiling', 'Sheetrock', 'Open', 'Not read', 'Total'];
+    const hr = ws.addRow(header);
+    headerStyle(hr, 4);
+    const hdrNo = hr.number;
+    const sum = { drop: 0, sheetrock: 0, open: 0, none: 0, total: 0 };
+    for (const r of agg.rows) {
+      const c = r.byCeiling;
+      const n = c.drop + c.sheetrock + c.open + c.none;   // the row adds up across the ceiling columns
+      if (n === 0) continue;
+      const row = ws.addRow([r.item.code, r.item.name, r.item.unit, c.drop || '', c.sheetrock || '', c.open || '', c.none || '', n]);
+      style(row);
+      row.eachCell((cell: any, i: number) => { if (i >= 4) cell.alignment = { horizontal: 'right' }; });
+      sum.drop += c.drop; sum.sheetrock += c.sheetrock; sum.open += c.open; sum.none += c.none; sum.total += n;
+    }
+    const last = ws.lastRow.number;
+    ws.addRow([]);
+    const tot = ws.addRow(['', 'All items', '', sum.drop, sum.sheetrock, sum.open, sum.none, sum.total]);
+    style(tot, { bold: true, fill: TOTAL_FILL });
+    tot.eachCell((cell: any, i: number) => { if (i >= 4) cell.alignment = { horizontal: 'right' }; });
+    ws.addRow([]);
+    ws.addRow(['Read from the ceiling plan: a grid is a drop ceiling, a speckle of dashes is sheetrock, neither is open. "Not read": the count was made before ceilings were read, or its sheet shows no ceiling textures.']);
+    style(ws.lastRow, { color: MUTED });
+    ws.getColumn(1).width = 12; ws.getColumn(2).width = 42; ws.getColumn(3).width = 8;
+    for (let i = 4; i <= header.length; i++) ws.getColumn(i).width = 13;
+    setup(ws, hdrNo, header.length, last);
+  }
+
   /* ---------- by named area ---------- */
   if (agg.areas.names.length > 0) {
     const ws = wb.addWorksheet(safeTab('By area'));
