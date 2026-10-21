@@ -3,6 +3,7 @@ import { findGridBubbles, inBubble, type GridBubble } from './gridBubbles.ts';
 import { cameraCode, cameraName, findCameras, MOUNT_CODE, MOUNT_SHAPE } from './symbolContext.ts';
 import { darkSmall } from './symbolSearch.ts';
 import { findTriangles, triangleCode, triangleName } from './triangles.ts';
+import { ceilingIndex } from './ceiling.ts';
 import { extractRuns, type PageRun } from './pageRuns.ts';
 import { extractPrims, type OpsLike } from './primitives.ts';
 import { findHexNotes } from './notes.ts';
@@ -55,6 +56,12 @@ export async function scanPage(page: PageForRuns & PageForPrims, OPS: OpsLike, s
       if (code) hits.push({ code, x: t.x / width, y: t.y / height, kind: 'outlet', name: triangleName(t), shape: t.circled ? 'circle' : t.solid ? 'square' : 'diamond', glyph: (t.label ?? '').toUpperCase().slice(0, 8), conf: 0.95 });
     }
     for (const n of notes) hits.push({ code: n.label, x: n.x, y: n.y, kind: 'note' });
+    // On a ceiling plan, the ceiling each count sits in (drop grid, sheetrock speckle, or open), from the room's texture.
+    // (guarded on its own: whatever happens reading ceilings, the notes, cameras and outlets above are kept)
+    try {
+      const ceilings = ceilingIndex(prims);
+      if (ceilings.hasTextures) for (const h of hits) { const c = ceilings.at(h.x * width, h.y * height); if (c) h.ceiling = c; }
+    } catch (e) { console.warn('Reading ceiling types failed for a sheet; counts are kept without them', e); }
   } catch (e) {
     console.warn('Drawing-note detection failed for a sheet; counting tags only', e);
   }

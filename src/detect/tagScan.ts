@@ -20,6 +20,7 @@ export interface TagHit {
   code: string; x: number; y: number; kind: TagKind; h?: number;
   past?: boolean;      // beyond a matchline
   name?: string; shape?: string; glyph?: string; // a camera: how its library item is named and drawn
+  ceiling?: 'drop' | 'sheetrock' | 'open'; // the ceiling it sits in, when the sheet is a ceiling plan
   grid?: boolean;      // inside a grid-line bubble (the lettered or numbered circle at the end of a column or row line)
   labels?: string[];   // printed labels owned by this fixture tag (circuit, zone, panel)
   suffixes?: string[]; // short words written after the tag on its own line ("BR-22 LS" -> LS)

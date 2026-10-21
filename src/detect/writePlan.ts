@@ -75,7 +75,7 @@ export function planSheetWrite(p: PlanInput): Plan {
     const confidence = h.conf ?? (h.kind === 'room' ? CONF_ROOMISH : p.ambiguous.has(h.code) ? CONF_AMBIGUOUS : h.kind === 'short' ? CONF_SHORT : CONF_TAG);
     ops.push({ op: 'add', detection: {
       id: p.newId(), item_type_id: itemId, x: Math.min(1, Math.max(0, h.x)), y: Math.min(1, Math.max(0, h.y)),
-      bbox: null, confidence, source: 'auto', status: 'unreviewed',
+      bbox: null, confidence, source: 'auto', status: 'unreviewed', ...(h.ceiling ? { ceiling: h.ceiling } : {}),
     } });
     added++;
   }
