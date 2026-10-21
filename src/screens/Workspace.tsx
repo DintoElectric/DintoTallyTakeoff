@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import {
-  ArrowCounterClockwise, ArrowClockwise, Cursor, Eraser, Eye, EyeSlash, Polygon, Shapes, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus,
-  PlusCircle, Plus, Selection, Stack, WarningCircle, Crosshair, MagnifyingGlass,
+  ArrowCounterClockwise, ArrowClockwise, Cursor, Eraser, Eye, EyeSlash, Polygon, Shapes, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus, PlusCircle, Plus, Selection, Stack, WarningCircle, Crosshair, MagnifyingGlass, Hand,
 } from '@phosphor-icons/react';
 import type { CategoryRow, CountRow, DrawingFileRow, ItemTypeRow, ProjectRow, SheetRow } from '../../shared/types.ts';
 import { api, ApiError } from '../auth/api.ts';
@@ -363,12 +362,14 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
         if (k === 'y') { reviewAct('confirm'); return; }
         if (k === 'n') { reviewAct('reject'); return; }
       }
-      if (k === 'v') setTool('select');
-      else if (k === 'a' && !readOnly) setTool('add');
-      else if (k === 'b') setTool('box');
-      else if (k === 'm' && !readOnly) setTool('similar');
-      else if (k === 'z' && !readOnly) setTool('zone');
-      else if (k === 'n' && !readOnly) setTool('area');
+      // Each tool's letter is the first letter of what it does: Navigate, Select, Count, Find similar, Ignore area,
+      // count Area, Erase (and H to hide markers).
+      if (k === 'n') setTool('select');
+      else if (k === 's') setTool('box');
+      else if (k === 'c' && !readOnly) setTool('add');
+      else if (k === 'f' && !readOnly) setTool('similar');
+      else if (k === 'i' && !readOnly) { setTool('zone'); setDraft([]); }
+      else if (k === 'a' && !readOnly) { setTool('area'); setDraft([]); }
       else if (k === 'e' && !readOnly) setTool('erase');
       else if (k === 'h') setHideMarkers((v) => !v);
       else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelected(); }
@@ -491,12 +492,12 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
         {/* center: drawing */}
         <section className="ws-center">
           <div className="toolbar" role="toolbar" aria-label="Counting tools">
-            <button className={`tool${tool === 'select' ? ' on' : ''}`} onClick={() => setTool('select')} aria-label="Select (V)" title="Select (V)"><Cursor size={18} /></button>
-            <button className={`tool${tool === 'add' ? ' on' : ''}`} onClick={() => setTool('add')} disabled={readOnly} aria-label="Add count (A)" title="Add count (A)"><PlusCircle size={18} /></button>
-            <button className={`tool${tool === 'box' ? ' on' : ''}`} onClick={() => setTool('box')} aria-label="Box select (B)" title="Box select (B)"><Selection size={18} /></button>
-            <button className={`tool${tool === 'similar' ? ' on' : ''}`} onClick={() => setTool('similar')} disabled={readOnly} aria-label="Count similar symbols (M)" title="Count similar symbols (M): choose an item on the right, then drag a box around one symbol"><Crosshair size={18} /></button>
-            <button className={`tool${tool === 'zone' ? ' on' : ''}`} onClick={() => { setTool('zone'); setDraft([]); }} disabled={readOnly} aria-label="Outline an area to ignore (Z)" title="Outline an area to ignore (Z)"><Polygon size={18} /></button>
-            <button className={`tool${tool === 'area' ? ' on' : ''}`} onClick={() => { setTool('area'); setDraft([]); }} disabled={readOnly} aria-label="Outline a named count area (N)" title="Outline a named count area (N)"><Shapes size={18} /></button>
+            <button className={`tool${tool === 'select' ? ' on' : ''}`} onClick={() => setTool('select')} aria-label="Navigate (N)" title="Navigate (N): move around the sheet; click a count to see its item"><Hand size={18} /></button>
+            <button className={`tool${tool === 'add' ? ' on' : ''}`} onClick={() => setTool('add')} disabled={readOnly} aria-label="Count (C)" title="Count (C): click to place a count of the item picked on the right"><PlusCircle size={18} /></button>
+            <button className={`tool${tool === 'box' ? ' on' : ''}`} onClick={() => setTool('box')} aria-label="Select (S)" title="Select (S): click a count, or drag a box around several"><Cursor size={18} /></button>
+            <button className={`tool${tool === 'similar' ? ' on' : ''}`} onClick={() => setTool('similar')} disabled={readOnly} aria-label="Find similar symbols (F)" title="Find similar symbols (F): choose an item on the right, then drag a box around one symbol"><Crosshair size={18} /></button>
+            <button className={`tool${tool === 'zone' ? ' on' : ''}`} onClick={() => { setTool('zone'); setDraft([]); }} disabled={readOnly} aria-label="Ignore area (I)" title="Ignore area (I): outline an area whose counts are left out"><Polygon size={18} /></button>
+            <button className={`tool${tool === 'area' ? ' on' : ''}`} onClick={() => { setTool('area'); setDraft([]); }} disabled={readOnly} aria-label="Count area (A)" title="Count area (A): outline a named area to count separately"><Shapes size={18} /></button>
             <button className={`tool${tool === 'erase' ? ' on' : ''}`} onClick={() => setTool('erase')} disabled={readOnly} aria-label="Erase (E)" title="Erase (E)"><Eraser size={18} /></button>
             <span className="sep" />
             <button className="tool" onClick={() => store?.undo()} disabled={readOnly || !snap.canUndo} aria-label="Undo (Ctrl+Z)" title="Undo (Ctrl+Z)"><ArrowCounterClockwise size={18} /></button>
@@ -508,8 +509,8 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             <button className="tool" onClick={() => viewRef.current?.zoomBy(1 / 1.3)} aria-label="Zoom out"><MagnifyingGlassMinus size={18} /></button>
             <button className="btn btn-ghost" style={{ minWidth: 52 }} onClick={() => viewRef.current?.fit()} title="Fit to screen">{zoomPct}%</button>
             <button className="tool" onClick={() => viewRef.current?.zoomBy(1.3)} aria-label="Zoom in"><MagnifyingGlassPlus size={18} /></button>
-            <button className={`btn btn-secondary${areasOpen ? ' on' : ''}`} onClick={() => { setAreasOpen((v) => !v); setZonesOpen(false); }} aria-expanded={areasOpen} title="Named areas that break the counts out (for example Lab A, Corridor)">Count areas · {allAreaNames.length}</button>
-            <button className={`btn btn-secondary${zonesOpen ? ' on' : ''}`} onClick={() => { setZonesOpen((v) => !v); setAreasOpen(false); }} aria-expanded={zonesOpen} title="Areas whose counts are ignored (past a matchline, or outlined by you)">Ignored areas · {zonesShown.length}</button>
+            {(allAreaNames.length > 0 || areasOpen) && <button className={`btn btn-secondary${areasOpen ? ' on' : ''}`} onClick={() => { setAreasOpen((v) => !v); setZonesOpen(false); }} aria-expanded={areasOpen} title="Named areas that break the counts out (for example Lab A, Corridor)">Count areas · {allAreaNames.length}</button>}
+            {(zonesShown.length > 0 || zonesOpen) && <button className={`btn btn-secondary${zonesOpen ? ' on' : ''}`} onClick={() => { setZonesOpen((v) => !v); setAreasOpen(false); }} aria-expanded={zonesOpen} title="Areas whose counts are ignored (past a matchline, or outlined by you)">Ignored areas · {zonesShown.length}</button>}
             <button className={`tool${hideMarkers ? ' on' : ''}`} onClick={() => setHideMarkers(!hideMarkers)} aria-pressed={hideMarkers} aria-label="Hide markers (H)" title="Hide or show markers (H)">{hideMarkers ? <EyeSlash size={18} /> : <Eye size={18} />}</button>
             <button className={`btn btn-secondary`} onClick={() => setOnlyActive(!onlyActive)} aria-pressed={onlyActive} title="Show all markers, or only the active item's">
               <Stack size={14} /> {onlyActive && activeItem ? `Only ${activeItem.code}` : 'All items'}
