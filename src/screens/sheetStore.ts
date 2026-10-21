@@ -10,7 +10,7 @@ import {
 type Change =
   | { t: 'add'; det: Detection }
   | { t: 'remove'; id: string; det: Detection }
-  | { t: 'patch'; id: string; fields: Partial<Pick<Detection, 'item_type_id' | 'status' | 'x' | 'y'>> }
+  | { t: 'patch'; id: string; fields: Partial<Pick<Detection, 'item_type_id' | 'status' | 'x' | 'y' | 'ceiling'>> }
   | { t: 'reject'; id: string }
   | { t: 'restore'; det: Detection };
 
@@ -43,7 +43,7 @@ function toOp(c: Change): DetectionOp {
   switch (c.t) {
     case 'add': {
       const { id, item_type_id, x, y, bbox, confidence, source, status } = c.det;
-      return { op: 'add', detection: { id, item_type_id, x, y, bbox, confidence, source, status } };
+      return { op: 'add', detection: { id, item_type_id, x, y, bbox, confidence, source, status, ...(c.det.ceiling ? { ceiling: c.det.ceiling } : {}) } };
     }
     case 'remove': return { op: 'delete', id: c.id };
     case 'patch': return { op: 'update', id: c.id, fields: c.fields };
@@ -165,22 +165,30 @@ export class SheetStore {
   }
 
   /* ----- editing actions ----- */
-  place(itemId: string, x: number, y: number) {
+  place(itemId: string, x: number, y: number, ceiling?: Detection['ceiling']) {
     const det: Detection = {
       id: crypto.randomUUID(), sheet_id: this.id, item_type_id: itemId, x, y, bbox: null,
-      confidence: null, source: 'manual', status: 'confirmed',
+      confidence: null, source: 'manual', status: 'confirmed', ...(ceiling ? { ceiling } : {}),
     };
     this.commit({ forward: [{ t: 'add', det }], backward: [{ t: 'remove', id: det.id, det }] }, true);
   }
 
   /** Places several counts as one step, so a single undo takes them all back. */
-  placeMany(itemId: string, points: { x: number; y: number }[]) {
+  placeMany(itemId: string, points: { x: number; y: number; ceiling?: Detection['ceiling'] }[]) {
     if (points.length === 0) return;
     const dets: Detection[] = points.map((p) => ({
       id: crypto.randomUUID(), sheet_id: this.id, item_type_id: itemId, x: p.x, y: p.y, bbox: null,
-      confidence: null, source: 'manual', status: 'confirmed',
+      confidence: null, source: 'manual', status: 'confirmed', ...(p.ceiling ? { ceiling: p.ceiling } : {}),
     }));
     this.commit({ forward: dets.map((det) => ({ t: 'add' as const, det })), backward: dets.map((det) => ({ t: 'remove' as const, id: det.id, det })) }, true);
+  }
+
+  /** Records the ceiling each count sits in (read from the ceiling plan). Not an undo step: it is information, not an edit. */
+  setCeilings(updates: { id: string; ceiling: NonNullable<Detection['ceiling']> }[]) {
+    const forward: Change[] = [];
+    for (const u of updates) { const d = this.map.get(u.id); if (d && d.ceiling !== u.ceiling) forward.push({ t: 'patch', id: u.id, fields: { ceiling: u.ceiling } }); }
+    if (forward.length) this.commit({ forward, backward: [] }, false);
+    return forward.length;
   }
 
   erase(ids: string[]) {

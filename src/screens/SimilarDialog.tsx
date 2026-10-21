@@ -6,11 +6,12 @@ import { Check, Dialog, plural } from '../app/ui.tsx';
 import { extractPrims, type Prim } from '../detect/primitives.ts';
 import { extractRuns } from '../detect/pageRuns.ts';
 import { findGridBubbles, inBubble, type GridBubble } from '../detect/gridBubbles.ts';
+import { ceilingIndex, type CeilingIndex } from '../detect/ceiling.ts';
 import { buildTemplate, darkSmall, dropCounted, findSimilar, type SymbolMatch, type Template, type TextMark } from '../detect/symbolSearch.ts';
 import { flushAll, getStore, type SheetStore } from './sheetStore.ts';
 import { loadFilePdf, pdfjs } from '../viewer/pdf.ts';
 
-interface PageShapes { prims: Prim[]; texts: TextMark[]; bubbles: GridBubble[]; width: number; height: number }
+interface PageShapes { prims: Prim[]; texts: TextMark[]; bubbles: GridBubble[]; ceilings: CeilingIndex; width: number; height: number }
 // Shapes of recently searched sheets, so changing the strictness does not read the drawing again.
 const cache = new Map<string, PageShapes>();
 async function shapesOf(sheet: SheetRow, file: DrawingFileRow): Promise<PageShapes> {
@@ -23,7 +24,7 @@ async function shapesOf(sheet: SheetRow, file: DrawingFileRow): Promise<PageShap
     // The letters on the page too: a device is often a plain circle or square with its letters inside ("CR", "MM").
     const runs = await extractRuns(page);
     const texts = runs.filter((m) => m.str.trim()).map((m) => ({ s: m.str, x: m.cx * r.width, y: m.cy * r.height }));
-    const out = { prims: darkSmall(r.prims), texts, bubbles: findGridBubbles(r.prims, runs, r.width, r.height), width: r.width, height: r.height };
+    const out = { prims: darkSmall(r.prims), texts, bubbles: findGridBubbles(r.prims, runs, r.width, r.height), ceilings: ceilingIndex(r.prims), width: r.width, height: r.height };
     cache.set(sheet.id, out);
     if (cache.size > 6) cache.delete(cache.keys().next().value as string);
     return out;
@@ -117,10 +118,12 @@ export default function SimilarDialog({ current, box, sheets, files, item, store
       let n = 0;
       for (const r of rows) {
         if (!pick.has(r.sheet.id) || r.matches.length === 0) continue;
-        const pts = r.matches.map((m) => ({ x: Math.min(1, Math.max(0, m.x / r.width)), y: Math.min(1, Math.max(0, m.y / r.height)) }));
+        // the ceiling each one sits in, on a ceiling plan
+        const ceil = cache.get(r.sheet.id)?.ceilings;
+        const pts = r.matches.map((m) => ({ x: Math.min(1, Math.max(0, m.x / r.width)), y: Math.min(1, Math.max(0, m.y / r.height)), ceiling: ceil?.at(m.x, m.y) ?? undefined }));
         if (r.sheet.id === current.id && store) store.placeMany(item.id, pts);   // one undo step, saved with the other edits
         else {
-          const ops = pts.map((p) => ({ op: 'add', detection: { id: crypto.randomUUID(), item_type_id: item.id, x: p.x, y: p.y, bbox: null, confidence: null, source: 'manual', status: 'confirmed' } }));
+          const ops = pts.map((p) => ({ op: 'add', detection: { id: crypto.randomUUID(), item_type_id: item.id, x: p.x, y: p.y, bbox: null, confidence: null, source: 'manual', status: 'confirmed', ...(p.ceiling ? { ceiling: p.ceiling } : {}) } }));
           for (let i = 0; i < ops.length; i += BATCH_MAX_OPS) await api(`/sheets/${r.sheet.id}/detections/batch`, { body: { ops: ops.slice(i, i + BATCH_MAX_OPS) } });
           void getStore(r.sheet.id).load(true);
         }

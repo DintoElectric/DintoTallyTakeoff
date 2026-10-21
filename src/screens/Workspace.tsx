@@ -10,7 +10,9 @@ import { Check, Dialog, Seg, Symbol, TopBar, plural, useToast } from '../app/ui.
 import { navigate, paths } from '../app/router.ts';
 import { useFetch } from '../app/useFetch.ts';
 import { DrawingView, type DrawingViewHandle, type ItemStyle, type MarkerData, type Tool } from '../viewer/DrawingView.tsx';
-import { loadFilePdf } from '../viewer/pdf.ts';
+import { loadFilePdf, pdfjs } from '../viewer/pdf.ts';
+import { extractPrims } from '../detect/primitives.ts';
+import { ceilingIndex, CEILING_LABEL, type Ceiling, type CeilingIndex } from '../detect/ceiling.ts';
 import { flushAll, getStore, useSheetStore } from './sheetStore.ts';
 import { extractRuns } from '../detect/pageRuns.ts';
 import { findMatchlines, zonesFromMatchlines } from '../detect/matchlines.ts';
@@ -103,6 +105,8 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [pdfError, setPdfError] = useState<string | null>(null);
   const [page, setPage] = useState<PDFPageProxy | null>(null);
   const [pageDims, setPageDims] = useState<{ w: number; h: number } | null>(null);
+  // On a ceiling plan: which ceiling (drop, sheetrock, open) each spot is in, read from the room textures once per sheet
+  const [ceil, setCeil] = useState<{ ci: CeilingIndex; w: number; h: number } | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [autoZones, setAutoZones] = useState<Zone[]>([]);   // worked out from the matchlines
   const [draft, setDraft] = useState<ZonePoint[]>([]);         // outline being drawn with the zone tool
@@ -237,12 +241,33 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   }, [grouped, items, categories, query, onlyCounted, shown]);
   const openItem = (id: string) => { setActiveItemId(id); setCardOpen(true); setScrollTo({ id, n: Date.now() }); };
 
+  useEffect(() => {
+    setCeil(null);
+    if (!page) return;
+    let off = false;
+    (async () => {
+      const r = await extractPrims(page, pdfjs.OPS);
+      if (off) return;
+      const ci = ceilingIndex(r.prims);
+      setCeil(ci.hasTextures ? { ci, w: r.width, h: r.height } : null);
+    })().catch(() => undefined);   // no ceiling types on this sheet: nothing is lost
+    return () => { off = true; };
+  }, [page]);
+  const ceilingAt = useCallback((x: number, y: number): Ceiling | undefined => ceil?.ci.at(x * ceil.w, y * ceil.h) ?? undefined, [ceil]);
+
   // ----- actions -----
   const place = useCallback((x: number, y: number) => {
     if (!store) return;
     if (!activeItemId) return toast('Pick an item type on the right first.');
-    store.place(activeItemId, x, y);
-  }, [store, activeItemId, toast]);
+    store.place(activeItemId, x, y, ceilingAt(x, y));
+  }, [store, activeItemId, toast, ceilingAt]);
+  // Fills in the ceiling of every count on this sheet that has none (made before this was read, or by another way).
+  const readCeilings = () => {
+    if (!store || !ceil || readOnly) return;
+    const updates = snap.dets.filter((d) => d.status !== 'rejected').map((d) => ({ id: d.id, ceiling: ceilingAt(d.x, d.y) })).filter((u): u is { id: string; ceiling: Ceiling } => !!u.ceiling);
+    const n = store.setCeilings(updates);
+    toast(n ? `Read the ceiling of ${plural(n, 'count')} on this sheet.` : 'Every count on this sheet already has its ceiling.');
+  };
 
   const deleteSelected = useCallback(() => {
     if (!store || readOnly || selected.size === 0) return;
@@ -621,6 +646,19 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             </div>
             <div className="ic-name" title={[activeItem.name, activeItem.spec].filter(Boolean).join(' · ')}>{activeItem.name}</div>
             <div className="dim num" style={{ fontSize: 12 }}>{itemDets.length} on this sheet · {plural(itemInProject, 'count')} on {plural(itemSheetCount, 'sheet')}</div>
+            {(() => {
+              // the ceilings this item's counts sit in, on this sheet
+              const by: Record<string, number> = {};
+              for (const d of itemDets) { const k = d.ceiling ?? 'none'; by[k] = (by[k] ?? 0) + 1; }
+              const known = (['drop', 'sheetrock', 'open'] as Ceiling[]).filter((c) => by[c]);
+              if (!known.length && !ceil) return null;
+              return (
+                <div className="dim num" style={{ fontSize: 12 }}>
+                  Ceiling: {known.length ? known.map((c) => `${by[c]} ${CEILING_LABEL[c].toLowerCase()}`).join(' · ') : 'not read yet'}{known.length && by.none ? ` · ${by.none} not read` : ''}
+                  {ceil && !readOnly && by.none ? <button className="btn btn-ghost" style={{ padding: '0 6px', minHeight: 20, fontSize: 12 }} onClick={readCeilings} title="Read the ceiling of every count on this sheet that has none, from the ceiling plan's textures">Read ceiling types</button> : null}
+                </div>
+              );
+            })()}
             {activeItem.length_ft != null && <div className="dim num" style={{ fontSize: 12 }}>{activeItem.length_ft} ft each · {Math.round(itemDets.length * activeItem.length_ft * 10) / 10} ft on this sheet · {Math.round(itemInProject * activeItem.length_ft * 10) / 10} ft in the project</div>}
             <div className="btns">
               <button className="btn btn-secondary" aria-pressed={onlyActive} onClick={() => setOnlyActive(!onlyActive)}>{onlyActive ? 'Show all items' : 'Show only this item'}</button>
