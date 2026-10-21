@@ -1063,7 +1063,7 @@ test('triangle outlets: a revision delta, a flat fire alarm speaker, and words o
   assert.ok(!outletLabel('100') && !outletLabel('MORE') && !outletLabel('HANGING') && !outletLabel('SHWP-2'));
 });
 
-import { ceilingIndex } from '../src/detect/ceiling.ts';
+import { ceilingIndex, CEILING_TITLE } from '../src/detect/ceiling.ts';
 // ---- the ceiling a fixture sits in, from the room's texture on a ceiling plan ----
 test('ceiling types: a grid is a drop ceiling, isolated dashes are sheetrock, neither is open; curves and walls do not fool it', () => {
   const G = 0.49; const L = (x0: number, y0: number, x1: number, y1: number): PrimT => ({ x0: Math.min(x0, x1), y0: Math.min(y0, y1), x1: Math.max(x0, x1), y1: Math.max(y0, y1), n: 2, fill: false, lum: G });
@@ -1084,4 +1084,20 @@ test('ceiling types: a grid is a drop ceiling, isolated dashes are sheetrock, ne
   // a sheet with no ceiling textures (a power plan) gets no ceiling at all, not "open" everywhere
   const plain: PrimT[] = []; for (let i = 0; i < 600; i++) plain.push(L(i * 3, 0, i * 3, 400));
   assert.equal(ceilingIndex(plain).at(100, 100), null);
+});
+test('ceiling types: a sheet titled a ceiling plan is read with little texture; an untitled one must be textured all over', () => {
+  // texture in one small area of a big sheet: a plan with much outside the work, like PSEB's
+  const G = 0.67, LITE = 0.92;
+  const L = (x0: number, y0: number, x1: number, y1: number, lum = G): PrimT => ({ x0: Math.min(x0, x1), y0: Math.min(y0, y1), x1: Math.max(x0, x1), y1: Math.max(y0, y1), n: 2, fill: false, lum });
+  const prims: PrimT[] = [];
+  for (let v = 0; v <= 180; v += 18) prims.push(L(0, v, 180, v));                 // a 2x4 grid: 18 pt one way
+  for (let v = 0; v <= 180; v += 36) prims.push(L(v, 0, v, 180));                 // 36 pt the other
+  let k = 0; for (let x = 300; x < 480; x += 5) for (let y = 5; y < 180; y += 5) { const a = ((k++ * 41) % 180) * Math.PI / 180; prims.push(L(x, y, x + 0.7 * Math.cos(a) + 0.2, y + 0.7 * Math.sin(a) + 0.2, LITE)); }  // speckle in its own lighter grey, short dashes
+  for (let i = 0; i < 600; i++) prims.push(L(600 + i, 1200, 600 + i, 1206));   // the rest of the sheet: walls, no texture (a few % textured, like PSEB)
+  assert.equal(ceilingIndex(prims).at(90, 90), null);                             // untitled: too little of the sheet is textured
+  const titled = ceilingIndex(prims, { titled: true });
+  assert.equal(titled.at(90, 90), 'drop');                                         // 2x4 grid
+  assert.equal(titled.at(390, 90), 'sheetrock');                                   // light-grey short speckle
+  assert.equal(titled.at(900, 900), 'open');
+  assert.ok(CEILING_TITLE.test('REFLECTED CEILING PLAN') && CEILING_TITLE.test('LIGHTING CEILING PLAN - LEVEL 1') && !CEILING_TITLE.test('POWER PLAN'));
 });
