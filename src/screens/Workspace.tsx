@@ -63,6 +63,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [confirmClear, setConfirmClear] = useState(false);
   const [query, setQuery] = useState('');                              // search the items listed in the panel
   const [onlyCounted, setOnlyCounted] = useState(false);
+  const [zeroOpen, setZeroOpen] = useState(false);   // the "Not counted yet" group at the bottom of the list, folded up by default
   const searchRef = useRef<HTMLInputElement>(null);
   const [keepHand, setKeepHand] = useState(false);
   const [hideMarkers, setHideMarkers] = useState(false);
@@ -107,6 +108,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [pageDims, setPageDims] = useState<{ w: number; h: number } | null>(null);
   // On a ceiling plan: which ceiling (drop, sheetrock, open) each spot is in, read from the room textures once per sheet
   const [ceil, setCeil] = useState<{ ci: CeilingIndex; w: number; h: number } | null>(null);
+  const [ceilState, setCeilState] = useState<'reading' | 'ready' | 'none'>('reading');
   const [attempt, setAttempt] = useState(0);
   const [autoZones, setAutoZones] = useState<Zone[]>([]);   // worked out from the matchlines
   const [draft, setDraft] = useState<ZonePoint[]>([]);         // outline being drawn with the zone tool
@@ -237,12 +239,18 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       const hits = searchItems(query, keep(items), (it) => categories.find((c) => c.id === it.category_id)?.name ?? '');
       return [{ name: `${plural(hits.length, 'match', 'matches')} for “${query.trim()}”`, order: 0, items: hits }];
     }
-    return grouped.map((g) => ({ ...g, items: keep(g.items) })).filter((g) => g.items.length > 0);
+    // Items with counts, by category; the ones with none yet gathered at the very bottom, folded up, so the list starts with
+    // what has been counted. ("With counts" hides them altogether.)
+    const out: { name: string; order: number; items: ItemTypeRow[]; zero?: boolean }[] = grouped.map((g) => ({ ...g, items: g.items.filter(counted) })).filter((g) => g.items.length > 0);
+    const zero = grouped.flatMap((g) => g.items.filter((it) => !counted(it)));
+    if (!onlyCounted && zero.length) out.push({ name: 'Not counted yet', order: 1e9, items: zero, zero: true });
+    return out;
   }, [grouped, items, categories, query, onlyCounted, shown]);
   const openItem = (id: string) => { setActiveItemId(id); setCardOpen(true); setScrollTo({ id, n: Date.now() }); };
 
   useEffect(() => {
     setCeil(null);
+    setCeilState('reading');
     if (!page) return;
     let off = false;
     (async () => {
@@ -250,7 +258,8 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       if (off) return;
       const ci = ceilingIndex(r.prims);
       setCeil(ci.hasTextures ? { ci, w: r.width, h: r.height } : null);
-    })().catch(() => undefined);   // no ceiling types on this sheet: nothing is lost
+      setCeilState(ci.hasTextures ? 'ready' : 'none');
+    })().catch(() => { if (!off) setCeilState('none'); });   // no ceiling types on this sheet: nothing is lost
     return () => { off = true; };
   }, [page]);
   const ceilingAt = useCallback((x: number, y: number): Ceiling | undefined => ceil?.ci.at(x * ceil.w, y * ceil.h) ?? undefined, [ceil]);
@@ -688,6 +697,19 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             </div>
             <button className="btn btn-secondary" style={{ flex: 'none', minHeight: 36, padding: '0 10px', fontSize: 12.5 }} aria-pressed={onlyCounted} onClick={() => setOnlyCounted(!onlyCounted)} title="Hide the items that have no counts">With counts</button>
             </div>
+            {/* Ceiling types: always said here, so it is clear whether this sheet is read as a ceiling plan and what is missing */}
+            {snap.dets.length > 0 && (() => {
+              const live = snap.dets.filter((d) => d.status !== 'rejected');
+              const have = live.filter((d) => d.ceiling).length;
+              if (ceilState === 'reading') return <div className="dim" style={{ fontSize: 12 }}>Reading ceiling types…</div>;
+              if (ceilState === 'none') return <div className="dim" style={{ fontSize: 12 }} title="Ceiling types are read from a ceiling plan's room textures: a grid is a drop ceiling, a speckle of dashes is sheetrock, neither is open. This sheet has too little of either to be read as a ceiling plan.">Ceiling types: this sheet shows no ceiling-plan textures{have ? ` (${have} counts have one from before)` : ''}.</div>;
+              return (
+                <div className="row" style={{ gap: 6, fontSize: 12, alignItems: 'center' }}>
+                  <span className="dim">Ceiling types: {have} of {plural(live.length, 'count')} read</span>
+                  {!readOnly && have < live.length && <button className="btn btn-secondary" style={{ minHeight: 24, padding: '1px 8px', fontSize: 12 }} onClick={readCeilings} title="Read the ceiling of every count on this sheet that has none, from the ceiling plan's textures">Read ceiling types</button>}
+                </div>
+              );
+            })()}
             <Seg name="scope" value={scope} onChange={setScope} options={[{ value: 'sheet', label: 'This sheet' }, { value: 'all', label: 'All sheets' }]} />
             {allAreaNames.length > 0 && (
               <select className="input" aria-label="Show counts for an area" value={areaFilter} onChange={(e) => setAreaFilter(e.target.value)}>
@@ -729,8 +751,11 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             )}
             {listGroups.map((g) => (
               <div key={g.name}>
-                <div className="cat-h">{g.name}</div>
-                {g.items.map((it) => {
+                {'zero' in g && g.zero
+                  ? <button type="button" className="cat-h cat-toggle" aria-expanded={zeroOpen} onClick={() => setZeroOpen(!zeroOpen)} title="Items in the library with no counts in this view">{zeroOpen ? '▾' : '▸'} {g.name} · {g.items.length}</button>
+                  : <div className="cat-h">{g.name}</div>}
+                {/* folded up: only the active item stays visible, so picking one to count does not make it vanish */}
+                {('zero' in g && g.zero && !zeroOpen ? g.items.filter((it) => it.id === activeItemId) : g.items).map((it) => {
                   const c = shown.get(it.id) ?? { n: 0, flagged: 0 };
                   return (
                     <button key={it.id} id={`item-row-${it.id}`} className={`item-row${it.id === activeItemId ? ' sel' : ''}`} onClick={() => openItem(it.id)} aria-pressed={it.id === activeItemId}>
