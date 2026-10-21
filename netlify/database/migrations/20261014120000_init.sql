@@ -1,7 +1,7 @@
 -- Tally: initial schema (spec section 2.6).
 -- Never edit this file after it has been applied: Netlify checksums migrations.
 -- Add a new timestamped migration instead.
-
+ 
 create table projects (
   id               uuid primary key default gen_random_uuid(),
   name             text not null,
@@ -17,7 +17,7 @@ create table projects (
   updated_at       timestamptz not null default now(),
   archived_at      timestamptz
 );
-
+ 
 create table drawing_files (
   id            uuid primary key default gen_random_uuid(),
   project_id    uuid not null references projects(id) on delete cascade,
@@ -34,7 +34,7 @@ create table drawing_files (
   created_at    timestamptz not null default now()
 );
 create index drawing_files_project_idx on drawing_files (project_id);
-
+ 
 create table sheets (
   id                uuid primary key default gen_random_uuid(),
   project_id        uuid not null references projects(id) on delete cascade,
@@ -64,7 +64,7 @@ create table sheets (
   unique (file_id, page)
 );
 create index sheets_project_idx on sheets (project_id);
-
+ 
 create table areas (
   id          uuid primary key default gen_random_uuid(),
   sheet_id    uuid not null references sheets(id) on delete cascade,
@@ -72,13 +72,13 @@ create table areas (
   polygon     jsonb not null,
   created_by  text not null
 );
-
+ 
 create table item_categories (
   id    uuid primary key default gen_random_uuid(),
   name  text not null unique,
   sort  int  not null default 0
 );
-
+ 
 create table item_types (
   id             uuid primary key default gen_random_uuid(),
   code           text not null unique,
@@ -94,7 +94,7 @@ create table item_types (
   created_by     text not null,
   created_at     timestamptz not null default now()
 );
-
+ 
 create table item_samples (
   id           uuid primary key default gen_random_uuid(),
   item_type_id uuid not null references item_types(id) on delete cascade,
@@ -104,7 +104,7 @@ create table item_samples (
   created_by   text not null,
   created_at   timestamptz not null default now()
 );
-
+ 
 create table detections (
   id                 uuid primary key,
   sheet_id           uuid not null references sheets(id) on delete cascade,
