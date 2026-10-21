@@ -436,14 +436,13 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
         return;
       }
       s.lastTap = now; s.lastTapX = p.x; s.lastTapY = p.y;
-      if ((n.x < 0 || n.x > 1 || n.y < 0 || n.y > 1) && pr.tool !== 'zone' && pr.tool !== 'area') { if (pr.tool === 'select') pr.onPick(null, false); return; }
+      if ((n.x < 0 || n.x > 1 || n.y < 0 || n.y > 1) && pr.tool !== 'zone' && pr.tool !== 'area') { if (pr.tool === 'select' || pr.tool === 'box') pr.onPick(null, false); return; }
       const coarse = s.type === 'touch' ? 22 : 12;
       const rx = coarse / (pageW * view.current.z), ry = coarse / (pageH * view.current.z);
       const hit = gridRef.current.nearest(n.x, n.y, rx, ry);
-      if (pr.tool === 'select') pr.onPick(hit?.id ?? null, s.shift);
+      if (pr.tool === 'select' || pr.tool === 'box') pr.onPick(hit?.id ?? null, s.shift); // Navigate and Select both pick a count you click
       else if (pr.tool === 'add') { if (!pr.readOnly) pr.onPlace(n.x, n.y); }
       else if (pr.tool === 'erase') { if (!pr.readOnly && hit) pr.onErase(hit.id); }
-      else if (pr.tool === 'box') pr.onBox([], false);
       else if ((pr.tool === 'zone' || pr.tool === 'area') && !pr.readOnly) {
         // Clicking the first corner (with 3 or more placed) closes the outline.
         const d = pr.draft;
