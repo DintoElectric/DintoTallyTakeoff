@@ -155,7 +155,7 @@ export default handle(async (req: Request, _ctx: Context) => {
        where s.project_id = ${id} and s.superseded_at is null and d.status <> 'rejected'
        group by d.sheet_id, d.item_type_id`;
     const detections = await sql<any>`
-      select d.id, d.sheet_id, d.item_type_id, d.x, d.y, d.bbox, d.confidence, d.source, d.status,
+      select d.id, d.sheet_id, d.item_type_id, d.x, d.y, d.bbox, d.confidence, d.source, d.status, d.ceiling,
              d.created_by_name, d.confirmed_by_name
         from detections d join sheets s on s.id = d.sheet_id
        where s.project_id = ${id} and s.superseded_at is null and d.status <> 'rejected'
