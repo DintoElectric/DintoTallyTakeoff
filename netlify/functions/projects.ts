@@ -1,4 +1,5 @@
 import type { Context } from '@netlify/functions';
+import { loadPanels } from './_lib/panels.ts';
 import { requireRole } from './_lib/auth.ts';
 import { db } from './_lib/db.ts';
 import { HttpError, handle, json, methodNotAllowed, notFound, readJson, segments } from './_lib/http.ts';
@@ -86,7 +87,13 @@ export default handle(async (req: Request, _ctx: Context) => {
       return json({ project });
     }
     if (req.method === 'DELETE') {
-      await requireRole('admin');
+      // Anyone signed in may delete a project, but only by typing its name back (the second confirmation in the app):
+      // a single click, or a stray request, can't delete one.
+      await requireRole('viewer');
+      const [proj] = await sql<{ name: string }>`select name from projects where id = ${id}`;
+      if (!proj) return json({ ok: true }); // already gone
+      const typed = (new URL(req.url).searchParams.get('confirm') ?? '').trim().toLowerCase();
+      if (typed !== proj.name.trim().toLowerCase()) throw new HttpError(400, 'To delete this project, type its name exactly to confirm.');
       // Collect exact blob keys first, then delete rows (cascade), then delete the blobs.
       const files = await sql<{ id: string; chunk_count: number }>`select id, chunk_count from drawing_files where project_id = ${id}`;
       const sheets = await sql<{ id: string }>`select id from sheets where project_id = ${id}`;
@@ -144,7 +151,7 @@ export default handle(async (req: Request, _ctx: Context) => {
         from sheets s where s.project_id = ${id} and s.superseded_at is null
        order by s.number nulls last, s.page`;
     const items = await sql<any>`
-      select i.id, i.code, i.name, i.spec, i.category_id, i.unit, i.detection_mode, i.marker_shape, i.marker_glyph, i.length_ft::float8 as length_ft,
+      select i.id, i.code, i.name, i.spec, i.category_id, i.unit, i.detection_mode, i.marker_shape, i.marker_glyph, i.length_ft::float8 as length_ft, i.count_group,
              0::int as sample_count, 0::int as detection_count
         from item_types i where i.project_id = ${id} order by i.code`;
     const categories = await sql<any>`select id, name, sort from item_categories where project_id = ${id} order by sort, name`;
@@ -163,7 +170,8 @@ export default handle(async (req: Request, _ctx: Context) => {
     const areas = await sql<any>`
       select a.id, a.sheet_id, a.name, a.polygon as points from areas a join sheets s on s.id = a.sheet_id
        where s.project_id = ${id} and s.superseded_at is null order by lower(a.name), a.id`;
-    const out: ExportData = { project, sheets, items, categories, counts, detections, areas };
+    const panels = await loadPanels(id);
+    const out: ExportData = { project, sheets, items, categories, counts, detections, areas, panels };
     return json(out);
   }
 

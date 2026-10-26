@@ -61,26 +61,47 @@ function NewProjectDialog({ file, onClose }: { file: File | null; onClose: () =>
   );
 }
 
+/** Deleting a project takes two confirmations: the warning, then typing the project's name. */
 function DeleteDialog({ project, onClose, onDone }: { project: ProjectRow; onClose: () => void; onDone: () => void }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
+  const [step, setStep] = useState<1 | 2>(1);
+  const [typed, setTyped] = useState('');
+  const matches = typed.trim().toLowerCase() === project.name.trim().toLowerCase();
+  const del = async () => {
+    if (!matches) return;
+    setBusy(true);
+    try {
+      await api(`/projects/${project.id}?confirm=${encodeURIComponent(typed.trim())}`, { method: 'DELETE' });
+      onDone();
+    } catch (e) {
+      toast(e instanceof ApiError ? e.message : 'Could not delete the project.');
+      setBusy(false);
+    }
+  };
   return (
     <Dialog title="Delete project" onClose={onClose}>
       <div className="dialog-title">Delete “{project.name}”?</div>
-      <div className="dialog-body">This permanently removes its drawing sets, sheets and counts for everyone. It can't be undone.</div>
-      <div className="dialog-actions">
-        <button className="btn btn-secondary" onClick={onClose} disabled={busy}>Cancel</button>
-        <button className="btn btn-primary" disabled={busy} onClick={async () => {
-          setBusy(true);
-          try {
-            await api(`/projects/${project.id}`, { method: 'DELETE' });
-            onDone();
-          } catch (e) {
-            toast(e instanceof ApiError ? e.message : 'Could not delete the project.');
-            setBusy(false);
-          }
-        }}>{busy ? 'Deleting…' : 'Delete project'}</button>
-      </div>
+      {step === 1 ? (
+        <>
+          <div className="dialog-body">This permanently removes its drawing sets, sheets, counts and panels for everyone. It can't be undone.</div>
+          <div className="dialog-actions">
+            <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+            <button className="btn btn-primary" onClick={() => setStep(2)}>Continue</button>
+          </div>
+        </>
+      ) : (
+        <form onSubmit={(e) => { e.preventDefault(); void del(); }}>
+          <div className="dialog-body">
+            <p style={{ marginTop: 0 }}>To confirm, type the project's name: <b>{project.name}</b></p>
+            <input className="input" autoFocus value={typed} onChange={(e) => setTyped(e.target.value)} aria-label="Type the project name to confirm" autoComplete="off" spellCheck={false} />
+          </div>
+          <div className="dialog-actions">
+            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={busy}>Cancel</button>
+            <button type="submit" className="btn btn-primary" disabled={!matches || busy}>{busy ? 'Deleting…' : 'Delete permanently'}</button>
+          </div>
+        </form>
+      )}
     </Dialog>
   );
 }
@@ -88,7 +109,6 @@ function DeleteDialog({ project, onClose, onDone }: { project: ProjectRow; onClo
 export default function Projects() {
   const { me } = useAuth();
   const canEdit = me?.role !== 'viewer';
-  const isAdmin = me?.role === 'admin';
   const { data, error, loading, reload } = useFetch<{ projects: ProjectRow[] }>('/projects');
   const [q, setQ] = useState('');
   const [over, setOver] = useState(false);
@@ -164,7 +184,7 @@ export default function Projects() {
               <thead>
                 <tr>
                   <th>Project</th><th>GC / client</th><th className="right">Sheets</th><th className="right">Items counted</th>
-                  <th>Progress</th><th>Status</th><th>Bid due</th>{isAdmin && <th aria-label="Actions" />}
+                  <th>Progress</th><th>Status</th><th>Bid due</th><th aria-label="Actions" />
                 </tr>
               </thead>
               <tbody>
@@ -182,11 +202,9 @@ export default function Projects() {
                     </td>
                     <td><span className={`tag ${STATUS[p.status].cls}`}>{STATUS[p.status].label}</span></td>
                     <td>{fmtDate(p.bid_due)}</td>
-                    {isAdmin && (
-                      <td onClick={(e) => e.stopPropagation()}>
-                        <button className="btn btn-ghost btn-icon" aria-label={`Delete ${p.name}`} onClick={() => setToDelete(p)}><Trash size={16} /></button>
-                      </td>
-                    )}
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <button className="btn btn-ghost btn-icon" aria-label={`Delete ${p.name}`} title="Delete project" onClick={() => setToDelete(p)}><Trash size={16} /></button>
+                    </td>
                   </tr>
                 ))}
                 {shown.length === 0 && <tr><td colSpan={8} className="muted">No projects match “{q}”.</td></tr>}
