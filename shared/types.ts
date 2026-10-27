@@ -83,7 +83,7 @@ export interface ItemTypeRow {
   sample_count: number;
   detection_count: number;
   /** Fixture (lighting) or device: the counting tab it is in. Empty means decided from its category and name. */
-  count_group?: 'fixture' | 'device' | null;
+  count_group?: 'fixture' | 'device' | 'fire_alarm' | null;
 }
 
 export interface CategoryRow { id: string; name: string; sort: number }

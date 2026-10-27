@@ -251,5 +251,13 @@ console.log('db.test OK');
     assert.equal(it.count_group, 'fixture');
     await assert.rejects(P2.query(`insert into item_types (code, name, created_by, count_group) values ('A4','x','u','lighting')`));
   }
+  // fire alarm as a counting group
+  {
+    const F = new P();
+    for (const f of files) await F.exec(readFileSync(`${dir}/${f}`, 'utf8'));
+    for (const f of files.filter((x) => x >= '20261028')) await F.exec(readFileSync(`${dir}/${f}`, 'utf8'));   // safe to run twice
+    for (const g of ['fixture', 'device', 'fire_alarm', null]) await F.query(`insert into item_types (code, name, created_by, count_group) values ($1,'x','u',$2)`, [`G-${g}`, g]);
+    await assert.rejects(F.query(`insert into item_types (code, name, created_by, count_group) values ('G-bad','x','u','lighting')`));
+  }
   console.log('project libraries OK');
 }

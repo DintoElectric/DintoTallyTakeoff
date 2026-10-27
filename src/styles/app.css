@@ -257,3 +257,9 @@ th.right { text-align: right; }
 .read-bar { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 5; display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 14px; border-radius: 999px; background: var(--color-surface); box-shadow: 0 4px 18px rgba(0,0,0,.35); font-size: 13px; }
 .finder-list { display: flex; flex-direction: column; gap: 6px; max-height: 52vh; overflow: auto; }
 .finder-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 10px; border-radius: 8px; background: var(--color-neutral-900); }
+.lib-bulk { gap: 8px; padding: 6px 0; font-size: 13px; }
+/* five counting tabs: tighter, and scroll sideways rather than wrap on a narrow panel */
+.count-tabs { overflow-x: auto; scrollbar-width: none; }
+.count-tabs::-webkit-scrollbar { display: none; }
+.count-tabs button { padding: 6px 6px 7px; font-size: 12px; flex: none; }
+.count-tabs { padding: 8px 6px 0; gap: 0; }

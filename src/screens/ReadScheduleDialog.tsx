@@ -29,7 +29,7 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
   const [choice, setChoice] = useState<ColumnChoice>({ type: null, description: null, extra: [] });
   const [off, setOff] = useState<Set<string>>(new Set());         // rows unticked, by code
   const [update, setUpdate] = useState(true);
-  const [group, setGroup] = useState<'fixture' | 'device'>('fixture');
+  const [group, setGroup] = useState<'fixture' | 'device' | 'fire_alarm'>('fixture');
   const [useSections, setUseSections] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -47,7 +47,7 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
         setChoice(c);
         // a schedule of devices (receptacles, outlets) reads as devices; a light fixture schedule as fixtures
         const words = t.columns.map((k) => k.header).join(' ');
-        setGroup(/DRIVER|LUMEN|LAMP|CCT|BALLAST|WATTAGE/i.test(words) ? 'fixture' : /NEMA|RECEPT|OUTLET|DEVICE|C\.?B\.?|BREAKER|CONDUIT/i.test(words) ? 'device' : 'fixture');
+        setGroup(/DRIVER|LUMEN|LAMP|CCT|BALLAST|WATTAGE/i.test(words) ? 'fixture' : /CANDELA|\bCD\b|STROBE|HORN|DETECTOR|FIRE ALARM/i.test(words) ? 'fire_alarm' : /NEMA|RECEPT|OUTLET|DEVICE|C\.?B\.?|BREAKER|CONDUIT/i.test(words) ? 'device' : 'fixture');
       }
     })().catch((e) => { console.warn('Reading the schedule failed', e); if (!gone) setTable(null); });
     return () => { gone = true; };
@@ -161,7 +161,7 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
           )}
           <div className="row" style={{ gap: 18, flexWrap: 'wrap' }}>
             <label className="row" style={{ gap: 8, fontSize: 13 }}>New types are
-              <select className="input" style={{ width: 120, minHeight: 30 }} value={group} onChange={(e) => setGroup(e.target.value as 'fixture' | 'device')}><option value="fixture">Fixtures</option><option value="device">Devices</option></select>
+              <select className="input" style={{ width: 120, minHeight: 30 }} value={group} onChange={(e) => setGroup(e.target.value as 'fixture' | 'device' | 'fire_alarm')}><option value="fixture">Fixtures</option><option value="device">Devices</option><option value="fire_alarm">Fire alarm</option></select>
             </label>
             {sections.length > 0 && <Check checked={useSections} onChange={setUseSections}>Use the section headings as categories ({sections.map(sectionName).join(', ')})</Check>}
             <Check checked={update} onChange={setUpdate}>Update the types already in the library ({rows.filter((r) => byCode.has(r.code)).length})</Check>

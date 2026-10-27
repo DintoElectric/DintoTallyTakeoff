@@ -1,7 +1,7 @@
 import type { ExportData } from '../../shared/types.ts';
 import { floorLabel } from '../upload/titleBlock.ts';
 import type { Agg } from './aggregate.ts';
-import { countGroupOf, GROUP_LABEL, type CountGroup } from '../../shared/countGroup.ts';
+import { countGroupOf, GROUP_LABEL, GROUPS } from '../../shared/countGroup.ts';
 import { breakerCounts, breakerLabel, circuitStats, sumBreakers } from '../../shared/panels.ts';
 import type { ExportOptions } from './types.ts';
 
@@ -56,7 +56,7 @@ export async function buildXlsx(data: ExportData, agg: Agg, opts: ExportOptions)
     headerStyle(hr, 4);
     const nCols = header.length;
     // Fixtures first, then devices, each under its heading (the two counting tabs); no heading when there is only one kind.
-    const sections = (['fixture', 'device'] as CountGroup[]).map((g) => [g, agg.rows.filter((r) => countGroupOf(r.item, data.categories) === g)] as const).filter(([, rows]) => rows.length > 0);
+    const sections = GROUPS.map((g) => [g, agg.rows.filter((r) => countGroupOf(r.item, data.categories) === g)] as const).filter(([, rows]) => rows.length > 0);
     for (const [g, rows] of sections) {
      if (sections.length > 1) {
       const h = ws.addRow([GROUP_LABEL[g]]);

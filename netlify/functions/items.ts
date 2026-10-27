@@ -38,8 +38,8 @@ function lengthOrNull(v: unknown): number | null {
 }
 
 /** Fixture or device; empty means decided from the item's category and name. */
-function groupOrNull(v: unknown): 'fixture' | 'device' | null {
-  return v === null || v === undefined || v === '' ? null : oneOf(v, ['fixture', 'device'] as const, 'Counts as');
+function groupOrNull(v: unknown): 'fixture' | 'device' | 'fire_alarm' | null {
+  return v === null || v === undefined || v === '' ? null : oneOf(v, ['fixture', 'device', 'fire_alarm'] as const, 'Counts as');
 }
 
 function glyph(v: unknown): string | null {
@@ -82,6 +82,31 @@ export default handle(async (req: Request, _ctx: Context) => {
   }
 
   // POST /api/items/claim  { project_id, item_ids? }: add unassigned (pre-project) items to a project.
+  // ---- delete several items at once (the library's select and delete) ----
+  // Items with counts on drawings are kept unless with_counts is set; then their counts are deleted with them.
+  if (seg[1] === 'bulk-delete' && req.method === 'POST') {
+    await requireRole('estimator');
+    const b = await readJson(req);
+    onlyKeys(b, ['ids', 'with_counts']);
+    if (!Array.isArray(b.ids) || b.ids.length === 0) throw new HttpError(400, 'Pick the items to delete.');
+    if (b.ids.length > 2000) throw new HttpError(400, 'Delete up to 2,000 items at a time.');
+    const ids = [...new Set(b.ids.map((v: unknown) => uuid(v, 'item id')))];
+    const withCounts = b.with_counts === true;
+    let deleted = 0, countsDeleted = 0;
+    const kept: { id: string; code: string; counts: number }[] = [];
+    for (const id of ids) {
+      const [cur] = await listItems(id);
+      if (!cur) continue; // already gone
+      if (cur.detection_count > 0 && !withCounts) { kept.push({ id, code: cur.code, counts: cur.detection_count }); continue; }
+      const samples = await sql<{ id: string }>`select id from item_samples where item_type_id = ${id}`;
+      const [{ n }] = await sql<{ n: number }>`with d as (delete from detections where item_type_id = ${id} returning status) select count(*) filter (where status <> 'rejected')::int as n from d`;
+      await sql`delete from item_types where id = ${id}`;
+      await deleteKeys([keys.symbol(id), ...samples.map((x) => keys.sample(id, x.id))]);
+      deleted++; countsDeleted += n;
+    }
+    return json({ deleted, counts_deleted: countsDeleted, kept });
+  }
+
   if (seg[1] === 'claim' && req.method === 'POST') {
     await requireRole('estimator');
     const b = await readJson(req);
@@ -140,7 +165,7 @@ export default handle(async (req: Request, _ctx: Context) => {
   }
 
   if (req.method === 'DELETE') {
-    await requireRole('admin');
+    await requireRole('estimator');
     const [cur] = await listItems(id);
     if (!cur) return json({ ok: true }); // already gone is success
     if (cur.detection_count > 0) {

@@ -3,7 +3,7 @@ import { MagnifyingGlass, Plus } from '@phosphor-icons/react';
 import type { CategoryRow, ItemTypeRow, MarkerShape, ProjectRow } from '../../shared/types.ts';
 import { api, ApiError } from '../auth/api.ts';
 import { useAuth } from '../auth/AuthProvider.tsx';
-import { Dialog, Seg, Symbol, TopBar, plural, useToast } from '../app/ui.tsx';
+import { Check, Dialog, Seg, Symbol, TopBar, plural, useToast } from '../app/ui.tsx';
 import { useFetch } from '../app/useFetch.ts';
 import { paths } from '../app/router.ts';
 import { lengthFeetFromText } from '../detect/lengthText.ts';
@@ -66,6 +66,7 @@ function Editor({ item, categories, canEdit, isAdmin, onSaved, onDeleted }: {
           <option value="">Automatic (from its category and name)</option>
           <option value="fixture">Fixture (lighting)</option>
           <option value="device">Device</option>
+          <option value="fire_alarm">Fire alarm</option>
         </select>
         <div className="dim" style={{ fontSize: 12, marginTop: 4 }}>Which counting tab it is in: Fixtures or Devices.</div>
       </div>
@@ -86,7 +87,7 @@ function Editor({ item, categories, canEdit, isAdmin, onSaved, onDeleted }: {
       <div style={{ flex: 1 }} />
       {canEdit && (
         <div className="row" style={{ justifyContent: 'flex-end' }}>
-          {isAdmin && <button className="btn btn-secondary" onClick={() => setConfirm(true)}>Delete</button>}
+          {canEdit && <button className="btn btn-secondary" onClick={() => setConfirm(true)}>Delete</button>}
           <button className="btn btn-primary" onClick={save} disabled={busy || !dirty}>{busy ? 'Saving…' : 'Save item'}</button>
         </div>
       )}
@@ -159,6 +160,8 @@ export default function Library({ projectId }: { projectId: string }) {
   const [sel, setSel] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
   const [newCat, setNewCat] = useState<string | null>(null);
+  const [picked, setPicked] = useState<Set<string>>(new Set());          // ticked for deleting
+  const [bulk, setBulk] = useState<{ ids: string[]; all: boolean } | null>(null);
 
   const items = itemsQ.data?.items ?? [];
   const categories = catsQ.data?.categories ?? [];
@@ -235,12 +238,28 @@ export default function Library({ projectId }: { projectId: string }) {
             </div>
           )}
 
+          {items.length > 0 && canEdit && (
+            <div className="row lib-bulk">
+              {picked.size > 0
+                ? <><span className="num"><b>{picked.size}</b> selected</span>
+                    <button className="btn btn-secondary" onClick={() => setBulk({ ids: [...picked], all: false })}>Delete selected</button>
+                    <button className="btn btn-ghost" onClick={() => setPicked(new Set())}>Clear</button></>
+                : <span className="dim">Tick items to delete several at once.</span>}
+              <span style={{ flex: 1 }} />
+              <button className="btn btn-ghost" onClick={() => setBulk({ ids: items.map((i) => i.id), all: true })}>Delete all…</button>
+            </div>
+          )}
           {items.length > 0 && (
             <table className="table">
-              <thead><tr><th style={{ width: 44 }} /><th>Code</th><th>Description</th><th>Category</th><th>Detection</th><th className="right">Samples</th></tr></thead>
+              <thead><tr>
+                {canEdit && <th style={{ width: 32 }}><input type="checkbox" aria-label="Select all the items shown" checked={shown.length > 0 && shown.every((i) => picked.has(i.id))}
+                  ref={(el) => { if (el) el.indeterminate = shown.some((i) => picked.has(i.id)) && !shown.every((i) => picked.has(i.id)); }}
+                  onChange={(e) => setPicked((p) => { const n = new Set(p); for (const i of shown) { if (e.target.checked) n.add(i.id); else n.delete(i.id); } return n; })} /></th>}
+                <th style={{ width: 44 }} /><th>Code</th><th>Description</th><th>Category</th><th>Detection</th><th className="right">Samples</th></tr></thead>
               <tbody>
                 {shown.map((i) => (
                   <tr key={i.id} className={`tr-click${i.id === sel ? ' sel' : ''}`} onClick={() => setSel(i.id)}>
+                    {canEdit && <td onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label={`Select ${i.code}`} checked={picked.has(i.id)} onChange={() => setPicked((p) => { const n = new Set(p); if (n.has(i.id)) n.delete(i.id); else n.add(i.id); return n; })} /></td>}
                     <td><Symbol shape={i.marker_shape} glyph={i.marker_glyph} /></td>
                     <td style={{ fontWeight: 500 }}>{i.code}</td>
                     <td><div>{i.name}</div>{i.spec && <div className="dim" style={{ fontSize: 12 }}>{i.spec}</div>}</td>
@@ -249,7 +268,7 @@ export default function Library({ projectId }: { projectId: string }) {
                     <td className="right num">{i.sample_count}</td>
                   </tr>
                 ))}
-                {shown.length === 0 && <tr><td colSpan={6} className="muted">No items match.</td></tr>}
+                {shown.length === 0 && <tr><td colSpan={canEdit ? 7 : 6} className="muted">No items match.</td></tr>}
               </tbody>
             </table>
           )}
@@ -258,8 +277,61 @@ export default function Library({ projectId }: { projectId: string }) {
         {selected && <Editor item={selected} categories={categories} canEdit={canEdit} isAdmin={isAdmin} onSaved={() => void itemsQ.reload()} onDeleted={() => { setSel(null); void itemsQ.reload(); }} />}
       </div>
 
+      {bulk && <BulkDeleteDialog items={items.filter((i) => bulk.ids.includes(i.id))} all={bulk.all} onClose={() => setBulk(null)}
+        onDone={(msg) => { setBulk(null); setPicked(new Set()); if (sel && bulk.ids.includes(sel)) setSel(null); toast(msg); void itemsQ.reload(); }} />}
       {showCopy && <CopyLibraryDialog projectId={projectId} onClose={() => setShowCopy(false)} onDone={(m) => { setShowCopy(false); toast(m); void itemsQ.reload(); void catsQ.reload(); }} />}
       {showNew && <ItemDialog projectId={projectId} categories={categories} defaultCategoryId={cat !== 'all' && cat !== '_' ? cat : null} onClose={() => setShowNew(false)} onCreated={(it) => { setShowNew(false); setSel(it.id); void itemsQ.reload(); }} />}
     </>
+  );
+}
+
+/** Deleting several items: items with counts on drawings are kept unless their counts go too. "Delete all" asks twice. */
+function BulkDeleteDialog({ items, all, onClose, onDone }: { items: ItemTypeRow[]; all: boolean; onClose: () => void; onDone: (msg: string) => void }) {
+  const [withCounts, setWithCounts] = useState(false);
+  const [typed, setTyped] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const counted = items.filter((i) => i.detection_count > 0);
+  const countTotal = counted.reduce((n, i) => n + i.detection_count, 0);
+  const going = withCounts ? items.length : items.length - counted.length;
+  const ok = going > 0 && (!all || typed.trim().toLowerCase() === 'delete');
+  const go = async () => {
+    setBusy(true); setErr(null);
+    let deleted = 0, countsDeleted = 0, kept = 0;
+    try {
+      for (let i = 0; i < items.length; i += 200) {
+        const r = await api<{ deleted: number; counts_deleted: number; kept: unknown[] }>('/items/bulk-delete', { body: { ids: items.slice(i, i + 200).map((x) => x.id), with_counts: withCounts } });
+        deleted += r.deleted; countsDeleted += r.counts_deleted; kept += r.kept.length;
+      }
+      onDone(`Deleted ${plural(deleted, 'item')}${countsDeleted ? ` and ${plural(countsDeleted, 'count')}` : ''}${kept ? `; kept ${plural(kept, 'item')} that ${kept === 1 ? 'has' : 'have'} counts` : ''}.`);
+    } catch (e) {
+      setErr(`${e instanceof ApiError ? e.message : 'Deleting stopped.'}${deleted ? ` ${plural(deleted, 'item')} were deleted before that.` : ''}`);
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog title="Delete items" onClose={onClose}>
+      <div className="dialog-title">{all ? `Delete all ${plural(items.length, 'item')} in this library?` : `Delete ${plural(items.length, 'item')}?`}</div>
+      <div className="dialog-body stack" style={{ gap: 10 }}>
+        <div>This can't be undone.{items.length <= 8 ? ` ${items.map((i) => i.code).join(', ')}.` : ''}</div>
+        {counted.length > 0 && (
+          <div className="stack" style={{ gap: 4 }}>
+            <div>{plural(counted.length, 'of them has', 'of them have')} counts on drawings ({plural(countTotal, 'count')}).</div>
+            <Check checked={withCounts} onChange={setWithCounts}>Also delete their counts</Check>
+            {!withCounts && <div className="dim" style={{ fontSize: 12 }}>Those {plural(counted.length, 'item')} will be kept.</div>}
+          </div>
+        )}
+        {all && (
+          <label className="field"><span>To confirm, type <b>delete</b></span>
+            <input className="input" autoFocus value={typed} onChange={(e) => setTyped(e.target.value)} aria-label="Type delete to confirm" autoComplete="off" />
+          </label>
+        )}
+        {err && <div className="err-text" role="alert">{err}</div>}
+      </div>
+      <div className="dialog-actions">
+        <button className="btn btn-secondary" onClick={onClose} disabled={busy}>Cancel</button>
+        <button className="btn btn-primary" onClick={() => void go()} disabled={!ok || busy}>{busy ? 'Deleting…' : going === 0 ? 'Nothing to delete' : `Delete ${plural(going, 'item')}`}</button>
+      </div>
+    </Dialog>
   );
 }

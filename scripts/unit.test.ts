@@ -1139,6 +1139,13 @@ test('counting tabs: lighting is a fixture, everything else a device, unless set
   assert.equal(countGroupOf(it('o', 'LED WRAPAROUND STRIP LIGHT'), cats), 'fixture');
   assert.equal(countGroupOf(it(null, 'Duplex receptacle'), cats), 'device');
   assert.equal(countGroupOf(it('r', 'Occupancy sensor', 'device'), cats), 'device');   // set by the estimator
+  // fire alarm: by its category or by what it is
+  const fa = [...cats, { id: 'f', name: 'Fire alarm devices' }];
+  assert.equal(countGroupOf(it('f', 'Addressable relay'), fa), 'fire_alarm');
+  assert.equal(countGroupOf(it(null, 'Horn/strobe, 75 cd'), fa), 'fire_alarm');
+  assert.equal(countGroupOf(it('o', 'Smoke detector'), fa), 'fire_alarm');
+  assert.equal(countGroupOf(it('c', 'Duplex receptacle'), fa), 'device');
+  assert.equal(countGroupOf(it('r', 'Exit sign w/ strobe', 'fire_alarm'), fa), 'fire_alarm');   // set by the estimator
 });
 
 import { isRemembered, keepSignInCookies, rawCookie, REMEMBER_DAYS, setRemembered } from '../src/auth/remember.ts';

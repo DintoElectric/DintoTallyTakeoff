@@ -12,7 +12,7 @@ import { useFetch } from '../app/useFetch.ts';
 import { DrawingView, type DrawingViewHandle, type ItemStyle, type MarkerData, type Tool } from '../viewer/DrawingView.tsx';
 import { loadFilePdf, pdfjs } from '../viewer/pdf.ts';
 import { extractPrims } from '../detect/primitives.ts';
-import { countGroupOf, GROUP_LABEL, type CountGroup } from '../../shared/countGroup.ts';
+import { countGroupOf, GROUP_LABEL, GROUPS, type CountGroup } from '../../shared/countGroup.ts';
 import { buildSheetPdf, sheetPdfName, type CountList } from '../export/sheetPdf.ts';
 import ReadScheduleDialog from './ReadScheduleDialog.tsx';
 import { circuitStats, mainLabel, type Panel } from '../../shared/panels.ts';
@@ -69,10 +69,10 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [onlyCounted, setOnlyCounted] = useState(false);
   // The counting tabs: fixtures and devices are counted on the drawing; panels come from panel schedules; conduit runs come later.
   const [tab, setTab] = useState<CountGroup | 'panels' | 'conduit'>('fixture');
-  const isItemTab = tab === 'fixture' || tab === 'device';
+  const isItemTab = tab === 'fixture' || tab === 'device' || tab === 'fire_alarm';
   const tabPicked = useRef(false);
   useEffect(() => {
-    if (new URLSearchParams(location.search).get('read') !== '1' || readOnly) return;
+    if (new URLSearchParams(window.location.search).get('read') !== '1' || readOnly) return;
     setTool('read');
     toast('Box the schedule to read: its header and a row or two is enough. Draw ignore areas over columns you don\'t need.');
   }, [sheetId]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -237,7 +237,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   // the items in the open tab (fixtures or devices)
   const tabItems = useMemo(() => (isItemTab ? items.filter((it) => countGroupOf(it, categories) === tab) : items), [items, categories, tab, isItemTab]);
   const groupCounts = useMemo(() => {
-    const n = { fixture: 0, device: 0 };
+    const n = { fixture: 0, device: 0, fire_alarm: 0 };
     for (const it of items) n[countGroupOf(it, categories)] += shown.get(it.id)?.n ?? 0;
     return n;
   }, [items, categories, shown]);
@@ -245,7 +245,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   useEffect(() => {
     if (tabPicked.current || !itemsQ.data || !snap.loaded) return;
     tabPicked.current = true;
-    if (groupCounts.fixture === 0 && groupCounts.device > 0) setTab('device');
+    if (groupCounts.fixture === 0) { if (groupCounts.device > 0) setTab('device'); else if (groupCounts.fire_alarm > 0) setTab('fire_alarm'); }
   }, [itemsQ.data, snap.loaded, groupCounts]);
   const grouped = useMemo(() => {
     const catName = (id: string | null) => categories.find((c) => c.id === id)?.name ?? 'Uncategorized';
@@ -692,8 +692,8 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
         {/* right: counts */}
         <aside className="ws-right" aria-label="Counts">
         <div className="count-tabs" role="tablist" aria-label="What to count">
-          {([['fixture', 'Fixtures', groupCounts.fixture], ['device', 'Devices', groupCounts.device], ['panels', 'Panels', null], ['conduit', 'Conduit runs', null]] as const).map(([k, label, n]) => (
-            <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => { tabPicked.current = true; setTab(k); }}>
+          {([['fixture', 'Fixtures', groupCounts.fixture], ['device', 'Devices', groupCounts.device], ['fire_alarm', 'Fire alarm', groupCounts.fire_alarm], ['panels', 'Panels', null], ['conduit', 'Conduit', null]] as const).map(([k, label, n]) => (
+            <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} title={k === 'conduit' ? 'Conduit runs' : undefined} onClick={() => { tabPicked.current = true; setTab(k); }}>
               {label}{n ? <span className="num"> {n}</span> : null}
             </button>
           ))}
@@ -734,7 +734,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
         )}
           {isItemTab && (<>
           <div className="head">
-            <div className="row-between"><h5 style={{ margin: 0 }}>{tab === 'device' ? 'Devices' : 'Fixtures'}</h5><span className="muted num" style={{ fontSize: 13 }}>{tabItems.reduce((n, it) => n + (shown.get(it.id)?.n ?? 0), 0)} counted</span></div>
+            <div className="row-between"><h5 style={{ margin: 0 }}>{GROUP_LABEL[tab as CountGroup]}</h5><span className="muted num" style={{ fontSize: 13 }}>{tabItems.reduce((n, it) => n + (shown.get(it.id)?.n ?? 0), 0)} counted</span></div>
             <div className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
             <div className="search" style={{ flex: 1, minWidth: 0, width: 'auto' }}>
               <MagnifyingGlass size={14} />
@@ -958,7 +958,7 @@ function SheetPdfDialog({ page, file, sheet, dets, items, categories, projectNam
         list = {
           title: [projectName, [sheet.number, sheet.title].filter(Boolean).join(' ')].filter(Boolean).join(' · '),
           subtitle: `Counts on this sheet · Prepared ${new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}`,
-          groups: (['fixture', 'device'] as CountGroup[]).map((g) => ({
+          groups: GROUPS.map((g) => ({
             name: GROUP_LABEL[g],
             rows: rows.filter((r) => countGroupOf(r.it, categories) === g).sort((a, b) => a.it.code.localeCompare(b.it.code, undefined, { numeric: true })).map((r) => ({ code: r.it.code, name: r.it.name, n: r.n })),
           })),

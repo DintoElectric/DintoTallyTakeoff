@@ -64,6 +64,7 @@ export function ItemDialog({ projectId, categories, defaultCategoryId, onClose, 
           <option value="">Automatic (from its category and name)</option>
           <option value="fixture">Fixture (lighting)</option>
           <option value="device">Device</option>
+          <option value="fire_alarm">Fire alarm</option>
         </select>
         <div className="dim" style={{ fontSize: 12, marginTop: 4 }}>Which counting tab it is in: Fixtures or Devices.</div>
       </div>
