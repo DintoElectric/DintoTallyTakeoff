@@ -9,7 +9,8 @@ export const TAG_RE = /^[A-Z]{1,3}\d{1,2}[A-Z]{0,2}\*?$/;
 export const SHORT_RE = /^[A-Z]{1,3}$/;
 // Hyphenated types (BC-14, RL-2X, EX-1). Grid labels and room numbers look the same (P-9, S-101), so these are only
 // counted when the code is already in the item library (for example from the fixture schedule).
-export const HYPHEN_RE = /^[A-Z]{1,4}-[A-Z0-9]{1,4}$/;
+// (letters, then up to two digits, a dash and up to four letters or digits: BR-22, N-4, and A1-16, N1-12 as well)
+export const HYPHEN_RE = /^[A-Z]{1,4}\d{0,2}-[A-Z0-9]{1,4}$/;
 
 export interface Region { x0: number; y0: number; x1: number; y1: number }
 /** Plan area: leaves out the title block and notes column on the right, and the drawing border. */
@@ -79,7 +80,15 @@ export function scanTags(runs: PageRun[], region: Region = DEFAULT_COUNT_REGION,
     let offset = 0;
     for (const part of s.split(/(\s+)/)) {
       const p = part;
-      if (p.trim() && !/\s/.test(p)) {
+      // A tag with a mark after a slash ("D3/EM", "A1-16/EM"): the tag, with the mark kept as its suffix.
+      const slash = p.trim() && !/\s/.test(p) ? /^(.+?)\/([A-Z]{1,4})$/.exec(p) : null;
+      if (slash && (TAG_RE.test(slash[1]) || isKnown(slash[1]))) {
+        hits.push({ code: slash[1], ...along(offset, slash[1].length), kind: 'tag', h: r.h, suffixes: [`/${slash[2]}`] });
+      } else if (slash && SHORT_RE.test(slash[1]) && /^(EM|E|EMER|NL|LS)$/.test(slash[2])) {
+        // A letter-only type with an emergency-style mark ("Z/EM", "P/EM"): a short code, counted by the same rules as a
+        // plain "Z". Only these marks: "N/A", "Y/N", "I/O", "WET/DRY" are ordinary words on drawings, not types.
+        hits.push({ code: slash[1], ...along(offset, slash[1].length), kind: 'short', h: r.h, suffixes: [`/${slash[2]}`] });
+      } else if (p.trim() && !/\s/.test(p)) {
         if (TAG_RE.test(p) || isKnown(p)) hits.push({ code: p, ...along(offset, p.length), kind: 'tag', h: r.h });
         else if (/^[A-Z]{1,3}$/.test(p) && hits.length && hits[hits.length - 1].kind === 'tag' && Math.abs(hits[hits.length - 1].y - r.cy) < 0.003) {
           // "BR-22 LS": a short word after a tag in the same run belongs to that tag

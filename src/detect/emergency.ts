@@ -40,7 +40,7 @@ export function attachLabels(hits: TagHit[], runs: { str: string; cx: number; cy
   }
 }
 
-export interface MarkerCandidate { pattern: string; partner: string | null; count: number; examples: string[] } // partner null: no normal twin found
+export interface MarkerCandidate { pattern: string; partner: string | null; count: number; examples: string[]; likely?: boolean } // partner null: no normal twin found; likely: a plain emergency mark (/EM), ticked to begin with
 
 const stripE = (p: string): string | null => {
   if (/es$/i.test(p) && p.length > 2) return p.slice(0, -2); // "#es" -> "#"
@@ -76,7 +76,7 @@ export function discoverMarkers(hits: TagHit[], minCount = 3): MarkerCandidate[]
   // because the same place is used for other meanings too (NL = night light, CR = critical).
   const sfx = new Map<string, { n: number; codes: Set<string>; ex: string[] }>();
   for (const h of hits) {
-    if (h.kind !== 'tag') continue;
+    if (h.kind !== 'tag' && h.kind !== 'short') continue;   // (letter-only types marked "Z/EM" count too)
     for (const w of h.suffixes ?? []) {
       const e = sfx.get(w) ?? { n: 0, codes: new Set<string>(), ex: [] };
       e.n++; e.codes.add(h.code);
@@ -84,24 +84,44 @@ export function discoverMarkers(hits: TagHit[], minCount = 3): MarkerCandidate[]
       sfx.set(w, e);
     }
   }
-  for (const [w, e] of sfx) if (e.n >= 5 && e.codes.size >= 2) out.push({ pattern: `+${w}`, partner: null, count: e.n, examples: e.ex });
-  return out.sort((a, b) => Number(a.partner === null) - Number(b.partner === null) || b.count - a.count);
+  for (const [w, e] of sfx) {
+    if (SENTENCE_WORD.test(w)) continue;                        // "E40 TO …": a note's sentence, not a mark
+    const slash = w.startsWith('/');                            // "D3/EM": a mark the engineer joined to the tag
+    if ((e.n >= 5 || (slash && e.n >= 3)) && e.codes.size >= 2) out.push({ pattern: `+${w}`, partner: null, count: e.n, examples: e.ex.map((x) => (slash ? x.replace(' /', '/') : x)), likely: /^\/?(EM|E|EMER|EMERG)$/.test(w) });
+  }
+  return out.sort((a, b) => Number(a.partner === null && !a.likely) - Number(b.partner === null && !b.likely) || b.count - a.count);
 }
+
+// Words of a sentence that can follow a tag in a note ("E40 TO …", "E24 OF …"): never an emergency mark.
+const SENTENCE_WORD = /^(TO|BE|OF|IN|AND|OR|THE|AT|ON|BY|FOR|AS|IS|IT|NO|SEE|ALL|ARE|AN|A|IF|SO|UP|PER|WITH|FROM|NOT|ANY|EACH|ONE|TWO|NEW|TYP|ETC|SHALL|THIS|THAT)$/;
 
 /** True if any label owned by this fixture matches a confirmed emergency marker. */
 export function isEmergency(h: TagHit, markers: Set<string>): boolean {
   return !!h.labels?.some((raw) => labelPatterns(raw).some((p) => markers.has(p))) || !!h.suffixes?.some((w) => markers.has(`+${w}`));
 }
 
-/** Parses the estimator's own markers: comma-separated, # stands for digits ("EM#, NL"). */
+/**
+ * Parses the estimator's own markers: comma-separated, # stands for digits ("EM#, NL"). A mark of letters only, or with a
+ * slash ("/EM", "EM", "NL"), also matches the same letters written right after the tag, joined by a slash or a space.
+ */
 export function parseCustomMarkers(text: string): string[] {
-  return text.split(',').map((s) => normalizeLabel(s)).filter((s) => s.length > 0);
+  const out: string[] = [];
+  for (const raw of text.split(',')) {
+    const s = normalizeLabel(raw);
+    if (!s) continue;
+    out.push(s);
+    const letters = /^\/?([A-Z]{1,5})$/i.exec(s);
+    if (letters) { const w = letters[1].toUpperCase(); out.push(`+/${w}`, `+${w}`); }
+  }
+  return [...new Set(out)];
 }
 
 export const EMERGENCY_KEY = '\u0001EM';
 /** The tag an emergency version of a fixture is stored under: B13 -> B13E (the schedule's own convention). */
 export function emergencyCode(code: string, markers?: Set<string>): string {
   // Drawings that write the marker after the tag (BR-22 LS) name the emergency version the same way: BR-22LS.
-  const suffix = markers && [...markers].find((m) => m.startsWith('+'));
+  // (a mark joined by a slash names it as the drawing does: D3/EM)
+  const all = markers ? [...markers] : [];
+  const suffix = all.find((m) => m.startsWith('+/')) ?? all.find((m) => m.startsWith('+'));
   return suffix ? `${code}${suffix.slice(1)}` : `${code}E`;
 }

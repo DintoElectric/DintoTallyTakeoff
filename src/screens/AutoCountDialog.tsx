@@ -89,7 +89,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
         const notes = found.filter((r) => r.kind === 'note' || r.kind === 'camera' || r.kind === 'outlet'); // drawing notes, cameras and triangle outlets are always counted
         setInc(new Set([...(lib.length > 0 ? lib : found.filter((r) => r.kind === 'tag')), ...notes].map((r) => r.code)));
         // Only markers with a normal twin are pre-ticked; "possible" ones (no twin) are left for the estimator.
-        setMarkers(new Set(discoverMarkers(res.flatMap((sc) => sc.hits.filter((h) => !h.past))).filter((c) => c.partner !== null).map((c) => c.pattern)));
+        setMarkers(new Set(discoverMarkers(res.flatMap((sc) => sc.hits.filter((h) => !h.past))).filter((c) => c.partner !== null || c.likely).map((c) => c.pattern)));
         // How many counts are already there (so the estimator sees exactly what a fresh start erases).
         try {
           const ex = new Map<string, { auto: number; confirmed: number; manual: number }>();
@@ -299,7 +299,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
             </div>
             {candidates.map((c) => (
               <Check key={c.pattern} checked={markers.has(c.pattern)} disabled={phase === 'write'} onChange={(v) => setMarkers((cur) => { const n = new Set(cur); if (v) n.add(c.pattern); else n.delete(c.pattern); return n; })}>
-                <span><b>{c.pattern.startsWith('+') ? `“${c.pattern.slice(1)}” after the tag` : c.pattern}</b> <span className="dim">({c.count} fixtures, e.g. {c.examples.slice(0, 3).join(', ')}; {c.partner ? `normal: ${c.partner}` : c.pattern.startsWith('+') ? 'possible: a word written after the tag; tick it only if it means emergency (not, for example, night light)' : 'possible: starts with E, no normal version found'})</span></span>
+                <span><b>{c.pattern.startsWith('+') ? `“${c.pattern.slice(1)}” after the tag` : c.pattern}</b> <span className="dim">({c.count} fixtures, e.g. {c.examples.slice(0, 3).join(', ')}; {c.partner ? `normal: ${c.partner}` : c.likely ? 'the usual emergency mark, written after the tag' : c.pattern.startsWith('+') ? 'possible: a word written after the tag; tick it only if it means emergency (not, for example, night light)' : 'possible: starts with E, no normal version found'})</span></span>
               </Check>
             ))}
             <input className="input" style={{ minHeight: 30, padding: '3px 8px' }} aria-label="Other emergency labels" placeholder="Other emergency labels, e.g. EM#, NL  (# stands for a number)" value={customText} disabled={phase === 'write'} onChange={(e) => setCustomText(e.target.value)} />

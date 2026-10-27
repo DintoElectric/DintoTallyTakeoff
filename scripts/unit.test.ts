@@ -311,7 +311,7 @@ const fix = (code: string, x: number, y: number, labels: string[] = []) => ({ co
 test('emergency: label patterns turn numbers into #, and split lists', () => {
   assert.equal(normalizeLabel('3es'), '#es'); assert.equal(normalizeLabel('EHLP/1B1/12'), 'EHLP/#B#/#');
   assert.deepEqual(labelPatterns('r1, r2e').sort(), ['r#', 'r#, r#e', 'r#e'].sort());
-  assert.deepEqual(parseCustomMarkers('EM2, NL'), ['EM#', 'NL']);
+  assert.deepEqual(parseCustomMarkers('EM2, NL'), ['EM#', 'NL', '+/NL', '+NL']);   // letters alone also match after the tag
   assert.equal(emergencyCode('B13'), 'B13E');
 });
 test('emergency: markers are proposed only as pairs (a plain label beside the same label plus E)', () => {
@@ -1299,3 +1299,25 @@ import { areaRows, headerLabel, readAreaTable, rowToItem, sectionName, suggestCo
     assert.ok(!items(t, suggestColumns(t.columns))[0]!.spec!.includes('Conduit'));
   });
 }
+
+// ---- tags written with a slash mark (E1.01): A1-16/EM, D3/EM, Z/EM ----
+test('tag scan: A1-16 style codes count when in the library; a slash mark stays with its tag', () => {
+  const lib = new Set(['A1-16', 'D3', 'N1-12', 'Z']);
+  const hits = scanTags([pr('A1-16', 0.3), pr('A1-16/EM', 0.4), pr('D3/EM', 0.5), pr('N1-12', 0.6), pr('Z/EM', 0.7), pr('A9-99', 0.8), pr('N/A', 0.2), pr('Y/N', 0.25), pr('WET/DRY', 0.35)], undefined, lib);   // N/A, Y/N, WET/DRY: words, not types
+  const got = hits.filter((h) => h.kind === 'tag' || h.kind === 'short').map((h) => [h.code, h.kind, (h.suffixes ?? []).join()]);
+  assert.deepEqual(got, [['A1-16', 'tag', ''], ['A1-16', 'tag', '/EM'], ['D3', 'tag', '/EM'], ['N1-12', 'tag', ''], ['Z', 'short', '/EM']]);   // A9-99: not in the library
+});
+test('emergency: "/EM" after the tag is offered and ticked; sentence words after note tags are not offered', () => {
+  const mk = (code: string, sfx: string[]) => ({ code, x: 0.5, y: 0.5, kind: 'tag' as const, suffixes: sfx, labels: [] });
+  const hits = [
+    ...['D1', 'D1', 'D3', 'A1-16', 'N-4'].map((c) => mk(c, ['/EM'])),
+    ...['E40', 'E45', 'E39', 'E24', 'E55', 'E40'].map((c) => mk(c, ['TO'])),
+  ];
+  const c = discoverMarkers(hits as never);
+  assert.deepEqual(c.map((x) => [x.pattern, x.likely]), [['+/EM', true]]);
+  const m = new Set(['+/EM']);
+  assert.ok(isEmergency(hits[0] as never, m));
+  assert.equal(emergencyCode('D3', m), 'D3/EM');                                     // named as the drawing writes it
+  assert.ok(isEmergency(hits[0] as never, new Set(parseCustomMarkers('/EM'))));       // typed in the box
+  assert.ok(isEmergency(hits[0] as never, new Set(parseCustomMarkers('EM'))));
+});
