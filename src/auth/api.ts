@@ -8,11 +8,17 @@ export class ApiError extends Error {
 }
 
 let onUnauthorized: (() => void) | null = null;
+let beforeRequest: (() => Promise<void>) | null = null;
+/** Runs before every request: renews a sign-in token that is about to expire (after a laptop slept, say). */
+export function setBeforeRequest(fn: (() => Promise<void>) | null) {
+  beforeRequest = fn;
+}
 export function setUnauthorizedHandler(fn: (() => void) | null) {
   onUnauthorized = fn;
 }
 
 async function request(path: string, init: RequestInit): Promise<Response> {
+  try { await beforeRequest?.(); } catch { /* the request itself will say if the session has ended */ }
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, { credentials: 'same-origin', ...init });

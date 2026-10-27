@@ -1101,3 +1101,62 @@ test('ceiling types: a sheet titled a ceiling plan is read with little texture; 
   assert.equal(titled.at(900, 900), 'open');
   assert.ok(CEILING_TITLE.test('REFLECTED CEILING PLAN') && CEILING_TITLE.test('LIGHTING CEILING PLAN - LEVEL 1') && !CEILING_TITLE.test('POWER PLAN'));
 });
+
+import { breakerCounts, circuitProblems, circuitStats, nextFree, sumBreakers, type Circuit } from '../shared/panels.ts';
+import { countGroupOf } from '../shared/countGroup.ts';
+// ---- panels: circuits and breakers (the first schedule on 2E-604, LSDH1201) ----
+const ckt = (circuit: number, kind: Circuit['kind'], breaker_amps: number | null, poles = 1, description: string | null = null): Circuit => ({ circuit, kind, breaker_amps, poles, description, load_kva: null });
+const lsdh1201: Circuit[] = [
+  ckt(1, 'load', 60, 3, 'LSH2201'), ckt(7, 'load', 60, 3, 'LSH1203'),
+  ckt(2, 'load', 60, 3, 'LSH2202'), ckt(8, 'load', 60, 3, 'LSH1204'),
+  ...Array.from({ length: 15 }, (_, i) => ckt(13 + 2 * i, 'space', null)), ...Array.from({ length: 15 }, (_, i) => ckt(14 + 2 * i, 'space', null)),
+];
+test('panels: breakers are counted once each by size and poles; spaces are not breakers', () => {
+  assert.deepEqual(breakerCounts(lsdh1201), [{ amps: 60, poles: 3, qty: 4, spares: 0 }]);
+  assert.deepEqual(circuitStats({ positions: 42 }, lsdh1201), { positions: 42, used: 12, spare: 0, space: 30, breakers: 4 });
+  // a panel with spares: 20 A spares are breakers, counted (and noted as spares)
+  const p2 = [ckt(1, 'load', 20, 1, 'EMERGENCY LIGHTING'), ckt(3, 'spare', 20), ckt(5, 'spare', 20), ckt(2, 'load', 30, 3, 'LSH1101'), ckt(13, 'space', null)];
+  assert.deepEqual(breakerCounts(p2), [{ amps: 20, poles: 1, qty: 3, spares: 2 }, { amps: 30, poles: 3, qty: 1, spares: 0 }]);
+  assert.deepEqual(circuitStats({ positions: 24 }, p2), { positions: 24, used: 4, spare: 2, space: 18, breakers: 4 });
+  assert.deepEqual(sumBreakers([breakerCounts(lsdh1201), breakerCounts(p2)]).map((b) => [b.amps, b.poles, b.qty]), [[20, 1, 3], [30, 3, 1], [60, 3, 4]]);
+});
+test('panels: overlapping breakers, circuits past the panel and sizeless breakers are flagged; the next free position is found', () => {
+  assert.deepEqual(circuitProblems({ positions: 42 }, lsdh1201), []);
+  const bad = [ckt(1, 'load', 60, 3), ckt(5, 'load', 20), ckt(41, 'load', 20, 2), ckt(2, 'spare', null)];
+  const probs = circuitProblems({ positions: 42 }, bad);
+  assert.ok(probs.some((p) => p.includes('Circuit 5 is used twice')));
+  assert.ok(probs.some((p) => p.includes('Circuit 43 is past')));
+  assert.ok(probs.some((p) => p.includes('spare at circuit 2 has no size')));
+  assert.equal(nextFree(lsdh1201.filter((c) => c.kind !== 'space'), 1, 42), 13);
+  assert.equal(nextFree([ckt(1, 'load', 20), ckt(5, 'load', 20)], 2, 42), 2);   // 2 and 4 are free on the other side
+  assert.equal(nextFree([ckt(1, 'load', 20), ckt(5, 'load', 20), ckt(2, 'load', 20, 3)], 2, 42), 7);   // a 2-pole needs two free positions on one side: 7 and 9
+});
+test('counting tabs: lighting is a fixture, everything else a device, unless set', () => {
+  const cats = [{ id: 'r', name: 'Recessed' }, { id: 'c', name: 'Cameras' }, { id: 'o', name: 'Other' }];
+  const it = (category_id: string | null, name: string, count_group: 'fixture' | 'device' | null = null) => ({ category_id, name, spec: null, count_group });
+  assert.equal(countGroupOf(it('r', 'LED 2X2 TROFFER'), cats), 'fixture');
+  assert.equal(countGroupOf(it('c', '360° camera'), cats), 'device');
+  assert.equal(countGroupOf(it('o', 'LED WRAPAROUND STRIP LIGHT'), cats), 'fixture');
+  assert.equal(countGroupOf(it(null, 'Duplex receptacle'), cats), 'device');
+  assert.equal(countGroupOf(it('r', 'Occupancy sensor', 'device'), cats), 'device');   // set by the estimator
+});
+
+import { isRemembered, keepSignInCookies, rawCookie, REMEMBER_DAYS, setRemembered } from '../src/auth/remember.ts';
+// ---- remember me: the sign-in cookies outlive the browser only when asked ----
+test('remember me: the sign-in cookies are kept for 30 days only when remembered, and signing out forgets', () => {
+  // a fake browser: cookie jar and local storage
+  const jar = new Map<string, string>(); const writes: string[] = [];
+  const doc = { get cookie() { return [...jar].map(([k, v]) => `${k}=${v}`).join('; '); }, set cookie(v: string) { writes.push(v); const [kv] = v.split(';'); const [k, ...rest] = kv.split('='); jar.set(k.trim(), rest.join('=')); } };
+  const mem = new Map<string, string>(); const store = { getItem: (k: string) => mem.get(k) ?? null, setItem: (k: string, v: string) => void mem.set(k, v), removeItem: (k: string) => void mem.delete(k) };
+  jar.set('nf_jwt', 'eyJhbGciOi.abc%3D'); jar.set('nf_refresh', 'r3fr35h'); jar.set('other', 'x');
+  assert.equal(keepSignInCookies(doc, store), 0);                     // not remembered: left as session cookies
+  assert.equal(writes.length, 0);
+  setRemembered(true, store);
+  assert.equal(isRemembered(store), true);
+  assert.equal(keepSignInCookies(doc, store), 2);                     // both sign-in cookies, nothing else
+  assert.deepEqual(writes, [`nf_jwt=eyJhbGciOi.abc%3D; path=/; secure; samesite=lax; max-age=${REMEMBER_DAYS * 86400}`, `nf_refresh=r3fr35h; path=/; secure; samesite=lax; max-age=${REMEMBER_DAYS * 86400}`]);
+  assert.equal(rawCookie('nf_jwt', doc), 'eyJhbGciOi.abc%3D');          // the value is kept exactly as the library wrote it
+  setRemembered(false, store);                                        // sign out
+  assert.equal(isRemembered(store), false);
+  assert.equal(keepSignInCookies(doc, store), 0);
+});

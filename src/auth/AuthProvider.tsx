@@ -6,11 +6,19 @@ import {
   login,
   logout,
   onAuthChange,
+  refreshSession,
   requestPasswordRecovery,
   updateUser,
 } from '@netlify/identity';
 import type { Me } from '../../shared/types.ts';
-import { ApiError, api, setUnauthorizedHandler } from './api.ts';
+import { ApiError, api, setBeforeRequest, setUnauthorizedHandler } from './api.ts';
+import { keepSignInCookies, setRemembered } from './remember.ts';
+
+/** Renews the sign-in token if it has expired or is about to (no network call otherwise), then keeps a remembered sign-in. */
+async function freshen(): Promise<void> {
+  try { await refreshSession(); } catch { /* an ended session shows up as a 401 on the next request */ }
+  keepSignInCookies();
+}
 
 type Phase = 'loading' | 'signed-out' | 'signed-in' | 'invite' | 'recovery';
 
@@ -21,7 +29,7 @@ interface AuthCtx {
   error: string | null;
   busy: boolean;
   notice: string | null;
-  signIn(email: string, password: string): Promise<void>;
+  signIn(email: string, password: string, remember?: boolean): Promise<void>;
   signOut(): Promise<void>;
   forgot(email: string): Promise<void>;
   finishInvite(password: string): Promise<void>;
@@ -94,7 +102,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         const user = await getUser();
         if (cancelled) return;
-        if (user) await loadMe();
+        // a remembered sign-in can come back with an expired token (the browser was closed overnight): renew it first
+        if (user) { await freshen(); await loadMe(); }
         else setPhase('signed-out');
       } catch {
         if (!cancelled) setPhase('signed-out');
@@ -113,24 +122,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setPhase('signed-out');
       }
     });
+    setBeforeRequest(freshen);
     const off = onAuthChange((event) => {
       if (event === 'logout') {
         setPhase('signed-out');
       }
+      // the library re-writes its cookies (with no expiry) on sign-in and on every renewal: keep them, if remembered
+      if (event === 'login' || event === 'token_refresh') keepSignInCookies();
     });
     return () => {
       setUnauthorizedHandler(null);
+      setBeforeRequest(null);
       off();
     };
   }, []);
 
   const signIn = useCallback(
-    async (email: string, password: string) => {
+    async (email: string, password: string, remember = false) => {
       setBusy(true);
       setError(null);
       try {
         try {
+          setRemembered(remember);
           await login(email.trim(), password); // no page reload
+          keepSignInCookies();
         } catch (e) {
           setError(plainAuthError(e));
           return;
@@ -150,6 +165,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const signOut = useCallback(async () => {
+    setRemembered(false); // signing out also forgets this computer
     try {
       await logout();
     } catch {
