@@ -1321,3 +1321,16 @@ test('emergency: "/EM" after the tag is offered and ticked; sentence words after
   assert.ok(isEmergency(hits[0] as never, new Set(parseCustomMarkers('/EM'))));       // typed in the box
   assert.ok(isEmergency(hits[0] as never, new Set(parseCustomMarkers('EM'))));
 });
+
+// ---- the counting area: up to the title block, found on each sheet (E1.02A / E1.02B: the plan runs to 92% across) ----
+import { countRegion, DEFAULT_COUNT_REGION as DCR } from '../src/detect/tagScan.ts';
+test('counting area: up to the title block\'s solid full-height edge, not a dashed grid line; never narrower than before', () => {
+  const W = 3024, H = 2160;
+  const dashed = Array.from({ length: 17 }, (_, i) => ({ x0: 2548, x1: 2548, y0: 20 + i * 125, y1: 20 + i * 125 + 27 }));   // a grid line
+  const border = [{ x0: 2790, x1: 2790, y0: 22, y1: 2140 }];                                                                  // the title block's edge
+  const outer = [{ x0: 2990, x1: 2990, y0: 22, y1: 2140 }];                                                                   // the sheet's border (too far right)
+  assert.ok(Math.abs(countRegion([...dashed, ...border, ...outer], W, H).x1 - (2790 / W - 0.003)) < 1e-9);
+  assert.equal(countRegion([...dashed, ...outer], W, H), DCR);                                                                // no title block line: as before
+  assert.equal(countRegion([{ x0: 2313, x1: 2313, y0: 22, y1: 2140 }], W, H).x1, DCR.x1);                                    // a line left of 82%: no narrower
+  assert.equal(countRegion([{ x0: 2790, x1: 2790, y0: 600, y1: 2140 }], W, H), DCR);                                          // not the full height: a wall
+});

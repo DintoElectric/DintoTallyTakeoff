@@ -9,7 +9,7 @@ import { extractPrims, type OpsLike } from './primitives.ts';
 import { findHexNotes } from './notes.ts';
 import { findMatchlines, zonesFromMatchlines, type Matchline } from './matchlines.ts';
 import { inZones, type Zone } from '../../shared/zones.ts';
-import { DEFAULT_COUNT_REGION, scanTags, type TagHit } from './tagScan.ts';
+import { countRegion, DEFAULT_COUNT_REGION, scanTags, type Region, type TagHit } from './tagScan.ts';
 import { attachLabels } from './emergency.ts';
 
 type PageForRuns = Parameters<typeof extractRuns>[0];
@@ -25,12 +25,16 @@ const pageSize = async (page: { getViewport(o: { scale: number }): { width: numb
  */
 export async function scanPage(page: PageForRuns & PageForPrims, OPS: OpsLike, sheetNumber: string | null, handZones: Zone[] | null = null, knownCodes?: Set<string>): Promise<PageScan> {
   const runs = await extractRuns(page);
-  let hits = scanTags(runs, undefined, knownCodes);
+  // The linework first: it shows where the title block starts, and so how far across the sheet to count.
+  let drawn: Awaited<ReturnType<typeof extractPrims>> | null = null;
+  try { drawn = await extractPrims(page, OPS, { keepPoints: true }); } catch (e) { console.warn('Reading the linework failed for a sheet; counting tags only', e); }
+  const R: Region = drawn ? countRegion(drawn.prims, drawn.width, drawn.height) : DEFAULT_COUNT_REGION;
+  let hits = scanTags(runs, R, knownCodes);
   let bubbles: GridBubble[] = [];
   // Drawing notes: hexagons with a label inside. A tag-looking label inside a hexagon (EM2, EX3) is a note, not a device.
   try {
-    const { prims, width, height } = await extractPrims(page, OPS, { keepPoints: true }); // the points show a camera's mounting lines
-    const R = DEFAULT_COUNT_REGION;
+    if (!drawn) throw new Error('no linework');
+    const { prims, width, height } = drawn; // (read with points: they show a camera's mounting lines)
     const notes = findHexNotes(prims, runs, width, height).filter((n) => n.x >= R.x0 && n.x <= R.x1 && n.y >= R.y0 && n.y <= R.y1);
     const insideHex = (h: TagHit) => notes.some((n) => Math.abs(h.x - n.x) <= (n.r * 1.05) / width && Math.abs(h.y - n.y) <= (n.r * 0.95) / height);
     hits = hits.filter((h) => !insideHex(h));

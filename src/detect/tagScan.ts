@@ -16,6 +16,34 @@ export interface Region { x0: number; y0: number; x1: number; y1: number }
 /** Plan area: leaves out the title block and notes column on the right, and the drawing border. */
 export const DEFAULT_COUNT_REGION: Region = { x0: 0.02, y0: 0.03, x1: 0.82, y1: 0.97 };
 
+interface LinePrim { x0: number; y0: number; x1: number; y1: number }
+/**
+ * The part of a sheet to count in: everything left of the title block. The title block's edge is the leftmost solid vertical
+ * line running the sheet's full height in its right quarter (a grid line there is dashed, a wall never spans the sheet).
+ * Without one, the plain default (82% across) is used. Sheets differ: the plan can run to 92% of the width, and a fixed cut
+ * left every fixture in that strip uncounted.
+ */
+export function countRegion(prims: LinePrim[], W: number, H: number): Region {
+  const pieces = new Map<number, { y0: number; y1: number }[]>();
+  const edges: number[] = [];
+  for (const p of prims) {
+    const w = p.x1 - p.x0, h = p.y1 - p.y0, x = (p.x0 + p.x1) / 2;
+    if (w < 1.5 && h > 2 && x > 0.75 * W && x < 0.975 * W) { const k = Math.round(x); (pieces.get(k) ?? pieces.set(k, []).get(k)!).push({ y0: p.y0, y1: p.y1 }); }
+    // a title block drawn as a box: its left side
+    if (h > 0.9 * H && w > 0.02 * W && w < 0.3 * W && p.x0 > 0.75 * W && p.x0 < 0.975 * W) edges.push(p.x0);
+  }
+  for (const [x, ps] of pieces) {
+    const near = [...(pieces.get(x - 1) ?? []), ...ps, ...(pieces.get(x + 1) ?? [])];
+    const top = Math.min(...near.map((q) => q.y0)), bottom = Math.max(...near.map((q) => q.y1));
+    const longest = Math.max(...near.map((q) => q.y1 - q.y0));
+    if (top < 0.06 * H && bottom > 0.94 * H && longest > 0.5 * H) edges.push(x);   // solid and the sheet's full height
+  }
+  if (!edges.length) return DEFAULT_COUNT_REGION;
+  const x1 = Math.min(...edges) / W - 0.003;
+  // (never narrower than the default: a line further left can belong to a table on the sheet, and nothing is gained there)
+  return { ...DEFAULT_COUNT_REGION, x1: Math.min(0.97, Math.max(DEFAULT_COUNT_REGION.x1, x1)) };
+}
+
 export type TagKind = 'tag' | 'short' | 'room' | 'note' | 'camera' | 'outlet';
 export interface TagHit {
   code: string; x: number; y: number; kind: TagKind; h?: number;
