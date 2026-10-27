@@ -263,3 +263,7 @@ th.right { text-align: right; }
 .count-tabs::-webkit-scrollbar { display: none; }
 .count-tabs button { padding: 6px 6px 7px; font-size: 12px; flex: none; }
 .count-tabs { padding: 8px 6px 0; gap: 0; }
+/* previous / next drawing, in the drawing screen's top bar */
+.sheet-nav { display: flex; align-items: center; gap: 6px; margin-right: 6px; }
+.sheet-nav .btn { min-height: 30px; padding: 4px 8px; }
+.sheet-nav .num { font-size: 12.5px; min-width: 44px; text-align: center; }

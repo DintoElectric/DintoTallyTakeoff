@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import {
-  ArrowCounterClockwise, ArrowClockwise, Cursor, Eraser, FilePdf, Table, Eye, EyeSlash, Polygon, Shapes, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus, PlusCircle, Plus, Selection, Stack, WarningCircle, Crosshair, MagnifyingGlass, Hand,
+  ArrowCounterClockwise, ArrowClockwise, CaretLeft, CaretRight, Cursor, Eraser, FilePdf, Table, Eye, EyeSlash, Polygon, Shapes, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus, PlusCircle, Plus, Selection, Stack, WarningCircle, Crosshair, MagnifyingGlass, Hand,
 } from '@phosphor-icons/react';
 import type { CategoryRow, CountRow, DrawingFileRow, ItemTypeRow, ProjectRow, SheetRow } from '../../shared/types.ts';
 import { api, ApiError } from '../auth/api.ts';
@@ -53,6 +53,12 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
 
   const sheets = sheetsQ.data?.sheets ?? [];
   const sheet = sheets.find((s) => s.id === sheetId) ?? null;
+  // the drawings before and after this one, in the drawing set's order
+  const sheetIdx = sheets.findIndex((s) => s.id === sheetId);
+  const prevSheet = sheetIdx > 0 ? sheets[sheetIdx - 1] : null;
+  const nextSheet = sheetIdx >= 0 && sheetIdx < sheets.length - 1 ? sheets[sheetIdx + 1] : null;
+  const goSheet = (s: SheetRow | null) => { if (s) navigate(paths.sheet(projectId, s.id)); };
+  const nameOf = (s: SheetRow) => [s.number ?? `Page ${s.page}`, s.title].filter(Boolean).join(' · ');
   const items = itemsQ.data?.items ?? [];
   const categories = catsQ.data?.categories ?? [];
   const threshold = project.data?.project.review_threshold ?? 0.85;
@@ -108,7 +114,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
     };
     return () => { store.onSaved = null; };
   }, [store, reloadCounts, reloadSheets, reloadAreaTotals]);
-  useEffect(() => { setSelected(new Set()); }, [sheetId]);
+  useEffect(() => { setSelected(new Set()); setReadBoxes([]); setReadOpen(false); }, [sheetId]);   // nothing carries over to the next drawing
 
   // Default the active item to the first library item.
   useEffect(() => {
@@ -421,6 +427,9 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
         if (e.key === 'Escape') { setDraft([]); return; }
         if (e.key === 'Backspace') { e.preventDefault(); setDraft((d) => d.slice(0, -1)); return; }
       }
+      // the previous and next drawing
+      if (e.key === 'PageUp' || e.key === '[') { e.preventDefault(); goSheet(prevSheet); return; }
+      if (e.key === 'PageDown' || e.key === ']') { e.preventDefault(); goSheet(nextSheet); return; }
       if (reviewing && current && !readOnly) {
         if (k === 'y') { reviewAct('confirm'); return; }
         if (k === 'n') { reviewAct('reject'); return; }
@@ -441,7 +450,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
     };
     window.addEventListener('keydown', on);
     return () => window.removeEventListener('keydown', on);
-  }, [store, readOnly, deleteSelected, reviewing, current, tool, draft, finishZone]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [store, readOnly, deleteSelected, reviewing, current, tool, draft, finishZone, prevSheet, nextSheet]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ----- missing sheet -----
   if (sheetsQ.data && !sheet) {
@@ -526,6 +535,13 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   return (
     <>
       <TopBar crumbs={[{ label: 'Projects', to: paths.projects() }, { label: project.data?.project.name ?? '…', to: paths.project(projectId) }, { label: sheetLabel }]}>
+        {sheets.length > 1 && sheetIdx >= 0 && (
+          <div className="sheet-nav" role="group" aria-label="Move between drawings">
+            <button className="btn btn-secondary" disabled={!prevSheet} onClick={() => goSheet(prevSheet)} aria-label="Previous drawing" title={prevSheet ? `Previous drawing: ${nameOf(prevSheet)} (Page Up or [)` : 'This is the first drawing'}><CaretLeft size={14} /></button>
+            <span className="num dim">{sheetIdx + 1} / {sheets.length}</span>
+            <button className="btn btn-secondary" disabled={!nextSheet} onClick={() => goSheet(nextSheet)} aria-label="Next drawing" title={nextSheet ? `Next drawing: ${nameOf(nextSheet)} (Page Down or ])` : 'This is the last drawing'}><CaretRight size={14} /></button>
+          </div>
+        )}
         {editorHint && <span className="save-state">{editorHint}</span>}
         {saveText && <span className={`save-state${snap.save.kind === 'error' ? ' err' : ''}`} role="status">{saveText}</span>}
         {!readOnly && <button className="btn btn-secondary" onClick={() => { if (sheet && (sheet.kind === 'schedule' || sheet.kind === 'legend')) return toast(`This sheet is marked as a ${sheet.kind}. Auto-count skips schedules and legends, since the tags in their tables are not fixtures. Change its type in the sheet index to count it.`); setShowAuto(true); }} disabled={!sheet || !file}><MagicWand size={14} /> Auto-count sheet</button>}
