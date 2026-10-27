@@ -1,4 +1,6 @@
 import { useState, type FormEvent } from 'react';
+import { Check } from '../app/ui.tsx';
+import { isRemembered, REMEMBER_DAYS } from './remember.ts';
 import { Hash } from '@phosphor-icons/react';
 import { APP_NAME } from '../../shared/limits.ts';
 import { useAuth } from './AuthProvider.tsx';
@@ -8,6 +10,7 @@ export function Gate({ overlay = false }: { overlay?: boolean }) {
   const a = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [remember, setRemember] = useState(isRemembered()); // ticked again if this computer was remembered before
   const [mode, setMode] = useState<'signin' | 'forgot'>('signin');
 
   const settingPassword = a.phase === 'invite' || a.phase === 'recovery';
@@ -20,7 +23,7 @@ export function Gate({ overlay = false }: { overlay?: boolean }) {
       return a.phase === 'invite' ? a.finishInvite(password) : a.finishRecovery(password);
     }
     if (mode === 'forgot') return a.forgot(email);
-    return a.signIn(email, password);
+    return a.signIn(email, password, remember);
   }
 
   const title = settingPassword ? (a.phase === 'invite' ? 'Welcome' : 'New password') : APP_NAME;
@@ -52,6 +55,12 @@ export function Gate({ overlay = false }: { overlay?: boolean }) {
           <div className="field">
             <label htmlFor="password">{settingPassword ? 'New password (at least 8 characters)' : 'Password'}</label>
             <input id="password" className="input" type="password" autoComplete={settingPassword ? 'new-password' : 'current-password'} value={password} onChange={(e) => setPassword(e.target.value)} autoFocus={settingPassword} />
+          </div>
+        )}
+        {mode === 'signin' && !settingPassword && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <Check checked={remember} onChange={setRemember}>Remember me for {REMEMBER_DAYS} days</Check>
+            <div className="dim" style={{ fontSize: 12, marginTop: 2 }}>Stay signed in on this computer. Don't tick this on a shared computer.</div>
           </div>
         )}
         {a.error && <div className="err-text" role="alert">{a.error}</div>}
