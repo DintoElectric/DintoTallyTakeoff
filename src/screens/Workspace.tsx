@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import {
-  ArrowCounterClockwise, ArrowClockwise, Cursor, Eraser, Eye, EyeSlash, Polygon, Shapes, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus, PlusCircle, Plus, Selection, Stack, WarningCircle, Crosshair, MagnifyingGlass, Hand,
+  ArrowCounterClockwise, ArrowClockwise, Cursor, Eraser, FilePdf, Eye, EyeSlash, Polygon, Shapes, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus, PlusCircle, Plus, Selection, Stack, WarningCircle, Crosshair, MagnifyingGlass, Hand,
 } from '@phosphor-icons/react';
 import type { CategoryRow, CountRow, DrawingFileRow, ItemTypeRow, ProjectRow, SheetRow } from '../../shared/types.ts';
 import { api, ApiError } from '../auth/api.ts';
@@ -12,6 +12,9 @@ import { useFetch } from '../app/useFetch.ts';
 import { DrawingView, type DrawingViewHandle, type ItemStyle, type MarkerData, type Tool } from '../viewer/DrawingView.tsx';
 import { loadFilePdf, pdfjs } from '../viewer/pdf.ts';
 import { extractPrims } from '../detect/primitives.ts';
+import { countGroupOf, GROUP_LABEL, type CountGroup } from '../../shared/countGroup.ts';
+import { buildSheetPdf, sheetPdfName, type CountList } from '../export/sheetPdf.ts';
+import { circuitStats, mainLabel, type Panel } from '../../shared/panels.ts';
 import { ceilingIndex, CEILING_LABEL, CEILING_TITLE, type Ceiling, type CeilingIndex } from '../detect/ceiling.ts';
 import { flushAll, getStore, useSheetStore } from './sheetStore.ts';
 import { extractRuns } from '../detect/pageRuns.ts';
@@ -63,6 +66,10 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [confirmClear, setConfirmClear] = useState(false);
   const [query, setQuery] = useState('');                              // search the items listed in the panel
   const [onlyCounted, setOnlyCounted] = useState(false);
+  // The counting tabs: fixtures and devices are counted on the drawing; panels come from panel schedules; conduit runs come later.
+  const [tab, setTab] = useState<CountGroup | 'panels' | 'conduit'>('fixture');
+  const isItemTab = tab === 'fixture' || tab === 'device';
+  const tabPicked = useRef(false);
   const [zeroOpen, setZeroOpen] = useState(false);   // the "Not counted yet" group at the bottom of the list, folded up by default
   const searchRef = useRef<HTMLInputElement>(null);
   const [keepHand, setKeepHand] = useState(false);
@@ -72,6 +79,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [showItemDialog, setShowItemDialog] = useState(false);
   const [similarBox, setSimilarBox] = useState<{ a: { x: number; y: number }; b: { x: number; y: number } } | null>(null); // example symbol boxed for Count similar
   const [showExport, setShowExport] = useState(false);
+  const [showPdf, setShowPdf] = useState(false); // this drawing as a PDF
   const [showAuto, setShowAuto] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [reviewId, setReviewId] = useState<string | null>(null);
@@ -208,7 +216,6 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
     }
     return m;
   }, [scope, areaFilter, localByItem, otherSheetCounts, localAreaRows, otherAreaRows]);
-  const totalShown = [...shown.values()].reduce((s, v) => s + v.n, 0);
   const flaggedShown = [...shown.values()].reduce((s, v) => s + v.flagged, 0);
 
   const sheetTotals = useMemo(() => {
@@ -218,25 +225,38 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
     return m;
   }, [otherSheetCounts, sheetId, snap.dets.length]);
 
+  // the items in the open tab (fixtures or devices)
+  const tabItems = useMemo(() => (isItemTab ? items.filter((it) => countGroupOf(it, categories) === tab) : items), [items, categories, tab, isItemTab]);
+  const groupCounts = useMemo(() => {
+    const n = { fixture: 0, device: 0 };
+    for (const it of items) n[countGroupOf(it, categories)] += shown.get(it.id)?.n ?? 0;
+    return n;
+  }, [items, categories, shown]);
+  // open on the tab that has this sheet's counts: Fixtures, unless only devices are counted here
+  useEffect(() => {
+    if (tabPicked.current || !itemsQ.data || !snap.loaded) return;
+    tabPicked.current = true;
+    if (groupCounts.fixture === 0 && groupCounts.device > 0) setTab('device');
+  }, [itemsQ.data, snap.loaded, groupCounts]);
   const grouped = useMemo(() => {
     const catName = (id: string | null) => categories.find((c) => c.id === id)?.name ?? 'Uncategorized';
     const order = (id: string | null) => categories.find((c) => c.id === id)?.sort ?? 1e6;
     const groups = new Map<string, { name: string; order: number; items: ItemTypeRow[] }>();
-    for (const it of items) {
+    for (const it of tabItems) {
       const k = it.category_id ?? '_';
       const g = groups.get(k) ?? { name: catName(it.category_id), order: order(it.category_id), items: [] };
       g.items.push(it);
       groups.set(k, g);
     }
     return [...groups.values()].sort((a, b) => a.order - b.order);
-  }, [items, categories]);
+  }, [tabItems, categories]);
 
   // The items listed in the panel: by category, or (when searching) the best matches first.
   const listGroups = useMemo(() => {
     const counted = (it: ItemTypeRow) => (shown.get(it.id)?.n ?? 0) > 0;
     const keep = (list: ItemTypeRow[]) => (onlyCounted ? list.filter(counted) : list);
     if (query.trim()) {
-      const hits = searchItems(query, keep(items), (it) => categories.find((c) => c.id === it.category_id)?.name ?? '');
+      const hits = searchItems(query, keep(tabItems), (it) => categories.find((c) => c.id === it.category_id)?.name ?? '');
       return [{ name: `${plural(hits.length, 'match', 'matches')} for “${query.trim()}”`, order: 0, items: hits }];
     }
     // Items with counts, by category; the ones with none yet gathered at the very bottom, folded up, so the list starts with
@@ -245,7 +265,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
     const zero = grouped.flatMap((g) => g.items.filter((it) => !counted(it)));
     if (!onlyCounted && zero.length) out.push({ name: 'Not counted yet', order: 1e9, items: zero, zero: true });
     return out;
-  }, [grouped, items, categories, query, onlyCounted, shown]);
+  }, [grouped, tabItems, categories, query, onlyCounted, shown]);
   const openItem = (id: string) => { setActiveItemId(id); setCardOpen(true); setScrollTo({ id, n: Date.now() }); };
 
   useEffect(() => {
@@ -499,6 +519,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
         {editorHint && <span className="save-state">{editorHint}</span>}
         {saveText && <span className={`save-state${snap.save.kind === 'error' ? ' err' : ''}`} role="status">{saveText}</span>}
         {!readOnly && <button className="btn btn-secondary" onClick={() => { if (sheet && (sheet.kind === 'schedule' || sheet.kind === 'legend')) return toast(`This sheet is marked as a ${sheet.kind}. Auto-count skips schedules and legends, since the tags in their tables are not fixtures. Change its type in the sheet index to count it.`); setShowAuto(true); }} disabled={!sheet || !file}><MagicWand size={14} /> Auto-count sheet</button>}
+        <button className="btn btn-secondary" disabled={!page || !file || !sheet} title={page ? 'Download this drawing as a PDF' : 'The drawing is still loading'} onClick={() => setShowPdf(true)}><FilePdf size={14} /> Drawing PDF</button>
         <button className="btn btn-primary" onClick={() => setShowExport(true)}><Export size={14} /> Export</button>
       </TopBar>
 
@@ -647,7 +668,14 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
 
         {/* right: counts */}
         <aside className="ws-right" aria-label="Counts">
-        {cardOpen && activeItem && (
+        <div className="count-tabs" role="tablist" aria-label="What to count">
+          {([['fixture', 'Fixtures', groupCounts.fixture], ['device', 'Devices', groupCounts.device], ['panels', 'Panels', null], ['conduit', 'Conduit runs', null]] as const).map(([k, label, n]) => (
+            <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} onClick={() => { tabPicked.current = true; setTab(k); }}>
+              {label}{n ? <span className="num"> {n}</span> : null}
+            </button>
+          ))}
+        </div>
+        {isItemTab && cardOpen && activeItem && (
           <div className="item-card" role="region" aria-label={`${activeItem.code} details`}>
             <div className="row-between">
               <span className="row" style={{ gap: 8, minWidth: 0 }}><Symbol shape={activeItem.marker_shape} glyph={activeItem.marker_glyph} /><b>{activeItem.code}</b></span>
@@ -681,8 +709,9 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             </div>
           </div>
         )}
+          {isItemTab && (<>
           <div className="head">
-            <div className="row-between"><h5 style={{ margin: 0 }}>Counts</h5><span className="muted num" style={{ fontSize: 13 }}>{plural(totalShown, 'item')}</span></div>
+            <div className="row-between"><h5 style={{ margin: 0 }}>{tab === 'device' ? 'Devices' : 'Fixtures'}</h5><span className="muted num" style={{ fontSize: 13 }}>{tabItems.reduce((n, it) => n + (shown.get(it.id)?.n ?? 0), 0)} counted</span></div>
             <div className="row" style={{ gap: 6, flexWrap: 'nowrap' }}>
             <div className="search" style={{ flex: 1, minWidth: 0, width: 'auto' }}>
               <MagnifyingGlass size={14} />
@@ -770,7 +799,14 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             ))}
             {items.length > 0 && !readOnly && <div style={{ padding: '8px 4px' }}><button className="btn btn-ghost" onClick={() => setShowItemDialog(true)}><Plus size={14} /> Add item type</button></div>}
           </div>
-          <div className="foot">
+          </>)}
+          {tab === 'panels' && <PanelsTab projectId={projectId} sheetId={sheetId} readOnly={readOnly} />}
+          {tab === 'conduit' && (
+            <div className="tab-body">
+              <p className="dim" style={{ fontSize: 13, margin: 0 }}>Conduit runs between panels will be listed here, with their lengths, once feeder routing is added: first the riser diagrams map which panel feeds which, then each feeder's route is measured on the plans.</p>
+            </div>
+          )}
+          {isItemTab && <div className="foot">
             <div className="row" style={{ gap: 8 }}><WarningCircle size={16} /><span>{plural(flaggedShown, 'low-confidence detection')} · {plural(queue.length, 'unreviewed count')} on this sheet</span></div>
             {reviewing && current ? (
               <div className="stack" style={{ gap: 8 }}>
@@ -795,7 +831,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                 ? <button className="btn btn-secondary btn-block" onClick={() => setReviewed(false)}>Reopen sheet</button>
                 : <button className="btn btn-secondary btn-block" onClick={() => setReviewed(true)}>Mark sheet reviewed</button>
             )}
-          </div>
+          </div>}
         </aside>
       </div>
 
@@ -824,7 +860,107 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
         <AutoCountDialog projectId={projectId} sheets={[sheet]} items={items} onClose={() => setShowAuto(false)}
           onDone={(msg) => { setShowAuto(false); toast(msg); void itemsQ.reload(); void countsQ.reload(); void sheetsQ.reload(); void getStore(sheetId).load(true); }} />
       )}
+      {showPdf && page && file && sheet && (
+        <SheetPdfDialog page={page} file={file} sheet={sheet} dets={snap.dets} items={items} categories={categories} projectName={project.data?.project.name ?? ''} onClose={() => setShowPdf(false)} />
+      )}
       {showExport && project.data && <ExportDialog projectId={projectId} projectName={project.data.project.name} sheets={sheets} currentSheetId={sheetId} onClose={() => setShowExport(false)} onGoReview={() => setShowExport(false)} />}
     </>
+  );
+}
+
+/** The Panels tab: the panels whose schedules are on this sheet, and a way into the Panels screen. */
+function PanelsTab({ projectId, sheetId, readOnly }: { projectId: string; sheetId: string; readOnly: boolean }) {
+  const { data, error } = useFetch<{ panels: Panel[] }>(`/panels?project=${projectId}`);
+  const all = data?.panels ?? [];
+  const here = all.filter((p) => p.sheet_id === sheetId);
+  return (
+    <div className="tab-body">
+      {error && <p className="err-text">{error}</p>}
+      {!data && !error && <span className="spinner" />}
+      {data && (
+        <>
+          <div className="dim" style={{ fontSize: 13 }}>{here.length ? `${plural(here.length, 'panel')} on this sheet.` : 'No panels on this sheet.'} {all.length > here.length ? `${plural(all.length, 'panel')} in the project.` : ''}</div>
+          {here.map((p) => {
+            const st = circuitStats(p, p.circuits);
+            return (
+              <button key={p.id} className="panel-row" onClick={() => navigate(paths.panels(projectId, p.id))}>
+                <span className="panel-name">{p.name}</span>
+                <span className="dim">{[mainLabel(p), p.voltage].filter(Boolean).join(' · ') || 'No details yet'}</span>
+                <span className="dim num">{st.positions ? `${st.used + st.spare} of ${st.positions} circuits used · ` : ''}{plural(st.breakers, 'breaker')}</span>
+              </button>
+            );
+          })}
+          <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+            {!readOnly && <button className="btn btn-secondary" onClick={() => navigate(`${paths.panels(projectId)}?new=1&sheet=${sheetId}`)}>Add a panel from this sheet</button>}
+            <button className="btn btn-ghost" onClick={() => navigate(paths.panels(projectId))}>Open all panels</button>
+          </div>
+          <p className="dim" style={{ fontSize: 12, margin: 0 }}>Panel schedules are typed in for now. Reading them from the drawings comes next.</p>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** This drawing as a PDF: the original page, with or without the counts drawn on it. */
+function SheetPdfDialog({ page, file, sheet, dets, items, categories, projectName, onClose }: {
+  page: PDFPageProxy; file: DrawingFileRow; sheet: SheetRow; dets: { item_type_id: string; x: number; y: number; status: string }[];
+  items: ItemTypeRow[]; categories: CategoryRow[]; projectName: string; onClose: () => void;
+}) {
+  const toast = useToast();
+  const [withCounts, setWithCounts] = useState(true);
+  const [withList, setWithList] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const live = dets.filter((d) => d.status !== 'rejected');
+  const go = async () => {
+    setBusy(true);
+    try {
+      const doc = await loadFilePdf({ id: file.id, chunk_count: file.chunk_count });
+      const source = await doc.getData();
+      const vp = page.getViewport({ scale: 1 });
+      const byId = new Map(items.map((i) => [i.id, i]));
+      let list: CountList | null = null;
+      if (withCounts && withList) {
+        const n = new Map<string, number>();
+        for (const d of live) n.set(d.item_type_id, (n.get(d.item_type_id) ?? 0) + 1);
+        const rows = [...n].map(([id, k]) => ({ it: byId.get(id), n: k })).filter((r) => r.it) as { it: ItemTypeRow; n: number }[];
+        list = {
+          title: [projectName, [sheet.number, sheet.title].filter(Boolean).join(' ')].filter(Boolean).join(' · '),
+          subtitle: `Counts on this sheet · Prepared ${new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}`,
+          groups: (['fixture', 'device'] as CountGroup[]).map((g) => ({
+            name: GROUP_LABEL[g],
+            rows: rows.filter((r) => countGroupOf(r.it, categories) === g).sort((a, b) => a.it.code.localeCompare(b.it.code, undefined, { numeric: true })).map((r) => ({ code: r.it.code, name: r.it.name, n: r.n })),
+          })),
+        };
+      }
+      const bytes = await buildSheetPdf({
+        source, pageIndex: sheet.page - 1, viewport: { width: vp.width, height: vp.height }, toPdfPoint: (x, y) => vp.convertToPdfPoint(x, y),
+        marks: withCounts ? live.map((d) => ({ x: d.x, y: d.y, shape: byId.get(d.item_type_id)?.marker_shape ?? 'circle' })) : null,
+        list,
+      });
+      const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'application/pdf' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = sheetPdfName(sheet.number, sheet.title, sheet.page, withCounts);
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      onClose();
+    } catch (e) {
+      console.warn('Drawing PDF failed', e);
+      toast("The PDF couldn't be made. Try again; if it keeps failing, the drawing file may be damaged.");
+      setBusy(false);
+    }
+  };
+  return (
+    <Dialog title="Drawing PDF" onClose={onClose}>
+      <div className="dialog-title">Download {sheet.number ?? `page ${sheet.page}`} as a PDF</div>
+      <div className="dialog-body stack" style={{ gap: 10 }}>
+        <Check checked={withCounts} onChange={setWithCounts}>Show the counts on the drawing <span className="dim num">({plural(live.length, 'count')})</span></Check>
+        {withCounts && <div style={{ paddingLeft: 24 }}><Check checked={withList} onChange={setWithList}>Add a page listing the counts</Check></div>}
+        <div className="dim" style={{ fontSize: 12 }}>{withCounts ? 'Each count is marked on the drawing, as in Tally.' : 'The drawing alone, as issued.'} PDF markups (Bluebeam stamps, clouds) are left out, as Tally hides them.</div>
+      </div>
+      <div className="dialog-actions">
+        <button className="btn btn-secondary" onClick={onClose} disabled={busy}>Cancel</button>
+        <button className="btn btn-primary" onClick={() => void go()} disabled={busy}>{busy ? 'Preparing…' : 'Download PDF'}</button>
+      </div>
+    </Dialog>
   );
 }

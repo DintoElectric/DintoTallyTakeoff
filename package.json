@@ -12,7 +12,7 @@
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p netlify/tsconfig.json --noEmit",
     "preview": "vite preview",
-    "test": "node --experimental-strip-types scripts/db.test.mjs && node --experimental-strip-types --test scripts/unit.test.ts",
+    "test": "node --experimental-strip-types scripts/db.test.mjs && node --experimental-strip-types --test scripts/unit.test.ts scripts/sheetpdf.test.ts",
     "prebuild": "node scripts/copy-pdfjs-assets.mjs",
     "predev": "node scripts/copy-pdfjs-assets.mjs",
     "predev:vite": "node scripts/copy-pdfjs-assets.mjs"
@@ -25,6 +25,7 @@
     "@phosphor-icons/react": "2.1.10",
     "docx": "9.8.1",
     "exceljs": "4.4.0",
+    "pdf-lib": "1.17.1",
     "pdfjs-dist": "6.3.289",
     "react": "18.3.1",
     "react-dom": "18.3.1"
