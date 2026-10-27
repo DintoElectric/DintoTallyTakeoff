@@ -11,6 +11,7 @@ import { FLOOR_OPTIONS } from '../upload/titleBlock.ts';
 import AutoCountDialog from './AutoCountDialog.tsx';
 import ScheduleDialog from './ScheduleDialog.tsx';
 import ScheduleSheetsDialog from './ScheduleSheetsDialog.tsx';
+import ScheduleFinderDialog from './ScheduleFinderDialog.tsx';
 import DuplicatesDialog from './DuplicatesDialog.tsx';
 
 const KIND_LABEL: Record<SheetKind, string> = { floor_plan: 'Floor plan', legend: 'Legend', site_plan: 'Site plan', schedule: 'Schedule', other: 'Other' };
@@ -51,6 +52,7 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
   const [confirmDelete, setConfirmDelete] = useState<DrawingFileRow | null>(null);
   const [autoOpen, setAutoOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [finderOpen, setFinderOpen] = useState(false); // Read schedules: the sheets with schedules, to box
   const [schedSheetsOpen, setSchedSheetsOpen] = useState(false);
   const [dupOpen, setDupOpen] = useState(false);
   const cats = useFetch<{ categories: CategoryRow[] }>(`/categories?project=${projectId}`);
@@ -111,7 +113,7 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
         <button className="btn btn-secondary" onClick={() => navigate(paths.library(projectId))}>Item library</button>
         <button className="btn btn-secondary" onClick={() => navigate(paths.panels(projectId))}>Panels</button>
         <button className="btn btn-secondary" onClick={openWorkspace} disabled={sheets.length === 0}>Open workspace</button>
-        {canEdit && <button className="btn btn-secondary" onClick={() => setScheduleOpen(true)} disabled={sheets.length === 0} title="Add the types listed in schedules and symbol legends to the item library">Read schedules & legends</button>}
+        {canEdit && <button className="btn btn-secondary" onClick={() => setFinderOpen(true)} disabled={sheets.length === 0} title="Find the sheets with schedules, then box the schedules to read into the item library">Read schedules</button>}
         {canEdit && <button className="btn btn-secondary" onClick={() => setSchedSheetsOpen(true)} disabled={sheets.length === 0} title="Stop counting the sheets that are, or hold, schedules">Exclude schedules</button>}
         {isAdmin && <button className="btn btn-secondary" onClick={() => setDupOpen(true)} disabled={sheets.length < 2} title="Find and remove sheets that were uploaded more than once">Remove duplicates</button>}
         {canEdit && <button className="btn btn-primary" onClick={() => setAutoOpen(true)} disabled={enabled.length === 0} title={enabled.length === 0 ? 'Tick Count on at least one sheet first.' : skippedSheets ? `${plural(skippedSheets, 'schedule or legend sheet')} ticked to count will be skipped.` : undefined}>Auto-count {enabled.length} sheet{enabled.length === 1 ? '' : 's'}</button>}
@@ -254,6 +256,9 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
       {dupOpen && (
         <DuplicatesDialog sheets={sheets} files={files.data?.files ?? []} onClose={() => setDupOpen(false)}
           onDone={(msg) => { setDupOpen(false); toast(msg); void files.reload(); void sheetsQ.reload(); void project.reload(); }} />
+      )}
+      {finderOpen && (
+        <ScheduleFinderDialog projectId={projectId} sheets={sheets} files={files.data?.files.filter((f) => f.upload_status === 'ready') ?? []} onClose={() => setFinderOpen(false)} onOldReader={() => { setFinderOpen(false); setScheduleOpen(true); }} />
       )}
       {scheduleOpen && (
         <ScheduleDialog projectId={projectId} sheets={sheets} files={files.data?.files.filter((f) => f.upload_status === 'ready') ?? []} items={items.data?.items ?? []} categories={cats.data?.categories ?? []}

@@ -1161,77 +1161,100 @@ test('remember me: the sign-in cookies are kept for 30 days only when remembered
   assert.equal(keepSignInCookies(doc, store), 0);
 });
 
-import { areaRows, readAreaTable, rowToItem, suggestColumns } from '../src/detect/areaSchedule.ts';
-// ---- reading a schedule from a boxed area (modeled on E7.11 / E7.12) ----
+import { areaRows, headerLabel, readAreaTable, rowToItem, sectionName, suggestColumns } from '../src/detect/areaSchedule.ts';
+// ---- reading a schedule from boxed areas (modeled on E7.11 / E7.12 and E0.01's special purpose receptacle schedule) ----
 {
   const W = 3000, H = 2000;
   const run = (str: string, x0: number, y: number, w = str.length * 5) => ({ str, cx: (x0 + w / 2) / W, cy: y / H, w: w / W, h: 8 / H, rotated: false });
+  const items = (t: NonNullable<ReturnType<typeof readAreaTable>>, ch: ReturnType<typeof suggestColumns>) => areaRows(t, ch.type!).map((r) => rowToItem(r, ch, t.columns));
+  // a light fixture schedule
   const runs = [
     run('LUMINAIRE SCHEDULE (1 OF 2)', 400, 70),                                  // a title above the table
     run('TYPE', 145, 100), run('LOCATION', 190, 100), run('DESCRIPTION', 300, 100), run('DRIVER', 600, 100), run('WATTAGE', 700, 100), run('VOLTAGE', 760, 100),
     run('BASIS OF DESIGN', 950, 100), run('REMARKS', 1600, 100),
-    // A1-4: three lines
     run('A1-4', 145, 120), run('CLASSROOM', 190, 120), run("4' LED SUSPENDED LINEAR", 300, 120), run('INTEGRAL 0-10V', 600, 120), run('33', 700, 120), run('277 V', 760, 120), run('LEDALITE', 950, 120), run('1. FIXTURE SHALL DIM.', 1450, 120),
     run('FIXTURE', 300, 131), run('DIMMING TO 1%', 600, 131), run('#77-0-5-L-B-C-VD-04', 950, 131), run('2. ARCHITECT SHALL VERIFY FINISH', 1450, 131),
     run('*MOUNTING TO MATCH CEILING', 950, 142),
-    // C: two lines
     run('C', 145, 170), run('OFFICE', 190, 170), run("2' X 2' LAY-IN TROFFER", 300, 170), run('INTEGRAL 0-10V', 600, 170), run('DAY-BRITE CFI', 950, 170),
     run('#2CAZ-G-20L-835', 950, 181),
-    // Z: in an ignore area
-    run('Z', 145, 220), run('WALL PACK', 300, 220), run('GARDCO', 950, 220),
-    // a relay schedule beside the table, outside the box
-    run('RELAY / CIRCUIT', 2500, 100), run('L-1', 2500, 120), run('CORRIDOR', 2600, 120),
+    run('P', 145, 220), run('WALL PACK', 300, 220), run('GARDCO', 950, 220),     // a one-letter type
+    run('RELAY / CIRCUIT', 2500, 100), run('L-1', 2500, 120), run('CORRIDOR', 2600, 120),   // a relay schedule beside it, outside the box
   ];
-  // column lines, drawn a row at a time (short pieces), the last one outside the box
   const edges = [140, 185, 295, 595, 695, 755, 940, 1445, 2700];
-  const vlines = edges.flatMap((x) => [{ x, y0: 92, y1: 108 }, { x, y0: 112, y1: 160 }, { x, y0: 160, y1: 210 }]);
+  const vlines = edges.flatMap((x) => [{ x, y0: 92, y1: 108 }, { x, y0: 112, y1: 160 }, { x, y0: 160, y1: 210 }, { x, y0: 210, y1: 240 }]);
   const box = { x0: 130 / W, y0: 60 / H, x1: 2400 / W, y1: 260 / H };
-  const zone = { points: [{ x: 120 / W, y: 212 / H }, { x: 2400 / W, y: 212 / H }, { x: 2400 / W, y: 240 / H }, { x: 120 / W, y: 240 / H }] };
-  const inZone = (x: number, y: number) => x >= zone.points[0].x && x <= zone.points[1].x && y >= zone.points[0].y && y <= zone.points[2].y;
+  const pick = (t: NonNullable<ReturnType<typeof readAreaTable>>, names: string[]) => ({ ...suggestColumns(t.columns), extra: t.columns.map((c, i) => (names.includes(c.header) ? i : -1)).filter((i) => i >= 0) });
 
-  test('read schedule: only the boxed area; the header gives the columns; the four fields are picked by name', () => {
-    const t = readAreaTable(runs, box, { pageW: W, pageH: H, vlines, skip: inZone })!;
-    assert.ok(t);
+  test('read schedule: only the boxed area; the header block gives the columns; other columns go into the details under their header', () => {
+    const t = readAreaTable(runs, box, { pageW: W, pageH: H, vlines })!;
     assert.deepEqual(t.columns.map((c) => c.header), ['TYPE', 'LOCATION', 'DESCRIPTION', 'DRIVER', 'WATTAGE', 'VOLTAGE', 'BASIS OF DESIGN', 'REMARKS']);
-    const cols = suggestColumns(t.columns);
-    assert.deepEqual(cols, { type: 0, description: 2, driver: 3, basis: 6 });
-    const items = areaRows(t, cols.type!).map((r) => rowToItem(r, cols));
-    assert.deepEqual(items, [
-      { code: 'A1-4', name: "4' LED SUSPENDED LINEAR FIXTURE", spec: 'Driver: INTEGRAL 0-10V DIMMING TO 1% · Basis of design: LEDALITE #77-0-5-L-B-C-VD-04 *MOUNTING TO MATCH CEILING' },
-      { code: 'C', name: "2' X 2' LAY-IN TROFFER", spec: 'Driver: INTEGRAL 0-10V · Basis of design: DAY-BRITE CFI #2CAZ-G-20L-835' },
-    ]);   // no remarks in the basis of design, no relay schedule, Z left out by the ignore area
-  });
-  test('read schedule: without ruling lines the columns still split halfway between the headers; a remembered choice wins', () => {
-    const t = readAreaTable(runs, box, { pageW: W, pageH: H, skip: inZone })!;
-    const cols = suggestColumns(t.columns, { basis: 'REMARKS' });
-    assert.equal(t.columns[cols.basis!].header, 'REMARKS');                 // the estimator picked it last time
-    const plain = suggestColumns(t.columns);
-    const items = areaRows(t, plain.type!).map((r) => rowToItem(r, plain));
-    assert.deepEqual(items.map((i) => i!.code), ['A1-4', 'C']);
-    assert.ok(items[1]!.spec!.includes('Basis of design: DAY-BRITE CFI #2CAZ-G-20L-835'));
-  });
-  test('read schedule: one small box per column (header and the first row) reads the whole table, down to its end', () => {
-    const small = (x0: number, x1: number) => ({ x0: x0 / W, y0: 92 / H, x1: x1 / W, y1: 126 / H });
-    const t = readAreaTable(runs, [small(150, 175), small(320, 420), small(945, 1200)], { pageW: W, pageH: H, vlines, skip: inZone })!;
-    assert.deepEqual(t.columns.map((c) => c.header), ['TYPE', 'DESCRIPTION', 'BASIS OF DESIGN']);   // only the boxed columns
-    const cols = suggestColumns(t.columns);
-    assert.equal(cols.driver, null);                                                              // not boxed: not read
-    const items = areaRows(t, cols.type!).map((r) => rowToItem(r, cols));
-    assert.deepEqual(items, [
-      { code: 'A1-4', name: "4' LED SUSPENDED LINEAR FIXTURE", spec: 'Basis of design: LEDALITE #77-0-5-L-B-C-VD-04 *MOUNTING TO MATCH CEILING' },
-      { code: 'C', name: "2' X 2' LAY-IN TROFFER", spec: 'Basis of design: DAY-BRITE CFI #2CAZ-G-20L-835' },
+    const ch = suggestColumns(t.columns);
+    assert.equal(ch.type, 0); assert.equal(ch.description, 2);
+    assert.deepEqual(ch.extra, [1, 3, 4, 5, 6, 7]);                                  // everything else is read, unless unticked
+    const two = pick(t, ['DRIVER', 'BASIS OF DESIGN']);
+    assert.deepEqual(items(t, two), [
+      { code: 'A1-4', name: "4' LED SUSPENDED LINEAR FIXTURE", spec: 'Driver: INTEGRAL 0-10V DIMMING TO 1% · Basis of design: LEDALITE #77-0-5-L-B-C-VD-04 *MOUNTING TO MATCH CEILING', section: null },
+      { code: 'C', name: "2' X 2' LAY-IN TROFFER", spec: 'Driver: INTEGRAL 0-10V · Basis of design: DAY-BRITE CFI #2CAZ-G-20L-835', section: null },
+      { code: 'P', name: 'WALL PACK', spec: 'Basis of design: GARDCO', section: null },            // a one-letter type is a row, not a heading
     ]);
-    // a box narrower than its column still reads the whole column (out to the table's lines)
-    const narrow = readAreaTable(runs, [{ x0: 150 / W, y0: 92 / H, x1: 160 / W, y1: 126 / H }], { pageW: W, pageH: H, vlines, skip: inZone })!;
-    assert.deepEqual(areaRows(narrow, 0).map((r) => r[0]), ['A1-4', 'C']);
   });
-  test('read schedule: without ruling lines, the read follows the text down and stops at the gap before the next table', () => {
-    const more = [...runs, run('NOTES:', 145, 400), run('1. ALL FIXTURES SHALL BE UL LISTED', 145, 412)];   // well below the table
-    const t = readAreaTable(more, [{ x0: 140 / W, y0: 92 / H, x1: 480 / W, y1: 126 / H }], { pageW: W, pageH: H })!;
-    const cols = suggestColumns(t.columns);
-    assert.deepEqual(areaRows(t, cols.type!).map((r) => r[cols.type!]), ['A1-4', 'C', 'Z']);   // no ignore area here: Z is read; the notes are not
+  test('read schedule: one small box per column reads the whole table; an ignore area leaves rows or columns out', () => {
+    const small = (x0: number, x1: number) => ({ x0: x0 / W, y0: 92 / H, x1: x1 / W, y1: 126 / H });
+    const t = readAreaTable(runs, [small(150, 175), small(320, 420), small(945, 1200)], { pageW: W, pageH: H, vlines })!;
+    assert.deepEqual(t.columns.map((c) => c.header), ['TYPE', 'DESCRIPTION', 'BASIS OF DESIGN']);
+    assert.deepEqual(items(t, suggestColumns(t.columns)).map((i) => i!.code), ['A1-4', 'C', 'P']);
+    // an ignore area over row P, and one over the REMARKS column
+    const zones = [{ x0: 120, y0: 212, x1: 2400, y1: 240 }, { x0: 1445, y0: 60, x1: 2400, y1: 260 }];
+    const skip = (x: number, y: number) => zones.some((z) => x * W >= z.x0 && x * W <= z.x1 && y * H >= z.y0 && y * H <= z.y1);
+    const t2 = readAreaTable(runs, box, { pageW: W, pageH: H, vlines, skip })!;
+    assert.ok(!t2.columns.some((c) => c.header === 'REMARKS'));
+    assert.deepEqual(items(t2, suggestColumns(t2.columns)).map((i) => i!.code), ['A1-4', 'C']);
   });
-  test('read schedule: no header in the box means nothing is read', () => {
+  test('read schedule: without ruling lines the columns still split; a remembered choice wins; no header means nothing is read', () => {
+    const t = readAreaTable(runs, box, { pageW: W, pageH: H })!;
+    assert.equal(t.columns[suggestColumns(t.columns, { type: 'LOCATION' }).type!].header, 'LOCATION');
+    assert.ok(suggestColumns(t.columns, { skip: ['REMARKS'] }).extra.every((i) => t.columns[i].header !== 'REMARKS'));
+    assert.deepEqual(items(t, suggestColumns(t.columns)).map((i) => i!.code), ['A1-4', 'C', 'P']);
     assert.equal(readAreaTable(runs, { x0: 2450 / W, y0: 110 / H, x1: 2800 / W, y1: 130 / H }, { pageW: W, pageH: H }), null);
+  });
+
+  // a special purpose receptacle schedule: stacked headers, group labels, section headings, lines only on data rows
+  const R = (str: string, x0: number, y: number) => run(str, x0, y, str.length * 4.6);
+  const spr = [
+    R('SPECIAL PURPOSE RECEPTACLE SCHEDULE', 215, 961),
+    R('C.B.', 381, 1009), R('BRANCH WIRING (SEE NOTES)', 439, 1009),
+    R('TYPE', 117, 1024), R('NEMA', 160, 1024), R('CODE', 116, 1034), R('CLASS', 158, 1034), R('DESCRIPTION', 239, 1029),
+    R('TRIP', 357, 1030), R('(AMPS)', 352, 1040), R('POLES', 395, 1035),
+    R('CONDUCTOR', 439, 1030), R('SIZE', 456, 1040), R('GROUND', 513, 1030), R('SIZE', 522, 1040), R('CONDUIT', 577, 1030), R('SIZE', 586, 1040),
+    R('NON-TWIST LOCK TYPE W/ GROUND', 117, 1069),
+    R('A', 125, 1094), R('5-20R', 161, 1094), R('125V, 2P, 3W W/ GROUND - 20A', 198, 1094), R('20', 365, 1094), R('1', 412, 1094), R('3#10', 455, 1094), R('1#10', 517, 1094), R('3/4"', 585, 1094),
+    R('U', 125, 1118), R('18-50R', 161, 1118), R('120/250V, 4P, 5W W/ GROUND - 50A', 198, 1118), R('50', 365, 1118), R('3', 412, 1118), R('4#6', 455, 1118), R('1#8', 517, 1118), R('1 1/4"', 585, 1118),
+    R('TWIST LOCK TYPE W/ GROUND', 117, 1143),
+    R('AA', 122, 1168), R('L5-20R', 160, 1168), R('125V, 2P, 3W W/ GROUND - 20A', 198, 1168), R('20', 365, 1168), R('1', 412, 1168), R('3#10', 455, 1168), R('1#10', 517, 1168), R('3/4"', 585, 1168),
+  ];
+  const cx = [107, 147, 197, 344, 389, 434, 496, 563, 629];
+  const sprLines = [
+    ...cx.map((x) => ({ x, y0: 1015, y1: 1050 })),                                // the header row's cells
+    { x: 107, y0: 1050, y1: 1180 }, { x: 629, y0: 1050, y1: 1180 },              // the frame runs on past the section heading rows
+    ...cx.flatMap((x) => [{ x, y0: 1082, y1: 1131 }, { x, y0: 1156, y1: 1180 }]), // the column lines: data rows only
+  ];
+  const sprBox = { x0: 100 / W, y0: 950 / H, x1: 640 / W, y1: 1110 / H };       // the title, the header and the first row: the read follows the rest
+
+  test('read schedule: stacked headers and group labels name each column; section headings become the rows\' sections', () => {
+    const t = readAreaTable(spr, sprBox, { pageW: W, pageH: H, vlines: sprLines })!;
+    assert.deepEqual(t.columns.map((c) => c.header), ['TYPE CODE', 'NEMA CLASS', 'DESCRIPTION', 'C.B. TRIP (AMPS)', 'C.B. POLES', 'BRANCH WIRING (SEE NOTES) CONDUCTOR SIZE', 'BRANCH WIRING (SEE NOTES) GROUND SIZE', 'CONDUIT SIZE']);
+    const ch = suggestColumns(t.columns);
+    const got = items(t, ch);
+    assert.deepEqual(got.map((i) => [i!.code, i!.section]), [['A', 'NON-TWIST LOCK TYPE W/ GROUND'], ['U', 'NON-TWIST LOCK TYPE W/ GROUND'], ['AA', 'TWIST LOCK TYPE W/ GROUND']]);
+    assert.equal(got[0]!.spec, 'NEMA class: 5-20R · C.B. trip (amps): 20 · C.B. poles: 1 · Branch wiring conductor size: 3#10 · Branch wiring ground size: 1#10 · Conduit size: 3/4"');
+    assert.equal(got[1]!.name, '120/250V, 4P, 5W W/ GROUND - 50A');                      // the heading after U is not added to U
+    assert.equal(sectionName('TWIST LOCK TYPE W/ GROUND'), 'Twist lock type w/ ground');
+    assert.equal(headerLabel('BASIS OF DESIGN'), 'Basis of design');
+  });
+  test('read schedule: an ignore area over a column leaves it out of the read', () => {
+    const skip = (x: number, y: number) => x * W > 563 && x * W < 629 && y * H > 1000;   // the conduit column
+    const t = readAreaTable(spr, sprBox, { pageW: W, pageH: H, vlines: sprLines, skip })!;
+    assert.ok(!t.columns.some((c) => c.header.includes('CONDUIT')));
+    assert.ok(!items(t, suggestColumns(t.columns))[0]!.spec!.includes('Conduit'));
   });
 }

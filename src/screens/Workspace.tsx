@@ -71,6 +71,11 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [tab, setTab] = useState<CountGroup | 'panels' | 'conduit'>('fixture');
   const isItemTab = tab === 'fixture' || tab === 'device';
   const tabPicked = useRef(false);
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get('read') !== '1' || readOnly) return;
+    setTool('read');
+    toast('Box the schedule to read: its header and a row or two is enough. Draw ignore areas over columns you don\'t need.');
+  }, [sheetId]); // eslint-disable-line react-hooks/exhaustive-deps
   const [zeroOpen, setZeroOpen] = useState(false);   // the "Not counted yet" group at the bottom of the list, folded up by default
   const searchRef = useRef<HTMLInputElement>(null);
   const [keepHand, setKeepHand] = useState(false);
@@ -578,6 +583,13 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             </button>
           </div>
           <div className="canvas-wrap">
+            {readBoxes.length > 0 && !readOpen && (
+              <div className="read-bar" role="status">
+                <span>Reading a schedule · {plural(readBoxes.length, 'box', 'boxes')}</span>
+                <button className="btn btn-primary" style={{ minHeight: 28, padding: '2px 12px' }} onClick={() => setReadOpen(true)}>Continue reading</button>
+                <button className="btn btn-ghost" style={{ minHeight: 28, padding: '2px 8px' }} onClick={() => setReadBoxes([])}>Clear</button>
+              </div>
+            )}
             {page && pageDims ? (
               <DrawingView
                 ref={viewRef} page={page} pageW={pageDims.w} pageH={pageDims.h} markers={markers} styles={styles}
@@ -873,11 +885,12 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
           onDone={(msg) => { setShowAuto(false); toast(msg); void itemsQ.reload(); void countsQ.reload(); void sheetsQ.reload(); void getStore(sheetId).load(true); }} />
       )}
       {readOpen && readBoxes.length > 0 && page && sheet && (
-        <ReadScheduleDialog page={page} projectId={projectId} boxes={readBoxes} zones={zonesShown} items={items}
+        <ReadScheduleDialog page={page} projectId={projectId} boxes={readBoxes} zones={zonesShown} items={items} categories={categories}
           onAddBox={() => { setReadOpen(false); setTool('read'); toast('Drag a box around the next column header.'); }}
+          onIgnoreColumn={() => { setReadOpen(false); setTool('zone'); setDraft([]); toast('Outline the column to leave out (click its corners, then click the first point), then Continue reading.'); }}
           onStartOver={() => { setReadBoxes([]); setReadOpen(false); setTool('read'); toast('Boxes cleared. Drag a box around a column header.'); }}
           onClose={() => { setReadBoxes([]); setReadOpen(false); }}
-          onDone={() => { setReadBoxes([]); setReadOpen(false); void itemsQ.reload(); }} />
+          onDone={() => { setReadBoxes([]); setReadOpen(false); void itemsQ.reload(); void catsQ.reload(); }} />
       )}
       {showPdf && page && file && sheet && (
         <SheetPdfDialog page={page} file={file} sheet={sheet} dets={snap.dets} items={items} categories={categories} projectName={project.data?.project.name ?? ''} onClose={() => setShowPdf(false)} />
