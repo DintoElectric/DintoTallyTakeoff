@@ -1210,6 +1210,27 @@ import { areaRows, readAreaTable, rowToItem, suggestColumns } from '../src/detec
     assert.deepEqual(items.map((i) => i!.code), ['A1-4', 'C']);
     assert.ok(items[1]!.spec!.includes('Basis of design: DAY-BRITE CFI #2CAZ-G-20L-835'));
   });
+  test('read schedule: one small box per column (header and the first row) reads the whole table, down to its end', () => {
+    const small = (x0: number, x1: number) => ({ x0: x0 / W, y0: 92 / H, x1: x1 / W, y1: 126 / H });
+    const t = readAreaTable(runs, [small(150, 175), small(320, 420), small(945, 1200)], { pageW: W, pageH: H, vlines, skip: inZone })!;
+    assert.deepEqual(t.columns.map((c) => c.header), ['TYPE', 'DESCRIPTION', 'BASIS OF DESIGN']);   // only the boxed columns
+    const cols = suggestColumns(t.columns);
+    assert.equal(cols.driver, null);                                                              // not boxed: not read
+    const items = areaRows(t, cols.type!).map((r) => rowToItem(r, cols));
+    assert.deepEqual(items, [
+      { code: 'A1-4', name: "4' LED SUSPENDED LINEAR FIXTURE", spec: 'Basis of design: LEDALITE #77-0-5-L-B-C-VD-04 *MOUNTING TO MATCH CEILING' },
+      { code: 'C', name: "2' X 2' LAY-IN TROFFER", spec: 'Basis of design: DAY-BRITE CFI #2CAZ-G-20L-835' },
+    ]);
+    // a box narrower than its column still reads the whole column (out to the table's lines)
+    const narrow = readAreaTable(runs, [{ x0: 150 / W, y0: 92 / H, x1: 160 / W, y1: 126 / H }], { pageW: W, pageH: H, vlines, skip: inZone })!;
+    assert.deepEqual(areaRows(narrow, 0).map((r) => r[0]), ['A1-4', 'C']);
+  });
+  test('read schedule: without ruling lines, the read follows the text down and stops at the gap before the next table', () => {
+    const more = [...runs, run('NOTES:', 145, 400), run('1. ALL FIXTURES SHALL BE UL LISTED', 145, 412)];   // well below the table
+    const t = readAreaTable(more, [{ x0: 140 / W, y0: 92 / H, x1: 480 / W, y1: 126 / H }], { pageW: W, pageH: H })!;
+    const cols = suggestColumns(t.columns);
+    assert.deepEqual(areaRows(t, cols.type!).map((r) => r[cols.type!]), ['A1-4', 'C', 'Z']);   // no ignore area here: Z is read; the notes are not
+  });
   test('read schedule: no header in the box means nothing is read', () => {
     assert.equal(readAreaTable(runs, { x0: 2450 / W, y0: 110 / H, x1: 2800 / W, y1: 130 / H }, { pageW: W, pageH: H }), null);
   });

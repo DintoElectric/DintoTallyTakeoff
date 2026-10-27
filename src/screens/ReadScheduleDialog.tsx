@@ -16,8 +16,9 @@ const recall = (projectId: string): Partial<Record<Field, string>> => { try { re
 const remember = (projectId: string, v: Partial<Record<Field, string>>) => { try { localStorage.setItem(memKey(projectId), JSON.stringify(v)); } catch { /* not kept: picked again next time */ } };
 
 /** Reads the schedule in the boxed area: the estimator picks the Type, Description, Driver and Basis of design columns. */
-export default function ReadScheduleDialog({ page, projectId, box, zones, items, onClose, onDone }: {
-  page: PDFPageProxy; projectId: string; box: Box; zones: Zone[]; items: ItemTypeRow[]; onClose: () => void; onDone: () => void;
+export default function ReadScheduleDialog({ page, projectId, boxes, zones, items, onAddBox, onStartOver, onClose, onDone }: {
+  page: PDFPageProxy; projectId: string; boxes: Box[]; zones: Zone[]; items: ItemTypeRow[];
+  onAddBox: () => void; onStartOver: () => void; onClose: () => void; onDone: () => void;
 }) {
   const toast = useToast();
   const [table, setTable] = useState<AreaTable | null | undefined>(undefined); // undefined: reading
@@ -33,13 +34,13 @@ export default function ReadScheduleDialog({ page, projectId, box, zones, items,
       const [runs, { prims }] = await Promise.all([extractRuns(page), extractPrims(page, pdfjs.OPS)]);
       const vp = page.getViewport({ scale: 1 });
       const vlines = prims.filter((p) => p.n === 2 && p.x1 - p.x0 < 0.6 && p.y1 - p.y0 > 4).map((p) => ({ x: (p.x0 + p.x1) / 2, y0: p.y0, y1: p.y1 }));
-      const t = readAreaTable(runs, box, { pageW: vp.width, pageH: vp.height, skip: (x, y) => inZones(x, y, zones), vlines });
+      const t = readAreaTable(runs, boxes, { pageW: vp.width, pageH: vp.height, skip: (x, y) => inZones(x, y, zones), vlines });
       if (gone) return;
       setTable(t);
       if (t) setCols(suggestColumns(t.columns, recall(projectId)));
     })().catch((e) => { console.warn('Reading the schedule failed', e); if (!gone) setTable(null); });
     return () => { gone = true; };
-  }, [page, box, zones, projectId]);
+  }, [page, boxes, zones, projectId]);
 
   const byCode = useMemo(() => new Map(items.map((i) => [i.code.toUpperCase(), i])), [items]);
   const rows = useMemo(() => {
@@ -73,14 +74,20 @@ export default function ReadScheduleDialog({ page, projectId, box, zones, items,
   const pick = (f: Field, v: string) => setCols((c) => ({ ...c, [f]: v === '' ? null : Number(v) }));
   return (
     <Dialog title="Read schedule" onClose={onClose} wide className="read-schedule">
-      <div className="dialog-title">Read the schedule in the box</div>
+      <div className="dialog-title">Read the schedule</div>
       {table === undefined && <div className="dialog-body"><span className="spinner" /> Reading…</div>}
       {table === null && (
-        <div className="dialog-body">No header row was found in the box. Draw it around the whole schedule, including its header row (TYPE, DESCRIPTION…). Text in ignore areas is left out.</div>
+        <div className="dialog-body">No column header was found in {boxes.length > 1 ? 'these boxes' : 'the box'}. Drag the box over a header (TYPE, DESCRIPTION, DRIVER…) and a row or two below it; the read follows the column down the table. Text in ignore areas is left out.</div>
       )}
       {table && (
         <div className="dialog-body stack" style={{ gap: 14 }}>
-          <div className="dim" style={{ fontSize: 13 }}>{plural(table.columns.length, 'column')} found. Pick the ones to read; the others are skipped.</div>
+          <div className="row-between" style={{ gap: 12 }}>
+            <div className="dim" style={{ fontSize: 13 }}>{plural(table.columns.length, 'column')} found in {plural(boxes.length, 'box', 'boxes')}: {table.columns.map((c) => c.header).join(' · ')}. Pick the ones to read; the others are skipped.</div>
+            <div className="row" style={{ gap: 6, flex: 'none' }}>
+              <button className="btn btn-secondary" onClick={onAddBox} disabled={!!busy}>Box another column</button>
+              <button className="btn btn-ghost" onClick={onStartOver} disabled={!!busy}>Start over</button>
+            </div>
+          </div>
           <div className="read-cols">
             {FIELDS.map((f) => (
               <label key={f.key} className="field">
@@ -127,6 +134,7 @@ export default function ReadScheduleDialog({ page, projectId, box, zones, items,
         </div>
       )}
       <div className="dialog-actions">
+        {table === null && <><button className="btn btn-ghost" onClick={onStartOver}>Start over</button><button className="btn btn-secondary" onClick={onAddBox}>Box another column</button></>}
         <button className="btn btn-secondary" onClick={onClose} disabled={!!busy}>Cancel</button>
         <button className="btn btn-primary" disabled={!table || cols.type === null || chosen.length === 0 || !!busy} onClick={() => void write()}>
           {busy ?? (chosen.length ? `Save ${plural(chosen.length, 'type')}${fresh && fresh < chosen.length ? ` (${fresh} new)` : ''}` : 'Nothing to save')}

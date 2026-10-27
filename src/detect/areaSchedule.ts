@@ -36,58 +36,78 @@ function lines(words: Word[]): Word[][] {
 }
 const vocab = (l: Word[]) => l.reduce((n, w) => n + w.s.split(/\s+/).filter((t) => HEADER_WORD.test(t)).length, 0);
 
-/** The columns and data lines of the schedule inside the box, or null when no header row is found in it. */
-export function readAreaTable(runs: PageRun[], box: Box, opts: { pageW: number; pageH: number; skip?: (x: number, y: number) => boolean; vlines?: VLine[] }): AreaTable | null {
+/**
+ * The columns and data lines of the schedule the boxes point at, or null when no header is found in them. A box needs only
+ * the header and a row or two: the read follows the columns down to the end of the table (its ruling lines, or the first
+ * big gap). Several boxes add their columns together (one box per column, or one box across them all).
+ */
+export function readAreaTable(runs: PageRun[], boxIn: Box | Box[], opts: { pageW: number; pageH: number; skip?: (x: number, y: number) => boolean; vlines?: VLine[] }): AreaTable | null {
   const { pageW: W, pageH: H } = opts;
-  const bx0 = Math.min(box.x0, box.x1), bx1 = Math.max(box.x0, box.x1), by0 = Math.min(box.y0, box.y1), by1 = Math.max(box.y0, box.y1);
+  const boxes = (Array.isArray(boxIn) ? boxIn : [boxIn]).map((b) => ({ x0: Math.min(b.x0, b.x1) * W, x1: Math.max(b.x0, b.x1) * W, y0: Math.min(b.y0, b.y1) * H, y1: Math.max(b.y0, b.y1) * H }));
+  if (!boxes.length) return null;
   const words: Word[] = runs
-    .filter((r) => !r.rotated && r.str.trim() && r.cx >= bx0 && r.cx <= bx1 && r.cy >= by0 && r.cy <= by1 && !opts.skip?.(r.cx, r.cy))
+    .filter((r) => !r.rotated && r.str.trim() && !opts.skip?.(r.cx, r.cy))
     .map((r) => ({ s: r.str.trim(), x0: (r.cx - r.w / 2) * W, x1: (r.cx + r.w / 2) * W, y: r.cy * H, h: Math.max(1, r.h * H) }));
-  const ls = lines(words);
-  if (!ls.length) return null;
-  // the header: the line near the top of the box with the most header words (a title above it has few)
-  let hi = -1, best = 1;
-  for (let i = 0; i < Math.min(8, ls.length); i++) { const v = vocab(ls[i]); if (v > best) { best = v; hi = i; } }
+  const mid = (w: Word) => (w.x0 + w.x1) / 2;
+  const inBoxes = (w: Word) => boxes.some((b) => mid(w) >= b.x0 && mid(w) <= b.x1 && w.y >= b.y0 && w.y <= b.y1);
+  const boxed = lines(words.filter(inBoxes));
+  if (!boxed.length) return null;
+  // the header: near the top of the boxes, the line with the most header words (one is enough: a box around one column)
+  let hi = -1, best = 0;
+  for (let i = 0; i < Math.min(8, boxed.length); i++) { const v = vocab(boxed[i]); if (v > best) { best = v; hi = i; } }
   if (hi < 0) return null;
+  let head = [...boxed[hi]];
+  const h0 = Math.max(...boxed[hi].map((w) => w.h));
   // a header written over two lines ("BASIS OF" / "DESIGN"): take the next line too when it is close and also header words
-  let head = [...ls[hi]];
-  const h0 = Math.max(...ls[hi].map((w) => w.h));
   let last = hi;
-  while (ls[last + 1] && ls[last + 1][0].y - ls[last][0].y < 1.6 * h0 && vocab(ls[last + 1]) >= Math.max(1, ls[last + 1].length * 0.6)) { last++; head = head.concat(ls[last]); }
-  const hy = ls[hi][0].y;
+  while (boxed[last + 1] && boxed[last + 1][0].y - boxed[last][0].y < 1.6 * h0 && vocab(boxed[last + 1]) >= Math.max(1, boxed[last + 1].length * 0.6)) { last++; head = head.concat(boxed[last]); }
+  const hy = boxed[hi][0].y, headerBottom = boxed[last][0].y + 0.5 * h0;
+  // The table's vertical lines through the header row (often drawn a row at a time, so a piece as tall as the header counts).
+  const crossing = (opts.vlines ?? []).filter((v) => v.y0 - 2 <= hy && v.y1 + 2 >= hy && v.y1 - v.y0 > 0.8 * h0);
+  const edges: number[] = [];
+  for (const x of [...new Set(crossing.map((v) => Math.round(v.x)))].sort((a, b) => a - b)) if (!edges.length || x - edges[edges.length - 1] > 3) edges.push(x);
   // header labels: words close together make one label
   head.sort((a, b) => a.x0 - b.x0);
-  const labels: { text: string[]; x0: number; x1: number }[] = [];
+  const labels: { words: Word[]; x0: number; x1: number }[] = [];
   for (const w of head) {
     const l = labels[labels.length - 1];
-    if (l && w.x0 - l.x1 < 1.2 * h0) { l.text.push(w.s); l.x1 = Math.max(l.x1, w.x1); } else labels.push({ text: [w.s], x0: w.x0, x1: w.x1 });
+    if (l && w.x0 - l.x1 < 1.2 * h0 && !edges.some((e) => e > l.x1 && e < w.x0)) { l.words.push(w); l.x1 = Math.max(l.x1, w.x1); } else labels.push({ words: [w], x0: w.x0, x1: w.x1 });
   }
-  // column edges: the table's vertical lines through the header, when it is ruled (often drawn a row at a time, so a
-  // piece only as tall as the header row counts); else halfway between labels
-  const xs = [...new Set((opts.vlines ?? []).filter((v) => v.y0 - 2 <= hy && v.y1 + 2 >= hy && v.x >= bx0 * W - 2 && v.x <= bx1 * W + 2 && v.y1 - v.y0 > 0.8 * h0).map((v) => Math.round(v.x)))].sort((a, b) => a - b);
-  // the box's own sides close the outer columns (a schedule's last ruling line can sit outside the box)
-  const all = [...xs, Math.round(bx0 * W), Math.round(bx1 * W)].sort((a, b) => a - b);
-  const edges: number[] = [];
-  for (const x of all) if (!edges.length || x - edges[edges.length - 1] > 3) edges.push(x);
+  // each label's column reaches out to the table's lines on either side; without lines, halfway to the next label (or the box)
   const cols: AreaColumn[] = [];
-  if (xs.length >= 2) {
-    // each header word goes in the column its middle is in (labels can run across a ruling line when they are close)
-    for (let i = 0; i + 1 < edges.length; i++) {
-      const inside = head.filter((w) => (w.x0 + w.x1) / 2 > edges[i] && (w.x0 + w.x1) / 2 < edges[i + 1]);
-      if (inside.length) cols.push({ header: inside.sort((a, b) => a.y - b.y || a.x0 - b.x0).map((w) => w.s).join(' '), x0: edges[i], x1: edges[i + 1], sample: '' });
-    }
+  labels.forEach((l, i) => {
+    const c = (l.x0 + l.x1) / 2;
+    const left = edges.filter((e) => e <= l.x0 + 1).pop(), right = edges.find((e) => e >= l.x1 - 1);
+    const box = boxes.find((b) => c >= b.x0 && c <= b.x1)!;
+    const x0 = left ?? (i > 0 ? (labels[i - 1].x1 + l.x0) / 2 : box.x0);
+    const x1 = right ?? (i < labels.length - 1 ? (l.x1 + labels[i + 1].x0) / 2 : box.x1);
+    const same = cols.find((k) => Math.abs(k.x0 - x0) < 2 && Math.abs(k.x1 - x1) < 2);   // two labels between the same lines: one column
+    const text = l.words.sort((a, b) => a.y - b.y || a.x0 - b.x0).map((w) => w.s).join(' ');
+    if (same) same.header = `${same.header} ${text}`; else cols.push({ header: text, x0, x1, sample: '' });
+  });
+  cols.sort((a, b) => a.x0 - b.x0);
+  // the bottom of the table: where its lines end, else the first big gap between lines of text; never above a box's bottom
+  const inCols = (w: Word) => cols.some((c) => mid(w) > c.x0 && mid(w) < c.x1);
+  const below = lines(words.filter((w) => inCols(w) && w.y > headerBottom));
+  let bottom = Math.max(...boxes.map((b) => b.y1));
+  const runDown = (x: number) => {
+    const segs = (opts.vlines ?? []).filter((v) => Math.abs(v.x - x) < 1.5).sort((a, b) => a.y0 - b.y0);
+    let end = -1;
+    for (const v of segs) { if (end < 0) { if (v.y0 - 2 <= hy && v.y1 + 2 >= hy) end = v.y1; } else if (v.y0 <= end + Math.max(3, h0)) end = Math.max(end, v.y1); }   // small breaks where lines meet are bridged
+    return end;
+  };
+  const ends = cols.flatMap((c) => [runDown(c.x0), runDown(c.x1)]).filter((e) => e > hy).sort((a, b) => a - b);
+  if (ends.length >= 2) bottom = Math.max(bottom, ends[Math.floor(ends.length / 2)] + 1);
+  else {
+    // stop at a gap well beyond this table's own row spacing (the blank space before notes or the next table)
+    const gaps = below.slice(1, 12).map((l, i) => l[0].y - below[i][0].y).sort((a, b) => a - b);
+    const typical = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 3 * h0;
+    const limit = Math.max(6 * h0, 3 * typical);
+    let prev = headerBottom;
+    for (const l of below) { if (l[0].y - prev > limit) break; prev = l[0].y; }
+    bottom = Math.max(bottom, prev + 0.5 * h0);
   }
-  if (cols.length < 2) {
-    cols.length = 0;
-    labels.forEach((l, i) => cols.push({
-      header: l.text.join(' '),
-      x0: i === 0 ? bx0 * W : (labels[i - 1].x1 + l.x0) / 2,
-      x1: i === labels.length - 1 ? bx1 * W : (l.x1 + labels[i + 1].x0) / 2,
-      sample: '',
-    }));
-  }
-  const headerBottom = ls[last][0].y + 0.5 * h0;
-  const data = ls.filter((l) => l[0].y > headerBottom);
+  const data = below.filter((l) => l[0].y <= bottom);
   const table: AreaTable = { columns: cols, lines: data };
   // a sample of each column: its first few words, to recognize it by
   for (let c = 0; c < cols.length; c++) cols[c].sample = data.flatMap((l) => l.filter((w) => colOf(table, w) === c).map((w) => w.s)).join(' ').slice(0, 60);
