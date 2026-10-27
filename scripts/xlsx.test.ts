@@ -150,3 +150,38 @@ test('excel export adds a Ceiling types tab when counts have their ceiling read'
   assert.deepEqual(header, ['Code', 'Description', 'Unit', 'Drop ceiling', 'Sheetrock', 'Open', 'Not read', 'Total']);
   assert.equal(all[3] + all[4] + all[5] + all[6], all[7]);
 });
+
+test('excel export: Panel Boards in the estimating template layout, Breakers totals, Summary split into fixtures and devices', async () => {
+  const ExcelJS: any = (await import('exceljs')).default;
+  const ckt = (circuit: number, kind: string, breaker_amps: number | null, poles = 1) => ({ circuit, kind, breaker_amps, poles, description: null, load_kva: null });
+  const panel = (name: string, circuits: any[], extra: any = {}) => ({ id: name, project_id: 'P', sheet_id: data.sheets[0].id, name, alt_name: null, voltage: '480/277V Wye', phases: 3, wires: 4,
+    main_type: 'MCB', main_amps: 225, bus_amps: null, kaic: 22, iso_ground: null, surge: true, fed_from: 'LV-1', location: null, manufacturer: 'EATON', mounting: null, positions: 42,
+    notes: null, source: 'manual', created_by_name: null, updated_at: '2026-10-23', circuits, ...extra });
+  const panels = [
+    panel('LSDH1201', [ckt(1, 'load', 60, 3), ckt(2, 'load', 60, 3), ckt(7, 'load', 60, 3), ckt(8, 'load', 60, 3)]),
+    panel('LSH1102', [ckt(1, 'load', 20), ckt(3, 'spare', 20), ckt(5, 'spare', 20), ckt(2, 'load', 30, 3)], { main_type: 'MLO', main_amps: 60, positions: 24, kaic: 22 }),
+  ];
+  const d: any = { ...data, panels, items: data.items.map((it: any, i: number) => ({ ...it, count_group: i === 0 ? 'fixture' : 'device' })) };
+  const blob = await buildXlsx(d, aggregate(d, { sheetIds: null }), { sheetIds: null, groupBy: 'floor', perSheetColumns: false, subtotals: true, detectionLog: false, snapshots: false, preparedBy: 'J' });
+  const wb = new ExcelJS.Workbook(); await wb.xlsx.load(Buffer.from(await blob.arrayBuffer()));
+  const pb = wb.getWorksheet('Panel Boards');
+  assert.ok(pb);
+  // the template's header row, in its columns (C to O)
+  assert.deepEqual(['C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O'].map((c) => pb.getCell(`${c}8`).value),
+    ['LABEL', 'AMPERAGE', 'VOLTAGE', 'PHASE', 'KAIC', 'BUSS', 'ISO GROUND', 'CIRCUITS', 'MLO/MCB', 'Drawing Revision', 'Breakout Pricing', 'Alternate Pricing', 'Alternate #']);
+  assert.equal(pb.getCell('C7').value, 'Panel Boards');
+  assert.deepEqual(['C', 'D', 'E', 'F', 'G', 'J', 'K'].map((c) => pb.getCell(`${c}9`).value), ['LSDH1201', 225, '480/277V Wye', 3, 22, 42, 'MCB']);
+  assert.deepEqual(['C', 'D', 'J', 'K'].map((c) => pb.getCell(`${c}10`).value), ['LSH1102', 60, 24, 'MLO']);
+  let tx = false, disc = false; pb.eachRow((row: any) => { const v = row.getCell(3).value; if (v === 'Transformers') tx = true; if (v === 'DISCONNECTS') disc = true; });
+  assert.ok(tx && disc);
+  // breakers: 60 A 3-pole x4, 20 A 1-pole x3 (2 spare), 30 A 3-pole x1; 8 in all
+  const br = wb.getWorksheet('Breakers');
+  const rows: any[] = []; br.eachRow((row: any) => rows.push((row.values as any[]).slice(1)));
+  const all = rows.find((v) => v[1] === 'All breakers');
+  assert.equal(all[4], 8); assert.equal(all[5], 2);
+  assert.ok(rows.some((v) => v[0] === 'LSDH1201' && v[1] === '60 A 3-pole' && v[4] === 4));
+  // the Summary: a Fixtures heading and a Devices heading
+  const sm = wb.getWorksheet('Summary'); const heads: string[] = [];
+  sm.eachRow((row: any) => { const v = row.getCell(1).value; if (v === 'Fixtures' || v === 'Devices') heads.push(v); });
+  assert.deepEqual(heads, ['Fixtures', 'Devices']);
+});

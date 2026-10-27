@@ -15,6 +15,7 @@ export function ItemDialog({ projectId, categories, defaultCategoryId, onClose, 
   const [spec, setSpec] = useState('');
   const [unit, setUnit] = useState('EA');
   const [length, setLength] = useState('');                    // feet per fixture, for linear fixtures
+  const [group, setGroup] = useState('');                      // fixture, device, or automatic
   const [categoryId, setCategoryId] = useState(defaultCategoryId ?? '');
   const [shape, setShape] = useState<MarkerShape>('circle');
   const [glyph, setGlyph] = useState('');
@@ -29,7 +30,7 @@ export function ItemDialog({ projectId, categories, defaultCategoryId, onClose, 
     setErr(null);
     try {
       const { item } = await api<{ item: ItemTypeRow }>('/items', {
-        body: { project_id: projectId, code, name, spec: spec || null, unit: unit || 'EA', category_id: categoryId || null, marker_shape: shape, marker_glyph: glyph || null, length_ft: length.trim() ? Number(length) : null },
+        body: { project_id: projectId, code, name, spec: spec || null, unit: unit || 'EA', category_id: categoryId || null, count_group: group || null, marker_shape: shape, marker_glyph: glyph || null, length_ft: length.trim() ? Number(length) : null },
       });
       onCreated(item);
     } catch (e) {
@@ -56,6 +57,15 @@ export function ItemDialog({ projectId, categories, defaultCategoryId, onClose, 
           {!length.trim() && suggested != null && <button type="button" className="btn btn-ghost" onClick={() => setLength(String(suggested))}>Use {suggested} ft from the description</button>}
         </div>
         <div className="dim" style={{ fontSize: 12, marginTop: 4 }}>The Excel export totals feet as count × length.</div>
+      </div>
+      <div className="field">
+        <label htmlFor="icg">Counts as</label>
+        <select id="icg" className="input" style={{ width: 220 }} value={group} onChange={(e) => setGroup(e.target.value)}>
+          <option value="">Automatic (from its category and name)</option>
+          <option value="fixture">Fixture (lighting)</option>
+          <option value="device">Device</option>
+        </select>
+        <div className="dim" style={{ fontSize: 12, marginTop: 4 }}>Which counting tab it is in: Fixtures or Devices.</div>
       </div>
       <div className="row">
         <div className="field" style={{ flex: 1 }}>

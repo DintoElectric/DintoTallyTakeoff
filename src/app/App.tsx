@@ -8,6 +8,7 @@ import Projects from '../screens/Projects.tsx';
 import DrawingSet from '../screens/DrawingSet.tsx';
 import Workspace from '../screens/Workspace.tsx';
 import Library from '../screens/Library.tsx';
+import Panels from '../screens/Panels.tsx';
 
 function Routes() {
   const route = useRoute();
@@ -16,6 +17,7 @@ function Routes() {
     case 'project': return <DrawingSet key={route.id} projectId={route.id} />;
     case 'sheet': return <Workspace key={route.id} projectId={route.id} sheetId={route.sheetId} />;
     case 'library': return <Library key={route.id} projectId={route.id} />;
+    case 'panels': return <Panels key={route.id} projectId={route.id} panelId={route.panelId} />;
   }
 }
 

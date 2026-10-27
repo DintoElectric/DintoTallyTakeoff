@@ -82,6 +82,8 @@ export interface ItemTypeRow {
   marker_glyph: string | null;
   sample_count: number;
   detection_count: number;
+  /** Fixture (lighting) or device: the counting tab it is in. Empty means decided from its category and name. */
+  count_group?: 'fixture' | 'device' | null;
 }
 
 export interface CategoryRow { id: string; name: string; sort: number }
@@ -117,4 +119,5 @@ export interface ExportData {
   counts: CountRow[];
   detections: (Detection & { sheet_id: string })[];
   areas?: AreaRow[]; // named count areas (absent on older servers)
+  panels?: import('./panels.ts').Panel[]; // panels with their circuits (absent on older servers)
 }

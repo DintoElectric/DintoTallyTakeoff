@@ -234,5 +234,22 @@ console.log('db.test OK');
     assert.equal((await C.query(`select count(*)::int n from detections where ceiling is null`)).rows[0].n, 1);
     await assert.rejects(put('carpet'));
   }
+  // panels and their circuits; an item's counting tab
+  {
+    const P2 = new P();
+    for (const f of files) await P2.exec(readFileSync(`${dir}/${f}`, 'utf8'));
+    const pr = (await P2.query(`insert into projects (name, created_by) values ('Pn','u') returning id`)).rows[0].id;
+    const pn = (await P2.query(`insert into panels (project_id, name, main_type, main_amps, positions, phases, created_by) values ($1,'LSDH1201','MCB',225,42,3,'u') returning id`, [pr])).rows[0].id;
+    await P2.query(`insert into panel_circuits (panel_id, circuit, kind, breaker_amps, poles, description) values ($1,1,'load',60,3,'LSH2201'), ($1,2,'load',60,3,'LSH2202'), ($1,13,'space',null,1,null)`, [pn]);
+    await assert.rejects(P2.query(`insert into panel_circuits (panel_id, circuit, kind, breaker_amps, poles) values ($1,1,'spare',20,1)`, [pn]));   // circuit 1 is taken
+    await assert.rejects(P2.query(`insert into panel_circuits (panel_id, circuit, kind, poles) values ($1,3,'breaker',1)`, [pn]));                  // unknown kind
+    await assert.rejects(P2.query(`insert into panels (project_id, name, main_type, created_by) values ($1,'X','FUSED','u')`, [pr]));             // MCB or MLO only
+    await assert.rejects(P2.query(`insert into panel_circuits (panel_id, circuit, kind, breaker_amps, poles) values ($1,5,'load',20,4)`, [pn]));   // 1 to 3 poles
+    await P2.query(`delete from projects where id = $1`, [pr]);
+    assert.equal((await P2.query(`select count(*)::int n from panel_circuits`)).rows[0].n, 0);                                                   // deleting the project removes them
+    const it = (await P2.query(`insert into item_types (code, name, created_by, count_group) values ('A3','troffer','u','fixture') returning count_group`)).rows[0];
+    assert.equal(it.count_group, 'fixture');
+    await assert.rejects(P2.query(`insert into item_types (code, name, created_by, count_group) values ('A4','x','u','lighting')`));
+  }
   console.log('project libraries OK');
 }

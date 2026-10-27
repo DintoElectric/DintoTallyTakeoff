@@ -109,6 +109,7 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
         {canEdit && <button className="btn btn-secondary" onClick={() => picker.current?.click()}><UploadSimple size={14} /> Add drawings</button>}
         <input ref={picker} type="file" accept="application/pdf,.pdf" hidden onChange={(e) => { addFile(e.target.files?.[0]); e.target.value = ''; }} />
         <button className="btn btn-secondary" onClick={() => navigate(paths.library(projectId))}>Item library</button>
+        <button className="btn btn-secondary" onClick={() => navigate(paths.panels(projectId))}>Panels</button>
         <button className="btn btn-secondary" onClick={openWorkspace} disabled={sheets.length === 0}>Open workspace</button>
         {canEdit && <button className="btn btn-secondary" onClick={() => setScheduleOpen(true)} disabled={sheets.length === 0} title="Add the types listed in schedules and symbol legends to the item library">Read schedules & legends</button>}
         {canEdit && <button className="btn btn-secondary" onClick={() => setSchedSheetsOpen(true)} disabled={sheets.length === 0} title="Stop counting the sheets that are, or hold, schedules">Exclude schedules</button>}

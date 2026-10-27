@@ -1,6 +1,8 @@
 import type { ExportData } from '../../shared/types.ts';
 import { floorLabel } from '../upload/titleBlock.ts';
 import type { Agg } from './aggregate.ts';
+import { countGroupOf, GROUP_LABEL, type CountGroup } from '../../shared/countGroup.ts';
+import { breakerCounts, breakerLabel, circuitStats, sumBreakers } from '../../shared/panels.ts';
 import type { ExportOptions } from './types.ts';
 
 const INK = 'FF292B31';
@@ -53,7 +55,15 @@ export async function buildXlsx(data: ExportData, agg: Agg, opts: ExportOptions)
     const hdrRowNo = hr.number;
     headerStyle(hr, 4);
     const nCols = header.length;
-    for (const r of agg.rows) {
+    // Fixtures first, then devices, each under its heading (the two counting tabs); no heading when there is only one kind.
+    const sections = (['fixture', 'device'] as CountGroup[]).map((g) => [g, agg.rows.filter((r) => countGroupOf(r.item, data.categories) === g)] as const).filter(([, rows]) => rows.length > 0);
+    for (const [g, rows] of sections) {
+     if (sections.length > 1) {
+      const h = ws.addRow([GROUP_LABEL[g]]);
+      style(h, { bold: true });
+      for (let c = 1; c <= nCols; c++) h.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F5FE' } };
+     }
+     for (const r of rows) {
       const row = ws.addRow([r.item.code, r.item.name + (r.item.spec ? `\n${r.item.spec}` : ''), r.item.unit,
         ...sheetCols.map((s) => r.bySheet.get(s.id) ?? ''), r.total, ...(showFeet ? [r.lengthFt ?? '', r.totalFeet ?? ''] : []), ...(showUnrev ? [r.unreviewed || ''] : [])]);
       style(row);
@@ -61,6 +71,7 @@ export async function buildXlsx(data: ExportData, agg: Agg, opts: ExportOptions)
       row.eachCell((c: any, i: number) => { if (i >= 4) c.alignment = { horizontal: 'right', vertical: 'top' }; });
       if (showFeet) { const c0 = 4 + sheetCols.length + 1; row.getCell(c0).numFmt = '#,##0.0'; row.getCell(c0 + 1).numFmt = '#,##0.0'; } // Length each, Total (ft)
       if (showUnrev && r.unreviewed > 0) row.getCell(nCols).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: FLAG_FILL } };
+     }
     }
     const lastItemRow = ws.lastRow.number;
     ws.addRow([]);
@@ -119,6 +130,90 @@ export async function buildXlsx(data: ExportData, agg: Agg, opts: ExportOptions)
     t.getCell(4).alignment = { horizontal: 'right' };
     ws.getColumn(1).width = 28; ws.getColumn(2).width = 14; ws.getColumn(3).width = 44; ws.getColumn(4).width = 10;
     setup(ws, hdrNo, 4);
+  }
+
+  /* ---------- Panel Boards: the estimating template's layout (Panel Boards, Transformers, Disconnects) ---------- */
+  const panels = data.panels ?? [];
+  if (panels.length) {
+    const ws = wb.addWorksheet(safeTab('Panel Boards'));
+    const sheetNo = (id: string | null) => { const sh = data.sheets.find((x) => x.id === id); return sh ? sh.number ?? `Page ${sh.page}` : ''; };
+    const widths: Record<string, number> = { A: 3, B: 3, C: 12, D: 10.9, E: 15.1, F: 16.9, G: 11, H: 12.3, I: 18, J: 9.3, K: 11.3, L: 16.4, M: 15.6, N: 16, O: 10.9, P: 14 };
+    for (const [k, w] of Object.entries(widths)) ws.getColumn(k).width = w;
+    const RED = 'FFDA9694';
+    ws.mergeCells('C3:G5');
+    ws.getCell('C3').value = `${data.project.name} · Panel boards · Prepared ${prepared}`;
+    ws.getCell('C3').font = { bold: true, size: 13 }; ws.getCell('C3').alignment = { vertical: 'middle', wrapText: true };
+    const band = (rowNo: number, text: string) => {
+      ws.mergeCells(`C${rowNo}:P${rowNo}`);
+      const c = ws.getCell(`C${rowNo}`); c.value = text; c.font = { bold: true, size: 11 };
+      c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: RED } }; c.alignment = { horizontal: 'center' };
+    };
+    const note = (rowNo: number, text: string) => { ws.mergeCells(`C${rowNo}:P${rowNo}`); const c = ws.getCell(`C${rowNo}`); c.value = text; c.font = { italic: true, size: 10 }; };
+    const head = (rowNo: number, cells: string[]) => {
+      cells.forEach((t, i) => { if (!t) return; const c = ws.getCell(rowNo, 3 + i); c.value = t; c.font = { bold: true, size: 9 }; c.alignment = { horizontal: 'center', wrapText: true }; c.border = { bottom: { style: 'thin' } }; });
+    };
+    const TAIL = ['Drawing Revision', 'Breakout Pricing', 'Alternate Pricing', 'Alternate #'];
+    band(7, 'Panel Boards');
+    head(8, ['LABEL', 'AMPERAGE', 'VOLTAGE', 'PHASE', 'KAIC', 'BUSS', 'ISO GROUND', 'CIRCUITS', 'MLO/MCB', ...TAIL, 'SCHEDULE SHEET']);
+    let r = 9;
+    for (const p of [...panels].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))) {
+      const st = circuitStats(p, p.circuits);
+      const vals = [p.name, p.main_amps ?? p.bus_amps ?? '', p.voltage ?? '', p.phases ?? '', p.kaic ?? '', p.bus_amps ?? '',
+        p.iso_ground == null ? '' : p.iso_ground ? 'Yes' : 'No', st.positions || '', p.main_type ?? '', '', '', '', '', sheetNo(p.sheet_id)];
+      vals.forEach((v, i) => { const c = ws.getCell(r, 3 + i); c.value = v as never; c.font = { size: 10 }; c.alignment = { horizontal: i === 0 ? 'left' : 'center' }; });
+      r++;
+    }
+    r++;
+    note(r++, '***Confirm counts per drawings***');
+    note(r++, '***Breakers per Panel schedules*** (see the Breakers tab)');
+    note(r++, '***Spares/Attic Stock per Drawings and Specifications if applicable***');
+    r++;
+    band(r++, 'Transformers');
+    head(r++, ['LABEL', 'KVA', 'INPUT VOLTAGE', 'OUTPUT VOLTAGE', 'NEMA TYPE', 'WINDINGS', 'MOUNTING', '', '', ...TAIL]);
+    r += 2;
+    note(r++, '***Confirm counts per drawings***');
+    note(r++, '***Spares/Attic Stock per Drawings and Specifications if applicable***');
+    r++;
+    band(r++, 'DISCONNECTS');
+    head(r++, ['LABEL', 'VOLTAGE', 'PHASE', 'AMPERAGE', 'NEMA TYPE', 'ISO GROUND', 'FUSED/NON FUSED', 'FUSE SIZE', 'SHUNT TRIP', ...TAIL]);
+    r += 2;
+    note(r++, '***Confirm counts per drawings***');
+    note(r++, '***Spares/Attic Stock per Drawings and Specifications if applicable***');
+    ws.pageSetup = { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 };
+
+    /* ---------- Breakers: circuits per panel, breakers by panel and size, project totals ---------- */
+    const wb2 = wb.addWorksheet(safeTab('Breakers'));
+    title(wb2, data.project.name, `Panel circuits and breakers · Prepared ${prepared}`);
+    const ch = wb2.addRow(['Panel', 'Circuits (positions)', 'Used', 'Spare', 'Space', 'Breakers']);
+    headerStyle(ch, 2);
+    for (const p of [...panels].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))) {
+      const st = circuitStats(p, p.circuits);
+      const row = wb2.addRow([p.name, st.positions || '', st.used, st.spare, st.space, st.breakers]); style(row);
+      row.eachCell((c: any, i: number) => { if (i >= 2) c.alignment = { horizontal: 'right' }; });
+    }
+    wb2.addRow([]);
+    const bh = wb2.addRow(['Panel', 'Breaker', 'Amps', 'Poles', 'Quantity', 'Of which spare']);
+    headerStyle(bh, 3);
+    for (const p of [...panels].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))) {
+      for (const b of breakerCounts(p.circuits)) {
+        const row = wb2.addRow([p.name, breakerLabel(b.amps, b.poles), b.amps, b.poles, b.qty, b.spares || '']); style(row);
+        row.eachCell((c: any, i: number) => { if (i >= 3) c.alignment = { horizontal: 'right' }; });
+      }
+    }
+    wb2.addRow([]);
+    const th = wb2.addRow(['All panels', 'Breaker', 'Amps', 'Poles', 'Quantity', 'Of which spare']);
+    headerStyle(th, 3);
+    const all = sumBreakers(panels.map((p) => breakerCounts(p.circuits)));
+    for (const b of all) {
+      const row = wb2.addRow(['', breakerLabel(b.amps, b.poles), b.amps, b.poles, b.qty, b.spares || '']); style(row);
+      row.eachCell((c: any, i: number) => { if (i >= 3) c.alignment = { horizontal: 'right' }; });
+    }
+    const tot = wb2.addRow(['', 'All breakers', '', '', all.reduce((n, b) => n + b.qty, 0), all.reduce((n, b) => n + b.spares, 0) || '']);
+    style(tot, { bold: true, fill: TOTAL_FILL });
+    wb2.addRow([]);
+    wb2.addRow(['A spare is a breaker with nothing on it yet and is counted; a space is an empty position and is not. Each breaker counts once, whatever its poles.']);
+    style(wb2.lastRow, { color: MUTED });
+    wb2.getColumn(1).width = 16; wb2.getColumn(2).width = 18; for (let i = 3; i <= 6; i++) wb2.getColumn(i).width = 14;
   }
 
   /* ---------- by ceiling type ---------- */

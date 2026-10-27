@@ -20,14 +20,14 @@ function Editor({ item, categories, canEdit, isAdmin, onSaved, onDeleted }: {
   const [confirm, setConfirm] = useState(false);
   useEffect(() => setF(item), [item]);
   const cat = categories.find((c) => c.id === f.category_id)?.name ?? 'Uncategorized';
-  const dirty = JSON.stringify([f.code, f.name, f.spec, f.unit, f.category_id, f.detection_mode, f.marker_shape, f.marker_glyph, f.length_ft ?? null]) !==
-    JSON.stringify([item.code, item.name, item.spec, item.unit, item.category_id, item.detection_mode, item.marker_shape, item.marker_glyph, item.length_ft ?? null]);
+  const dirty = JSON.stringify([f.code, f.name, f.spec, f.unit, f.category_id, f.detection_mode, f.marker_shape, f.marker_glyph, f.length_ft ?? null, f.count_group ?? null]) !==
+    JSON.stringify([item.code, item.name, item.spec, item.unit, item.category_id, item.detection_mode, item.marker_shape, item.marker_glyph, item.length_ft ?? null, item.count_group ?? null]);
   const suggested = lengthFeetFromText(f.name, f.spec ?? '');
 
   async function save() {
     setBusy(true);
     try {
-      await api(`/items/${item.id}`, { method: 'PATCH', body: { code: f.code, name: f.name, spec: f.spec ?? '', unit: f.unit, category_id: f.category_id, detection_mode: f.detection_mode, marker_shape: f.marker_shape, marker_glyph: f.marker_glyph ?? '', length_ft: f.length_ft ?? null } });
+      await api(`/items/${item.id}`, { method: 'PATCH', body: { code: f.code, name: f.name, spec: f.spec ?? '', unit: f.unit, category_id: f.category_id, detection_mode: f.detection_mode, marker_shape: f.marker_shape, marker_glyph: f.marker_glyph ?? '', length_ft: f.length_ft ?? null, count_group: f.count_group ?? null } });
       toast('Item saved.');
       onSaved();
     } catch (e) { toast(e instanceof ApiError ? e.message : 'Could not save the item.'); }
@@ -59,6 +59,15 @@ function Editor({ item, categories, canEdit, isAdmin, onSaved, onDeleted }: {
           {canEdit && f.length_ft == null && suggested != null && <button type="button" className="btn btn-ghost" onClick={() => setF({ ...f, length_ft: suggested })}>Use {suggested} ft from the description</button>}
         </div>
         <div className="dim" style={{ fontSize: 12, marginTop: 4 }}>The Excel export totals feet as count × length. Leave empty for fixtures counted by the piece, or for runs whose length comes from the plans.</div>
+      </div>
+      <div className="field">
+        <label htmlFor="ecg">Counts as</label>
+        <select id="ecg" className="input" style={{ width: 220 }} value={f.count_group ?? ''} disabled={!canEdit} onChange={(e) => setF({ ...f, count_group: (e.target.value || null) as ItemTypeRow['count_group'] })}>
+          <option value="">Automatic (from its category and name)</option>
+          <option value="fixture">Fixture (lighting)</option>
+          <option value="device">Device</option>
+        </select>
+        <div className="dim" style={{ fontSize: 12, marginTop: 4 }}>Which counting tab it is in: Fixtures or Devices.</div>
       </div>
       <div className="row" style={{ alignItems: 'flex-end' }}>
         <div className="field"><label>Marker</label><Seg name="eshape" value={f.marker_shape} onChange={(v) => canEdit && setF({ ...f, marker_shape: v })} options={SHAPES.map((s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) }))} /></div>

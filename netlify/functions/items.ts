@@ -14,7 +14,7 @@ async function listItems(scope: Scope | string | null) {
   const sc: Scope = typeof scope === 'string' ? { id: scope } : scope ?? {};
   const id = sc.id ?? null, projectId = sc.projectId ?? null, unassigned = sc.unassigned === true;
   return db().sql<any>`
-    select i.id, i.code, i.name, i.spec, i.category_id, i.unit, i.detection_mode, i.marker_shape, i.marker_glyph, i.project_id, i.length_ft::float8 as length_ft,
+    select i.id, i.code, i.name, i.spec, i.category_id, i.unit, i.detection_mode, i.marker_shape, i.marker_glyph, i.project_id, i.length_ft::float8 as length_ft, i.count_group,
            (select count(*) from item_samples s where s.item_type_id = i.id)::int as sample_count,
            (select count(*) from detections d where d.item_type_id = i.id and d.status <> 'rejected')::int as detection_count
       from item_types i
@@ -35,6 +35,11 @@ async function checkCategory(categoryId: string | null, projectId: string | null
 function lengthOrNull(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null;
   return Math.round(num(v, 'Length', 0.01, 1000) * 100) / 100;
+}
+
+/** Fixture or device; empty means decided from the item's category and name. */
+function groupOrNull(v: unknown): 'fixture' | 'device' | null {
+  return v === null || v === undefined || v === '' ? null : oneOf(v, ['fixture', 'device'] as const, 'Counts as');
 }
 
 function glyph(v: unknown): string | null {
@@ -59,16 +64,16 @@ export default handle(async (req: Request, _ctx: Context) => {
     if (req.method === 'POST') {
       const actor = await requireRole('estimator');
       const b = await readJson(req);
-      onlyKeys(b, ['project_id', 'code', 'name', 'spec', 'category_id', 'unit', 'marker_shape', 'marker_glyph', 'length_ft']);
+      onlyKeys(b, ['project_id', 'code', 'name', 'spec', 'category_id', 'unit', 'marker_shape', 'marker_glyph', 'length_ft', 'count_group']);
       const projectId = uuid(b.project_id, 'project id');
       const code = reqStr(b.code, 'Code', 40);
       const name = reqStr(b.name, 'Description');
       const categoryId = b.category_id ? uuid(b.category_id, 'category id') : null;
       await checkCategory(categoryId, projectId);
       const [row] = await sql<{ id: string }>`
-        insert into item_types (code, name, spec, category_id, unit, marker_shape, marker_glyph, created_by, project_id, length_ft)
+        insert into item_types (code, name, spec, category_id, unit, marker_shape, marker_glyph, created_by, project_id, length_ft, count_group)
         values (${code}, ${name}, ${str(b.spec, 'Spec')}, ${categoryId}, ${str(b.unit, 'Unit', { max: 10 }) ?? 'EA'},
-                ${b.marker_shape ? oneOf(b.marker_shape, SHAPES, 'Shape') : 'circle'}, ${glyph(b.marker_glyph)}, ${actor.id}, ${projectId}, ${lengthOrNull(b.length_ft)})
+                ${b.marker_shape ? oneOf(b.marker_shape, SHAPES, 'Shape') : 'circle'}, ${glyph(b.marker_glyph)}, ${actor.id}, ${projectId}, ${lengthOrNull(b.length_ft)}, ${groupOrNull(b.count_group)})
         returning id`;
       const [item] = await listItems(row.id);
       return json({ item }, 201);
@@ -111,7 +116,7 @@ export default handle(async (req: Request, _ctx: Context) => {
   if (req.method === 'PATCH') {
     await requireRole('estimator');
     const b = await readJson(req);
-    onlyKeys(b, ['code', 'name', 'spec', 'category_id', 'unit', 'detection_mode', 'marker_shape', 'marker_glyph', 'length_ft']);
+    onlyKeys(b, ['code', 'name', 'spec', 'category_id', 'unit', 'detection_mode', 'marker_shape', 'marker_glyph', 'length_ft', 'count_group']);
     const [cur] = await listItems(id);
     if (!cur) throw notFound('That item');
     const code = 'code' in b ? reqStr(b.code, 'Code', 40) : cur.code;
@@ -123,12 +128,13 @@ export default handle(async (req: Request, _ctx: Context) => {
     const shape = 'marker_shape' in b ? oneOf(b.marker_shape, SHAPES, 'Shape') : cur.marker_shape;
     const g = 'marker_glyph' in b ? glyph(b.marker_glyph) : cur.marker_glyph;
     const lengthFt = 'length_ft' in b ? lengthOrNull(b.length_ft) : cur.length_ft;
+    const group = 'count_group' in b ? groupOrNull(b.count_group) : cur.count_group;
     const mode = 'detection_mode' in b ? oneOf(b.detection_mode, ['auto', 'manual'] as const, 'Detection') : cur.detection_mode;
     if (mode === 'auto' && cur.sample_count === 0) {
       throw new HttpError(400, 'Auto-detect needs at least one confirmed sample for this item first.');
     }
     await sql`update item_types set code = ${code}, name = ${name}, spec = ${spec}, category_id = ${categoryId},
-              unit = ${unit}, marker_shape = ${shape}, marker_glyph = ${g}, detection_mode = ${mode}, length_ft = ${lengthFt} where id = ${id}`;
+              unit = ${unit}, marker_shape = ${shape}, marker_glyph = ${g}, detection_mode = ${mode}, length_ft = ${lengthFt}, count_group = ${group} where id = ${id}`;
     const [item] = await listItems(id);
     return json({ item });
   }
