@@ -6,7 +6,7 @@ import { GridIndex } from '../detect/grid.ts';
 import type { Zone, ZonePoint } from '../../shared/zones.ts';
 import { appPalette, drawMarker, type Palette } from './markerDraw.ts';
 
-export type Tool = 'select' | 'add' | 'box' | 'erase' | 'zone' | 'area' | 'similar';
+export type Tool = 'select' | 'add' | 'box' | 'erase' | 'zone' | 'area' | 'similar' | 'read';
 export interface MarkerData { id: string; x: number; y: number; itemId: string; flagged: boolean }
 export interface ItemStyle { shape: MarkerShape; glyph: string | null }
 export interface DrawingViewHandle { zoomBy(factor: number): void; fit(): void; centerOn(x: number, y: number, zoomFactor?: number): void }
@@ -27,6 +27,7 @@ interface Props {
   onBox(ids: string[], additive: boolean): void;
   /** The rectangle drawn with the similar-symbol tool, in normalized page coordinates. */
   onSimilarBox?(a: { x: number; y: number }, b: { x: number; y: number }): void;
+  onReadBox?(a: { x: number; y: number }, b: { x: number; y: number }): void; // Read schedule: the area to read
   onZoom(pct: number): void;
   onError(message: string): void;
   /** Exclusion zones drawn dimmed: the part of a sheet that lies past a matchline, or that the estimator outlined. */
@@ -393,7 +394,7 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
     if (s.mode === 'pending') {
       const thr = s.type === 'touch' ? 8 : 4;
       if (Math.hypot(dx, dy) < thr) return;
-      s.mode = (P.current.tool === 'box' || P.current.tool === 'similar') && s.button === 0 ? 'box' : 'pan';
+      s.mode = (P.current.tool === 'box' || P.current.tool === 'similar' || P.current.tool === 'read') && s.button === 0 ? 'box' : 'pan';
     }
     if (s.mode === 'pan') {
       view.current = { ...view.current, tx: s.stx + dx, ty: s.sty + dy };
@@ -424,6 +425,7 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
       setBox(null);
       const a = toNorm(s.sx, s.sy), b = toNorm(p.x, p.y);
       if (pr.tool === 'similar') pr.onSimilarBox?.(a, b);
+      else if (pr.tool === 'read') pr.onReadBox?.(a, b);
       else pr.onBox(gridRef.current.inRect(a.x, a.y, b.x, b.y).map((m) => m.id), s.shift);
     } else if (mode === 'pending') {
       const n = toNorm(p.x, p.y);

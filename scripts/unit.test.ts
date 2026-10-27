@@ -1160,3 +1160,57 @@ test('remember me: the sign-in cookies are kept for 30 days only when remembered
   assert.equal(isRemembered(store), false);
   assert.equal(keepSignInCookies(doc, store), 0);
 });
+
+import { areaRows, readAreaTable, rowToItem, suggestColumns } from '../src/detect/areaSchedule.ts';
+// ---- reading a schedule from a boxed area (modeled on E7.11 / E7.12) ----
+{
+  const W = 3000, H = 2000;
+  const run = (str: string, x0: number, y: number, w = str.length * 5) => ({ str, cx: (x0 + w / 2) / W, cy: y / H, w: w / W, h: 8 / H, rotated: false });
+  const runs = [
+    run('LUMINAIRE SCHEDULE (1 OF 2)', 400, 70),                                  // a title above the table
+    run('TYPE', 145, 100), run('LOCATION', 190, 100), run('DESCRIPTION', 300, 100), run('DRIVER', 600, 100), run('WATTAGE', 700, 100), run('VOLTAGE', 760, 100),
+    run('BASIS OF DESIGN', 950, 100), run('REMARKS', 1600, 100),
+    // A1-4: three lines
+    run('A1-4', 145, 120), run('CLASSROOM', 190, 120), run("4' LED SUSPENDED LINEAR", 300, 120), run('INTEGRAL 0-10V', 600, 120), run('33', 700, 120), run('277 V', 760, 120), run('LEDALITE', 950, 120), run('1. FIXTURE SHALL DIM.', 1450, 120),
+    run('FIXTURE', 300, 131), run('DIMMING TO 1%', 600, 131), run('#77-0-5-L-B-C-VD-04', 950, 131), run('2. ARCHITECT SHALL VERIFY FINISH', 1450, 131),
+    run('*MOUNTING TO MATCH CEILING', 950, 142),
+    // C: two lines
+    run('C', 145, 170), run('OFFICE', 190, 170), run("2' X 2' LAY-IN TROFFER", 300, 170), run('INTEGRAL 0-10V', 600, 170), run('DAY-BRITE CFI', 950, 170),
+    run('#2CAZ-G-20L-835', 950, 181),
+    // Z: in an ignore area
+    run('Z', 145, 220), run('WALL PACK', 300, 220), run('GARDCO', 950, 220),
+    // a relay schedule beside the table, outside the box
+    run('RELAY / CIRCUIT', 2500, 100), run('L-1', 2500, 120), run('CORRIDOR', 2600, 120),
+  ];
+  // column lines, drawn a row at a time (short pieces), the last one outside the box
+  const edges = [140, 185, 295, 595, 695, 755, 940, 1445, 2700];
+  const vlines = edges.flatMap((x) => [{ x, y0: 92, y1: 108 }, { x, y0: 112, y1: 160 }, { x, y0: 160, y1: 210 }]);
+  const box = { x0: 130 / W, y0: 60 / H, x1: 2400 / W, y1: 260 / H };
+  const zone = { points: [{ x: 120 / W, y: 212 / H }, { x: 2400 / W, y: 212 / H }, { x: 2400 / W, y: 240 / H }, { x: 120 / W, y: 240 / H }] };
+  const inZone = (x: number, y: number) => x >= zone.points[0].x && x <= zone.points[1].x && y >= zone.points[0].y && y <= zone.points[2].y;
+
+  test('read schedule: only the boxed area; the header gives the columns; the four fields are picked by name', () => {
+    const t = readAreaTable(runs, box, { pageW: W, pageH: H, vlines, skip: inZone })!;
+    assert.ok(t);
+    assert.deepEqual(t.columns.map((c) => c.header), ['TYPE', 'LOCATION', 'DESCRIPTION', 'DRIVER', 'WATTAGE', 'VOLTAGE', 'BASIS OF DESIGN', 'REMARKS']);
+    const cols = suggestColumns(t.columns);
+    assert.deepEqual(cols, { type: 0, description: 2, driver: 3, basis: 6 });
+    const items = areaRows(t, cols.type!).map((r) => rowToItem(r, cols));
+    assert.deepEqual(items, [
+      { code: 'A1-4', name: "4' LED SUSPENDED LINEAR FIXTURE", spec: 'Driver: INTEGRAL 0-10V DIMMING TO 1% · Basis of design: LEDALITE #77-0-5-L-B-C-VD-04 *MOUNTING TO MATCH CEILING' },
+      { code: 'C', name: "2' X 2' LAY-IN TROFFER", spec: 'Driver: INTEGRAL 0-10V · Basis of design: DAY-BRITE CFI #2CAZ-G-20L-835' },
+    ]);   // no remarks in the basis of design, no relay schedule, Z left out by the ignore area
+  });
+  test('read schedule: without ruling lines the columns still split halfway between the headers; a remembered choice wins', () => {
+    const t = readAreaTable(runs, box, { pageW: W, pageH: H, skip: inZone })!;
+    const cols = suggestColumns(t.columns, { basis: 'REMARKS' });
+    assert.equal(t.columns[cols.basis!].header, 'REMARKS');                 // the estimator picked it last time
+    const plain = suggestColumns(t.columns);
+    const items = areaRows(t, plain.type!).map((r) => rowToItem(r, plain));
+    assert.deepEqual(items.map((i) => i!.code), ['A1-4', 'C']);
+    assert.ok(items[1]!.spec!.includes('Basis of design: DAY-BRITE CFI #2CAZ-G-20L-835'));
+  });
+  test('read schedule: no header in the box means nothing is read', () => {
+    assert.equal(readAreaTable(runs, { x0: 2450 / W, y0: 110 / H, x1: 2800 / W, y1: 130 / H }, { pageW: W, pageH: H }), null);
+  });
+}

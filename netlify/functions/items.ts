@@ -72,7 +72,7 @@ export default handle(async (req: Request, _ctx: Context) => {
       await checkCategory(categoryId, projectId);
       const [row] = await sql<{ id: string }>`
         insert into item_types (code, name, spec, category_id, unit, marker_shape, marker_glyph, created_by, project_id, length_ft, count_group)
-        values (${code}, ${name}, ${str(b.spec, 'Spec')}, ${categoryId}, ${str(b.unit, 'Unit', { max: 10 }) ?? 'EA'},
+        values (${code}, ${name}, ${str(b.spec, 'Spec', { max: 500 })}, ${categoryId}, ${str(b.unit, 'Unit', { max: 10 }) ?? 'EA'},
                 ${b.marker_shape ? oneOf(b.marker_shape, SHAPES, 'Shape') : 'circle'}, ${glyph(b.marker_glyph)}, ${actor.id}, ${projectId}, ${lengthOrNull(b.length_ft)}, ${groupOrNull(b.count_group)})
         returning id`;
       const [item] = await listItems(row.id);
@@ -121,7 +121,7 @@ export default handle(async (req: Request, _ctx: Context) => {
     if (!cur) throw notFound('That item');
     const code = 'code' in b ? reqStr(b.code, 'Code', 40) : cur.code;
     const name = 'name' in b ? reqStr(b.name, 'Description') : cur.name;
-    const spec = 'spec' in b ? str(b.spec, 'Spec') : cur.spec;
+    const spec = 'spec' in b ? str(b.spec, 'Spec', { max: 500 }) : cur.spec;
     const categoryId = 'category_id' in b ? (b.category_id ? uuid(b.category_id, 'category id') : null) : cur.category_id;
     if ('category_id' in b) await checkCategory(categoryId, cur.project_id);
     const unit = 'unit' in b ? str(b.unit, 'Unit', { max: 10 }) ?? 'EA' : cur.unit;

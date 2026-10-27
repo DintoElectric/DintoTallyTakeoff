@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import {
-  ArrowCounterClockwise, ArrowClockwise, Cursor, Eraser, FilePdf, Eye, EyeSlash, Polygon, Shapes, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus, PlusCircle, Plus, Selection, Stack, WarningCircle, Crosshair, MagnifyingGlass, Hand,
+  ArrowCounterClockwise, ArrowClockwise, Cursor, Eraser, FilePdf, Table, Eye, EyeSlash, Polygon, Shapes, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus, PlusCircle, Plus, Selection, Stack, WarningCircle, Crosshair, MagnifyingGlass, Hand,
 } from '@phosphor-icons/react';
 import type { CategoryRow, CountRow, DrawingFileRow, ItemTypeRow, ProjectRow, SheetRow } from '../../shared/types.ts';
 import { api, ApiError } from '../auth/api.ts';
@@ -14,6 +14,7 @@ import { loadFilePdf, pdfjs } from '../viewer/pdf.ts';
 import { extractPrims } from '../detect/primitives.ts';
 import { countGroupOf, GROUP_LABEL, type CountGroup } from '../../shared/countGroup.ts';
 import { buildSheetPdf, sheetPdfName, type CountList } from '../export/sheetPdf.ts';
+import ReadScheduleDialog from './ReadScheduleDialog.tsx';
 import { circuitStats, mainLabel, type Panel } from '../../shared/panels.ts';
 import { ceilingIndex, CEILING_LABEL, CEILING_TITLE, type Ceiling, type CeilingIndex } from '../detect/ceiling.ts';
 import { flushAll, getStore, useSheetStore } from './sheetStore.ts';
@@ -80,6 +81,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [similarBox, setSimilarBox] = useState<{ a: { x: number; y: number }; b: { x: number; y: number } } | null>(null); // example symbol boxed for Count similar
   const [showExport, setShowExport] = useState(false);
   const [showPdf, setShowPdf] = useState(false); // this drawing as a PDF
+  const [readBox, setReadBox] = useState<{ a: { x: number; y: number }; b: { x: number; y: number } } | null>(null); // Read schedule: the boxed area
   const [showAuto, setShowAuto] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [reviewId, setReviewId] = useState<string | null>(null);
@@ -422,6 +424,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       else if (k === 's') setTool('box');
       else if (k === 'c' && !readOnly) setTool('add');
       else if (k === 'f' && !readOnly) setTool('similar');
+      else if (k === 'r' && !readOnly) setTool('read');
       else if (k === 'i' && !readOnly) { setTool('zone'); setDraft([]); }
       else if (k === 'a' && !readOnly) { setTool('area'); setDraft([]); }
       else if (k === 'e' && !readOnly) setTool('erase');
@@ -551,6 +554,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             <button className={`tool${tool === 'add' ? ' on' : ''}`} onClick={() => setTool('add')} disabled={readOnly} aria-label="Count (C)" title="Count (C): click to place a count of the item picked on the right"><PlusCircle size={18} /></button>
             <button className={`tool${tool === 'box' ? ' on' : ''}`} onClick={() => setTool('box')} aria-label="Select (S)" title="Select (S): click a count, or drag a box around several"><Cursor size={18} /></button>
             <button className={`tool${tool === 'similar' ? ' on' : ''}`} onClick={() => setTool('similar')} disabled={readOnly} aria-label="Find similar symbols (F)" title="Find similar symbols (F): choose an item on the right, then drag a box around one symbol"><Crosshair size={18} /></button>
+            <button className={`tool${tool === 'read' ? ' on' : ''}`} onClick={() => setTool('read')} disabled={readOnly} aria-label="Read schedule (R)" title="Read schedule (R): drag a box around a schedule to read its types. Only what is inside the box is read; ignore areas are left out."><Table size={18} /></button>
             <button className={`tool${tool === 'zone' ? ' on' : ''}`} onClick={() => { setTool('zone'); setDraft([]); }} disabled={readOnly} aria-label="Ignore area (I)" title="Ignore area (I): outline an area whose counts are left out"><Polygon size={18} /></button>
             <button className={`tool${tool === 'area' ? ' on' : ''}`} onClick={() => { setTool('area'); setDraft([]); }} disabled={readOnly} aria-label="Count area (A)" title="Count area (A): outline a named area to count separately"><Shapes size={18} /></button>
             <button className={`tool${tool === 'erase' ? ' on' : ''}`} onClick={() => setTool('erase')} disabled={readOnly} aria-label="Erase (E)" title="Erase (E)"><Eraser size={18} /></button>
@@ -587,6 +591,10 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                 draft={draft}
                 onZonePoint={(x, y) => setDraft((d) => [...d, { x, y }])}
                 onZoneFinish={finishZone}
+                onReadBox={(a, b) => {
+                  if (Math.abs(a.x - b.x) < 0.01 || Math.abs(a.y - b.y) < 0.01) return toast('Drag a box around the whole schedule, header row included.');
+                  setReadBox({ a, b });
+                }}
                 onSimilarBox={(a, b) => {
                   if (!activeItemId) return toast('Pick the item type on the right first: the symbols found are counted as it.');
                   if (Math.abs(a.x - b.x) < 0.002 || Math.abs(a.y - b.y) < 0.002) return toast('Drag a box around one symbol.');
@@ -859,6 +867,9 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       {showAuto && sheet && (
         <AutoCountDialog projectId={projectId} sheets={[sheet]} items={items} onClose={() => setShowAuto(false)}
           onDone={(msg) => { setShowAuto(false); toast(msg); void itemsQ.reload(); void countsQ.reload(); void sheetsQ.reload(); void getStore(sheetId).load(true); }} />
+      )}
+      {readBox && page && sheet && (
+        <ReadScheduleDialog page={page} projectId={projectId} box={{ x0: readBox.a.x, y0: readBox.a.y, x1: readBox.b.x, y1: readBox.b.y }} zones={zonesShown} items={items} onClose={() => setReadBox(null)} onDone={() => { setReadBox(null); void itemsQ.reload(); }} />
       )}
       {showPdf && page && file && sheet && (
         <SheetPdfDialog page={page} file={file} sheet={sheet} dets={snap.dets} items={items} categories={categories} projectName={project.data?.project.name ?? ''} onClose={() => setShowPdf(false)} />
