@@ -1258,6 +1258,40 @@ import { areaRows, headerLabel, readAreaTable, rowToItem, sectionName, suggestCo
     assert.equal(sectionName('TWIST LOCK TYPE W/ GROUND'), 'Twist lock type w/ ground');
     assert.equal(headerLabel('BASIS OF DESIGN'), 'Basis of design');
   });
+  // a symbol legend (E0.01): DESCRIPTION / MOUNTING HEIGHT / SYMBOL, the header only at the top, merged section bands,
+  // drawn symbols with letters on some, an open SYMBOL column with the general notes beside it
+  const leg = [
+    R('DESCRIPTION', 975, 95), R('MOUNTING', 1228, 87), R('HEIGHT', 1236, 99), R('SYMBOL', 1298, 98), R('GENERAL NOTES (LEGEND):', 1416, 87),
+    R('LIGHTING FIXTURES AND EQUIPMENT', 979, 117),
+    R('STRIP FIXTURE', 979, 140),
+    R('MISCELLANEOUS', 979, 578), R('PHASE', 1293, 574), R('NEUTRAL', 1306, 584),
+    R('CONDUIT CONCEALED IN WALLS OR IN CEILING SPACE:', 979, 600), R('HASHMARKS INDICATE # OF CONDUCTORS.', 979, 618), R('GROUND', 1315, 600),
+    R('K. DO NOT SCALE FROM DRAWINGS, AS PRINTING DISTORTS SCALE.', 1416, 600),
+    R('MOMENTARY CONTACT SWITCH', 979, 667), R('46"', 1231, 667), R('MC', 1294, 664),
+    R('DISCONNECT SWITCH', 979, 690), R('5\'-0"', 1231, 690),
+    R('MUSHROOM SWITCH', 979, 712), R('46"', 1231, 712),
+  ];
+  const legH = [80, 108, 128, 152, 567, 591, 638, 679, 700, 722].map((y) => ({ y, x0: 973, x1: 1279 }));
+  const legV = [
+    { x: 973, y0: 80, y1: 722 }, { x: 1279, y0: 80, y1: 722 },
+    ...[[128, 152], [591, 638], [638, 679], [679, 700], [700, 722]].map(([y0, y1]) => ({ x: 1225, y0, y1 })),   // not through the heading bands
+    { x: 1302, y0: 596, y1: 622 },                                                                             // a stroke of the conduit symbol
+  ];
+  test('read schedule: a legend section boxed below its header reads with the header above, one item per ruled band', () => {
+    const t = readAreaTable(leg, { x0: 975 / W, y0: 570 / H, x1: 1750 / W, y1: 700 / H }, { pageW: W, pageH: H, vlines: legV, hlines: legH })!;   // wide: into the notes
+    assert.deepEqual(t.columns.map((c) => c.header), ['DESCRIPTION', 'MOUNTING HEIGHT', 'SYMBOL']);             // not the notes, not PHASE / GROUND
+    assert.ok(t.columns[2].x1 < 1416);                                                                      // the open SYMBOL column stops short of the notes
+    const ch = suggestColumns(t.columns);
+    assert.equal(ch.type, null);                                                                            // no Type column: one item per row
+    const got = items(t, ch).map((i) => [i!.code, i!.name, i!.section]);
+    assert.deepEqual(got, [
+      ['CCWC', 'CONDUIT CONCEALED IN WALLS OR IN CEILING SPACE: HASHMARKS INDICATE # OF CONDUCTORS.', 'MISCELLANEOUS'],   // two lines, one item; GROUND is a label, not its code
+      ['MC', 'MOMENTARY CONTACT SWITCH', 'MISCELLANEOUS'],                                                 // the letters on its symbol
+      ['DS', 'DISCONNECT SWITCH', 'MISCELLANEOUS'],                                                        // no letters: the initials
+      ['MS', 'MUSHROOM SWITCH', 'MISCELLANEOUS'],
+    ]);
+    assert.equal(items(t, ch)[1]!.spec, 'Mounting height: 46" · Symbol: MC');
+  });
   test('read schedule: an ignore area over a column leaves it out of the read', () => {
     const skip = (x: number, y: number) => x * W > 563 && x * W < 629 && y * H > 1000;   // the conduit column
     const t = readAreaTable(spr, sprBox, { pageW: W, pageH: H, vlines: sprLines, skip })!;

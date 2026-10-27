@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import type { PDFPageProxy } from 'pdfjs-dist';
 import type { CategoryRow, ItemTypeRow } from '../../shared/types.ts';
 import { inZones, type Zone } from '../../shared/zones.ts';
@@ -39,7 +39,8 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
       const [runs, { prims }] = await Promise.all([extractRuns(page), extractPrims(page, pdfjs.OPS)]);
       const vp = page.getViewport({ scale: 1 });
       const vlines = prims.filter((p) => p.n === 2 && p.x1 - p.x0 < 0.6 && p.y1 - p.y0 > 4).map((p) => ({ x: (p.x0 + p.x1) / 2, y0: p.y0, y1: p.y1 }));
-      const t = readAreaTable(runs, boxes, { pageW: vp.width, pageH: vp.height, skip: (x, y) => inZones(x, y, zones), vlines });
+      const hlines = prims.filter((p) => p.n === 2 && p.y1 - p.y0 < 0.6 && p.x1 - p.x0 > 20).map((p) => ({ y: (p.y0 + p.y1) / 2, x0: p.x0, x1: p.x1 }));
+      const t = readAreaTable(runs, boxes, { pageW: vp.width, pageH: vp.height, skip: (x, y) => inZones(x, y, zones), vlines, hlines });
       if (gone) return;
       setTable(t);
       if (t) {
@@ -47,7 +48,8 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
         setChoice(c);
         // a schedule of devices (receptacles, outlets) reads as devices; a light fixture schedule as fixtures
         const words = t.columns.map((k) => k.header).join(' ');
-        setGroup(/DRIVER|LUMEN|LAMP|CCT|BALLAST|WATTAGE/i.test(words) ? 'fixture' : /CANDELA|\bCD\b|STROBE|HORN|DETECTOR|FIRE ALARM/i.test(words) ? 'fire_alarm' : /NEMA|RECEPT|OUTLET|DEVICE|C\.?B\.?|BREAKER|CONDUIT/i.test(words) ? 'device' : 'fixture');
+        // (a legend with no Type column is mostly devices: switches, outlets, starters)
+        setGroup(/DRIVER|LUMEN|LAMP|CCT|BALLAST|WATTAGE/i.test(words) ? 'fixture' : /CANDELA|\bCD\b|STROBE|HORN|DETECTOR|FIRE ALARM/i.test(words) ? 'fire_alarm' : /NEMA|RECEPT|OUTLET|DEVICE|C\.?B\.?|BREAKER|CONDUIT/i.test(words) || c.type === null ? 'device' : 'fixture');
       }
     })().catch((e) => { console.warn('Reading the schedule failed', e); if (!gone) setTable(null); });
     return () => { gone = true; };
@@ -55,9 +57,21 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
 
   const byCode = useMemo(() => new Map(items.map((i) => [i.code.toUpperCase(), i])), [items]);
   const rows = useMemo(() => {
-    if (!table || choice.type === null) return [];
-    const seen = new Set<string>();
-    return areaRows(table, choice.type).map((r) => rowToItem(r, choice, table.columns)).filter((r): r is NonNullable<typeof r> => !!r && !seen.has(r.code) && !!seen.add(r.code));
+    if (!table) return [];
+    // A code read twice: the same type again is left out; a different item with the same code (two "MS" from initials) gets "-2".
+    const seen = new Map<string, string>();
+    const out: NonNullable<ReturnType<typeof rowToItem>>[] = [];
+    for (const r of areaRows(table, choice.type).map((x) => rowToItem(x, choice, table.columns))) {
+      if (!r) continue;
+      if (seen.has(r.code)) {
+        if (choice.type !== null || seen.get(r.code) === r.name) continue;
+        let n = 2; while (seen.has(`${r.code}-${n}`)) n++;
+        r.code = `${r.code}-${n}`;
+      }
+      seen.set(r.code, r.name);
+      out.push(r);
+    }
+    return out;
   }, [table, choice]);
   const sections = [...new Set(rows.map((r) => r.section).filter(Boolean))] as string[];
   const chosen = rows.filter((r) => !off.has(r.code) && (update || !byCode.has(r.code)));
@@ -67,7 +81,8 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
     if (!table) return;
     setBusy('Saving…');
     const head = (i: number | null) => (i === null ? undefined : table.columns[i].header);
-    remember(projectId, { type: head(choice.type), description: head(choice.description), skip: table.columns.map((c, i) => (i !== choice.type && i !== choice.description && !choice.extra.includes(i) ? c.header : '')).filter(Boolean) });
+    remember(projectId, { type: head(choice.type), description: head(choice.description),   // (no Type column is not remembered: the next table may have one)
+      skip: table.columns.map((c, i) => (i !== choice.type && i !== choice.description && !choice.extra.includes(i) ? c.header : '')).filter(Boolean) });
     let added = 0, updated = 0;
     try {
       // the section headings as categories (made when missing)
@@ -121,7 +136,7 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
               <label key={k} className="field">
                 <span>{k === 'type' ? 'Type (the code)' : 'Description'}</span>
                 <select className="input" value={choice[k] ?? ''} onChange={(e) => pick(k, e.target.value)}>
-                  <option value="">{k === 'type' ? 'Pick the column' : 'Not read'}</option>
+                  <option value="">{k === 'type' ? 'None: one item per row (legends)' : 'Not read'}</option>
                   {table.columns.map((c, i) => <option key={i} value={i}>{c.header}{c.sample ? ` · ${c.sample.slice(0, 28)}` : ''}</option>)}
                 </select>
               </label>
@@ -136,14 +151,24 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
               </div>
             </div>
           </div>
-          {choice.type === null ? <div className="hint">Pick the column that holds the type codes (A1, B2…).</div> : (
+          {choice.type === null && <div className="hint">No Type column: each row of the table is one item, coded from the letters on its symbol or the initials of its description. Pick a Type column if the table has codes (A1, B2…).</div>}
+          {(
             <div className="read-rows">
               <table className="table compact">
                 <thead><tr><th style={{ width: 28 }} /><th>Type</th><th>Description</th><th>Details</th>{sections.length > 0 && <th>Section</th>}<th /></tr></thead>
                 <tbody>
-                  {rows.map((r) => {
+                  {rows.map((r, idx) => {
                     const inLib = byCode.has(r.code);
-                    return (
+                    const sectionStart = sections.length > 0 && r.section && (idx === 0 || rows[idx - 1].section !== r.section);
+                    const inSection = rows.filter((x) => x.section === r.section);
+                    const allOn = inSection.every((x) => !off.has(x.code));
+                    return (<Fragment key={r.code}>
+                      {sectionStart && (
+                        <tr key={`s-${r.section}`} className="read-section">
+                          <td><input type="checkbox" checked={allOn} ref={(el) => { if (el) el.indeterminate = !allOn && inSection.some((x) => !off.has(x.code)); }} onChange={() => setOff((s) => { const n = new Set(s); for (const x of inSection) { if (allOn) n.add(x.code); else n.delete(x.code); } return n; })} aria-label={`Read the ${sectionName(r.section!)} section`} /></td>
+                          <td colSpan={5}><b>{sectionName(r.section!)}</b> <span className="dim num">· {plural(inSection.length, 'item')}</span></td>
+                        </tr>
+                      )}
                       <tr key={r.code} className={off.has(r.code) || (inLib && !update) ? 'dim' : ''}>
                         <td><input type="checkbox" checked={!off.has(r.code)} onChange={() => setOff((s) => { const n = new Set(s); if (n.has(r.code)) n.delete(r.code); else n.add(r.code); return n; })} aria-label={`Read ${r.code}`} /></td>
                         <td><b>{r.code}</b></td>
@@ -152,7 +177,7 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
                         {sections.length > 0 && <td className="dim">{r.section ? sectionName(r.section) : ''}</td>}
                         <td>{inLib ? <span className="tag tag-outline">In library</span> : <span className="tag tag-accent">New</span>}</td>
                       </tr>
-                    );
+                    </Fragment>);
                   })}
                 </tbody>
               </table>
@@ -170,7 +195,7 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
       )}
       <div className="dialog-actions">
         <button className="btn btn-secondary" onClick={onClose} disabled={!!busy}>Cancel</button>
-        <button className="btn btn-primary" disabled={!table || choice.type === null || chosen.length === 0 || !!busy} onClick={() => void write()}>
+        <button className="btn btn-primary" disabled={!table || chosen.length === 0 || !!busy} onClick={() => void write()}>
           {busy ?? (chosen.length ? `Save ${plural(chosen.length, 'type')}${fresh && fresh < chosen.length ? ` (${fresh} new)` : ''}` : 'Nothing to save')}
         </button>
       </div>
