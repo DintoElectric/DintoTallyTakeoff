@@ -46,6 +46,9 @@ export function countRegion(prims: LinePrim[], W: number, H: number): Region {
 
 export type TagKind = 'tag' | 'short' | 'room' | 'note' | 'camera' | 'outlet';
 export interface TagHit {
+  lengthFt?: number | null;   // measured on the plan (fixtures whose length is left to the drawings), nearest foot
+  lengthSure?: boolean;       // the measurement is certain (else flagged for review)
+  lengthWhy?: string;         // why it is not certain
   code: string; x: number; y: number; kind: TagKind; h?: number;
   past?: boolean;      // beyond a matchline
   name?: string; shape?: string; glyph?: string; // a camera: how its library item is named and drawn

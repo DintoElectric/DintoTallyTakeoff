@@ -89,3 +89,81 @@ export async function extractPrims(page: PageLike, OPS: OpsLike, opts: { keepPoi
   }
   return { prims, width: vp.width, height: vp.height };
 }
+
+/** A straight piece of dark linework (a curve comes as several), in PDF points as displayed. */
+export interface Segment { x0: number; y0: number; x1: number; y1: number; w?: number }   // w: stroke weight in points (0 for a fill)
+
+/**
+ * The dark linework of a page as straight segments: the electrical work (fixtures, devices, circuits) is drawn dark while the
+ * architectural background is screened gray, so only paint darker than `maxLum` is kept. Curves are split into short pieces,
+ * so an arc's length can be added up. Used to measure fixtures whose length is left to the drawings.
+ */
+/** Where a sheet has linework of any shade, in 10-point cells: tells where the drawing stops and blank paper begins. */
+export interface Ink { at(x: number, y: number): boolean }
+
+export async function extractSegments(page: PageLike, OPS: OpsLike & { setLineWidth?: number }, opts: { maxLum?: number; keepLight?: boolean } = {}): Promise<{ segments: Segment[]; light: Segment[]; width: number; height: number; ink: Ink }> {
+  let lineW = 1;
+  const maxLum = opts.maxLum ?? 0.2;
+  const vp = page.getViewport({ scale: 1 });
+  const ol = await page.getOperatorList({ annotationMode: 0 });
+  const FILL = new Set([OPS.fill, OPS.eoFill, OPS.fillStroke, OPS.eoFillStroke, OPS.closeFillStroke, OPS.closeEOFillStroke]);
+  let ctm = vp.transform.slice();
+  const stack: [number[], number, number, number][] = [];
+  let fillL = 0, strokeL = 0, inAnnotation = false;
+  const segments: Segment[] = [];
+  const light: Segment[] = [];   // the lighter linework (walls, ceiling grid), when asked for
+  const CELL = 10, cols = Math.ceil(vp.width / CELL) + 1, rows = Math.ceil(vp.height / CELL) + 1;
+  const inked = new Uint8Array(cols * rows);
+  const mark = (x0: number, y0: number, x1: number, y1: number) => {
+    const n = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / CELL));
+    for (let s = 0; s <= n; s++) {
+      const cx = Math.floor((x0 + ((x1 - x0) * s) / n) / CELL), cy = Math.floor((y0 + ((y1 - y0) * s) / n) / CELL);
+      if (cx >= 0 && cy >= 0 && cx < cols && cy < rows) inked[cy * cols + cx] = 1;
+    }
+  };
+  for (let i = 0; i < ol.fnArray.length; i++) {
+    const f = ol.fnArray[i];
+    const a = ol.argsArray[i] as unknown[];
+    if (f === OPS.beginAnnotation) { inAnnotation = true; continue; }
+    if (f === OPS.endAnnotation) { inAnnotation = false; continue; }
+    if (inAnnotation) continue;
+    if (f === OPS.save) stack.push([ctm.slice(), fillL, strokeL, lineW]);
+    else if (f === OPS.restore) { const t = stack.pop(); if (t) [ctm, fillL, strokeL, lineW] = t; }
+    else if (f === OPS.transform) ctm = mul(ctm, a as number[]);
+    else if (f === OPS.setFillRGBColor) fillL = lumOf(a[0]);
+    else if (f === OPS.setStrokeRGBColor) strokeL = lumOf(a[0]);
+    else if (OPS.setLineWidth !== undefined && f === OPS.setLineWidth) lineW = a[0] as number;
+    else if (f === OPS.constructPath) {
+      const filled = FILL.has(a[0] as number);
+      const lum = filled ? fillL : strokeL;
+      const w = filled ? 0 : lineW * Math.hypot(ctm[0], ctm[1]);
+      const keep = lum <= maxLum;                             // dark: kept as segments; any shade: marked as ink
+      const d = (a[1] as ArrayLike<number>[])[0];
+      if (!d) continue;
+      const T = (x: number, y: number): [number, number] => [ctm[0] * x + ctm[2] * y + ctm[4], ctm[1] * x + ctm[3] * y + ctm[5]];
+      let start: [number, number] | null = null, at: [number, number] | null = null, raw: [number, number] = [0, 0];
+      const add = (p: [number, number]) => {
+        if (at && (p[0] !== at[0] || p[1] !== at[1])) { mark(at[0], at[1], p[0], p[1]); if (keep) segments.push({ x0: at[0], y0: at[1], x1: p[0], y1: p[1], w }); else if (opts.keepLight) light.push({ x0: at[0], y0: at[1], x1: p[0], y1: p[1], w }); }
+        at = p;
+      };
+      let k = 0;
+      while (k < d.length) {
+        const op = d[k++];
+        if (op === 0) { raw = [d[k], d[k + 1]]; at = T(raw[0], raw[1]); start = at; k += 2; }
+        else if (op === 1) { raw = [d[k], d[k + 1]]; add(T(raw[0], raw[1])); k += 2; }
+        else if (op === 2 || op === 3) {
+          const c = op === 2 ? [d[k], d[k + 1], d[k + 2], d[k + 3], d[k + 4], d[k + 5]] : [raw[0], raw[1], d[k], d[k + 1], d[k + 2], d[k + 3]];
+          for (let s = 1; s <= 8; s++) {
+            const t = s / 8, u = 1 - t;
+            add(T(u * u * u * raw[0] + 3 * u * u * t * c[0] + 3 * u * t * t * c[2] + t * t * t * c[4], u * u * u * raw[1] + 3 * u * u * t * c[1] + 3 * u * t * t * c[3] + t * t * t * c[5]));
+          }
+          raw = [c[4], c[5]]; k += op === 2 ? 6 : 4;
+        }
+        else if (op === 4) { if (start) add(start); }
+        else break;
+      }
+    }
+  }
+  const at = (x: number, y: number) => { const cx = Math.floor(x / CELL), cy = Math.floor(y / CELL); return cx >= 0 && cy >= 0 && cx < cols && cy < rows && inked[cy * cols + cx] === 1; };
+  return { segments, light, width: vp.width, height: vp.height, ink: { at } };
+}

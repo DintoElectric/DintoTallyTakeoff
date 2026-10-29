@@ -4,6 +4,11 @@ import { api, ApiError } from '../auth/api.ts';
 import { Check, Dialog, plural } from '../app/ui.tsx';
 import { discover, scanSheets, writeSheet, type CodeRow, type SheetScan } from '../detect/autoCount.ts';
 import { CONF_EMERGENCY, CONF_NORMAL_SPLIT } from '../detect/writePlan.ts';
+import { lengthFeetFromText, measuredOnPlans } from '../detect/lengthText.ts';
+
+// A count of a fixture measured on the plan goes to the item for its length ("P 7'"): its key is the code, this, the feet.
+const LENGTH_KEY = '\u0002';
+const CONF_LENGTH_CHECK = 0.6;   // a length that could not be measured for certain: flagged for review
 import { EMERGENCY_KEY, discoverMarkers, emergencyCode, isEmergency, parseCustomMarkers } from '../detect/emergency.ts';
 import { flushAll, getStore } from './sheetStore.ts';
 
@@ -28,6 +33,8 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
   const [markers, setMarkers] = useState<Set<string>>(new Set()); // confirmed emergency label patterns
   const [customText, setCustomText] = useState('');
   const [splitOff, setSplitOff] = useState<Set<string>>(new Set()); // codes the estimator chose NOT to split
+  const [lengthOff, setLengthOff] = useState<Set<string>>(new Set()); // measured types the estimator chose NOT to split by length
+  const [lenOpen, setLenOpen] = useState(false);
   const abort = useRef(new AbortController());
 
   // Several library items can share a code (variants), so each code maps to a list.
@@ -35,6 +42,16 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
     const m = new Map<string, ItemTypeRow[]>();
     for (const i of items) m.set(i.code.toUpperCase(), [...(m.get(i.code.toUpperCase()) ?? []), i]);
     return m;
+  }, [items]);
+  // Fixtures whose length is left to the drawings are measured on the plans; the others' stated lengths tell the scale.
+  const measure = useMemo(() => {
+    const measured = new Set<string>(), known = new Map<string, number>();
+    for (const i of items) {
+      const c = i.code.toUpperCase();
+      if (measuredOnPlans(i)) measured.add(c);
+      else { const ft = i.length_ft ?? lengthFeetFromText(i.name, i.spec ?? ''); if (ft) known.set(c, ft); }
+    }
+    return { measured, known };
   }, [items]);
   // Anything past a matchline belongs to the neighbouring sheet and is left out (unless you turn that off).
   const effective: SheetScan[] = useMemo(() => scans.map((sc) => ({ ...sc, hits: sc.hits.filter((h) => !(ignorePast && h.past) && !(leaveOutGrid && h.grid)) })), [scans, ignorePast, leaveOutGrid]);
@@ -77,7 +94,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
     (async () => {
       try {
         const files = await api<{ files: DrawingFileRow[] }>(`/files?project=${projectId}`);
-        const res = await scanSheets(sheets, files.files, (done, total, label) => { if (!off) setProgress({ done, total, label }); }, abort.current.signal, new Set(items.map((i) => i.code.toUpperCase())));
+        const res = await scanSheets(sheets, files.files, (done, total, label) => { if (!off) setProgress({ done, total, label }); }, abort.current.signal, new Set(items.map((i) => i.code.toUpperCase())), measure);
         if (off) return;
         setScans(res);
         const found = discover(res.map((sc) => ({ ...sc, hits: sc.hits.filter((h) => !h.past) })));
@@ -174,12 +191,62 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
         resolved.set(r.code + EMERGENCY_KEY, emItem);
         emKeys.add(r.code + EMERGENCY_KEY);
       }
+      // Where each count goes: its emergency item when it is marked so, then the item for its measured length.
+      const route = (h: SheetScan['hits'][number]) => {
+        let out = h;
+        if ((h.kind === 'tag' || h.kind === 'short') && inc.has(h.code) && splits(h.code)) out = isEmergency(h, activeMarkers) ? { ...h, code: h.code + EMERGENCY_KEY, conf: CONF_EMERGENCY } : { ...h, conf: CONF_NORMAL_SPLIT };
+        if ((h.kind === 'tag' || h.kind === 'short') && inc.has(h.code) && lengthSplit(h.code)) {
+          // measured: the item for that length (flagged when not certain); not measured: the type itself, flagged to set by hand
+          out = h.lengthFt ? { ...out, code: out.code + LENGTH_KEY + h.lengthFt, conf: h.lengthSure ? out.conf : CONF_LENGTH_CHECK } : { ...out, conf: CONF_LENGTH_CHECK };
+        }
+        return out;
+      };
+      // The items for each length found ("P 7'", "P/EM 7'"): from the library if they are there, else added, with the length set.
+      const lenKeys = new Set<string>();
+      let lenCreated = 0;
+      const keys = new Set<string>();
+      for (const sc of scans) for (const h of sc.hits) { const k = route(h).code; if (k.includes(LENGTH_KEY)) keys.add(k); }
+      for (const k of [...keys].sort()) {
+        const [baseKey, ft] = k.split(LENGTH_KEY);
+        const base = resolved.get(baseKey);
+        if (!base) continue;
+        const code = `${base.code} ${ft}'`.slice(0, 40);
+        let item = byCode.get(code.toUpperCase())?.[0];
+        if (!item) {
+          setStatus(`Adding ${code} to the library…`);
+          try {
+            item = (await api<{ item: ItemTypeRow }>('/items', {
+              body: { project_id: projectId, code, name: `${base.name}, ${ft} ft`.slice(0, 200), spec: base.spec, category_id: base.category_id, unit: base.unit, length_ft: Number(ft), count_group: base.count_group ?? null, marker_shape: base.marker_shape, marker_glyph: base.marker_glyph },
+            })).item;
+            lenCreated++;
+          } catch (e) {
+            if (!(e instanceof ApiError && e.status === 409)) throw e;
+            item = (await api<{ items: ItemTypeRow[] }>(`/items?project=${projectId}`)).items.find((x) => x.code.toUpperCase() === code.toUpperCase());
+            if (!item) throw e;
+          }
+        }
+        resolved.set(k, item);
+        lenKeys.add(k);
+      }
+      // Lengths stated in a description but missing from the library ("16' LED SUSPENDED…" read before lengths like that were
+      // understood): filled in, so their footage is totalled.
+      let lenFilled = 0;
+      for (const it of new Set(resolved.values())) {
+        if (it.length_ft != null) continue;
+        const ft = lengthFeetFromText(it.name, it.spec ?? '');
+        if (ft == null) continue;
+        setStatus(`Setting the length of ${it.code}…`);
+        await api(`/items/${it.id}`, { method: 'PATCH', body: { length_ft: ft } });
+        lenFilled++;
+      }
       // Every library item whose code was found anywhere in the scan (ticked or not, past a matchline or not):
       // their earlier unreviewed automatic counts are replaced by this run.
       const clearIds = new Set<string>();
+      // (and the length items of a measured type: the scan reads "P", but earlier counts may be on "P 7'")
+      for (const it of items) { const m = /^(.+?)(?:\/EM)? \d+'$/i.exec(it.code); if (m && measure.measured.has(m[1].toUpperCase())) clearIds.add(it.id); }
       for (const sc of scans) for (const h of sc.hits) for (const it of byCode.get(h.code.toUpperCase()) ?? []) clearIds.add(it.id);
       for (const it of resolved.values()) clearIds.add(it.id);
-      const writeInc = new Set([...inc, ...emKeys]);
+      const writeInc = new Set([...inc, ...emKeys, ...lenKeys]);
       // 2. Write each sheet's detections.
       let total = 0, removedPast = 0, removedGrid = 0, removedShort = 0, erased = 0, skipped = 0;
       const reset: false | 'auto' | 'all' = resetAuto ? (resetManual ? 'all' : 'auto') : false;
@@ -188,11 +255,8 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
         i++;
         if (sc.error) { skipped++; continue; } // a sheet that could not be read is left exactly as it was
         setStatus(`Saving counts: sheet ${i} of ${scans.length}…`);
-        // Fixtures of a split type go to their normal or emergency item.
-        const hits = sc.hits.map((h) => {
-          if ((h.kind !== 'tag' && h.kind !== 'short') || !inc.has(h.code) || !splits(h.code)) return h;
-          return isEmergency(h, activeMarkers) ? { ...h, code: h.code + EMERGENCY_KEY, conf: CONF_EMERGENCY } : { ...h, conf: CONF_NORMAL_SPLIT };
-        });
+        // Fixtures of a split type go to their normal or emergency item, and measured ones to the item for their length.
+        const hits = sc.hits.map(route);
         const r = await writeSheet({ ...sc, hits }, resolved, writeInc, { ambiguous, clearItemIds: clearIds, reset, ignorePast, leaveOutGrid });
         total += r.added;
         removedPast += r.removedPast;
@@ -202,7 +266,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
       }
       // Sheets already open in this session must show the new counts, not a cached copy.
       await Promise.all(scans.map((sc) => getStore(sc.sheet.id).load(true)));
-      onDone(`Counted ${plural(total, 'item')} across ${plural(scans.length, 'sheet')}.${erased ? ` Erased ${plural(erased, 'earlier count')} first.` : ''}${skipped ? ` ${plural(skipped, 'sheet')} could not be read and was left as it was.` : ''}${removedGrid ? ` Removed ${plural(removedGrid, 'earlier count')} that sat on grid-line bubbles.` : ''}${removedPast ? ` Removed ${plural(removedPast, 'earlier count')} that lay past matchlines.` : ''}${removedShort ? ` Removed ${plural(removedShort, 'earlier short-code count')}.` : ''}${ambiguous.size ? ` ${[...ambiguous].join(', ')} ${ambiguous.size === 1 ? 'has' : 'have'} several variants: review those and move each to the right item.` : ''} ${emKeys.size ? ` Emergency fixtures were counted under their own items (${[...emKeys].map((k) => emergencyCode(k.replace(EMERGENCY_KEY, ''), activeMarkers)).slice(0, 6).join(', ')}${emKeys.size > 6 ? '…' : ''}).` : ''} Counts are unreviewed until you confirm them.`);
+      onDone(`Counted ${plural(total, 'item')} across ${plural(scans.length, 'sheet')}.${erased ? ` Erased ${plural(erased, 'earlier count')} first.` : ''}${skipped ? ` ${plural(skipped, 'sheet')} could not be read and was left as it was.` : ''}${removedGrid ? ` Removed ${plural(removedGrid, 'earlier count')} that sat on grid-line bubbles.` : ''}${removedPast ? ` Removed ${plural(removedPast, 'earlier count')} that lay past matchlines.` : ''}${removedShort ? ` Removed ${plural(removedShort, 'earlier short-code count')}.` : ''}${ambiguous.size ? ` ${[...ambiguous].join(', ')} ${ambiguous.size === 1 ? 'has' : 'have'} several variants: review those and move each to the right item.` : ''} ${emKeys.size ? ` Emergency fixtures were counted under their own items (${[...emKeys].map((k) => emergencyCode(k.replace(EMERGENCY_KEY, ''), activeMarkers)).slice(0, 6).join(', ')}${emKeys.size > 6 ? '…' : ''}).` : ''} Counts are unreviewed until you confirm them.${lenKeys.size ? ` Measured fixtures went to ${plural(lenKeys.size, 'length item')}${lenCreated ? ` (${lenCreated} new)` : ''}.` : ''}${lenFilled ? ` Set the stated length of ${plural(lenFilled, 'type')}.` : ''}`);
     } catch (e) {
       setError(e instanceof ApiError || e instanceof Error ? e.message : 'Saving the counts failed.');
       setPhase('pick');
@@ -212,6 +276,19 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
   const totalSelected = rows.filter((r) => inc.has(r.code)).reduce((n, r) => n + r.total, 0);
   // The folded emergency section says what it holds, and flags a marker that still needs a decision.
   const emToReview = candidates.filter((c) => !markers.has(c.pattern)).length;
+  // Per measured type: how many at each length, how many to check, how many not measured.
+  const lengths = useMemo(() => {
+    const m = new Map<string, { at: Map<number, number>; check: number; none: number }>();
+    for (const sc of effective) for (const h of sc.hits) {
+      if (!measure.measured.has(h.code.toUpperCase()) || !inc.has(h.code)) continue;
+      const e = m.get(h.code) ?? m.set(h.code, { at: new Map(), check: 0, none: 0 }).get(h.code)!;
+      if (h.lengthFt) { e.at.set(h.lengthFt, (e.at.get(h.lengthFt) ?? 0) + 1); if (!h.lengthSure) e.check++; } else e.none++;
+    }
+    return [...m].sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
+  }, [effective, measure, inc]);
+  const lenMeasured = lengths.reduce((n, [, e]) => n + [...e.at.values()].reduce((a, b) => a + b, 0), 0);
+  const lenCheck = lengths.reduce((n, [, e]) => n + e.check + e.none, 0);
+  const lengthSplit = (code: string) => measure.measured.has(code.toUpperCase()) && !lengthOff.has(code);
   const emSummary = candidates.length === 0 && markers.size === 0
     ? 'none found'
     : `${emTotal > 0 ? `${emTotal} fixture${emTotal === 1 ? '' : 's'} counted separately` : 'nothing counted separately'} · ${markers.size} marker${markers.size === 1 ? '' : 's'} ticked`;
@@ -308,6 +385,31 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
                 </div>
               )}
             </div>
+            {lengths.length > 0 && (
+              <div className="ac-section">
+                <button type="button" className="ac-head" aria-expanded={lenOpen} onClick={() => setLenOpen((v) => !v)}>
+                  <span className="ac-caret">{lenOpen ? '▾' : '▸'}</span>
+                  <span style={{ fontWeight: 500 }}>Lengths measured on the plans</span>
+                  <span className="dim" style={{ fontSize: 12 }}>{plural(lengths.length, 'type')} · {plural(lenMeasured, 'fixture')} measured</span>
+                  {lenCheck > 0 && <span className="tag tag-outline">{lenCheck} to check</span>}
+                </button>
+                {lenOpen && (
+                  <div className="stack" style={{ gap: 8, padding: '6px 0 2px 18px' }}>
+                    <div className="muted" style={{ fontSize: 13 }}>
+                      These types have no length in their description, so each fixture was measured on the plan (to the nearest foot) and is counted under an item for its length, such as “P 7'”. Lengths that could not be measured for certain are flagged for review.
+                    </div>
+                    {lengths.map(([code, e]) => (
+                      <Check key={code} checked={!lengthOff.has(code)} disabled={phase === 'write'} onChange={(v) => setLengthOff((cur) => { const n = new Set(cur); if (v) n.delete(code); else n.add(code); return n; })}>
+                        <b>{code}</b>{' '}
+                        <span className="num">{[...e.at].sort((a, b) => a[0] - b[0]).map(([ft, n]) => `${ft}' × ${n}`).join(', ') || 'none measured'}</span>
+                        {(e.check > 0 || e.none > 0) && <span className="dim"> · {[e.check && `${e.check} to check`, e.none && `${e.none} not measured`].filter(Boolean).join(', ')}</span>}
+                      </Check>
+                    ))}
+                    <div className="dim" style={{ fontSize: 12 }}>Untick a type to count it without lengths. Measured counts flagged for review are the ones whose outline was unclear: open at an end, at a matchline or the edge of the view, drawn as a single line, or with another fixture as close.</div>
+                  </div>
+                )}
+              </div>
+            )}
           {shortMarks > 0 && (
             <div className="dim" style={{ fontSize: 12 }}>
               {plural(shortMarks, 'short letter-only mark')} ({shortRows.slice(0, 6).map((r) => `${r.code} ${r.total}`).join(', ')}{shortRows.length > 6 ? '…' : ''}) {showShort ? 'are listed below, not ticked' : 'are not counted'}:

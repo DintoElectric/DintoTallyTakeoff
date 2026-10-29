@@ -1334,3 +1334,42 @@ test('counting area: up to the title block\'s solid full-height edge, not a dash
   assert.equal(countRegion([{ x0: 2313, x1: 2313, y0: 22, y1: 2140 }], W, H).x1, DCR.x1);                                    // a line left of 82%: no narrower
   assert.equal(countRegion([{ x0: 2790, x1: 2790, y0: 600, y1: 2140 }], W, H), DCR);                                          // not the full height: a wall
 });
+
+// ---- fixtures whose length is left to the drawings: measured on the plans (Hillcrest E1.01 / E1.02A / E1.02B) ----
+import { lengthFeetFromText as lft, measuredOnPlans } from '../src/detect/lengthText.ts';
+import { buildRuns, findBodies, measureTags, scaleOf, segmentGrid } from '../src/detect/fixtureLength.ts';
+test('length text: a length leading the description; sizes and diameters are not lengths; increments mean measure on the plans', () => {
+  assert.equal(lft("16' LED SUSPENDED DIRECT/INDIRECT LINEAR FIXTURE"), 16);
+  assert.equal(lft("4' LINEAR UTILITY STRIP LIGHT"), 4);
+  assert.equal(lft("2' X 4' GRID LAY-IN LED RECESSED TROFFER."), null);
+  assert.equal(lft("3' DIAMETER ARCHITECTURAL RECESSED ROUND LIGHT"), null);
+  assert.equal(lft('LED RECESSED PERIMETER SLOT (SPECIFIED IN 1" INCREMENTS)'), null);
+  assert.ok(measuredOnPlans({ name: 'LED RECESSED PERIMETER SLOT (SPECIFIED IN 1" INCREMENTS)', length_ft: null }));
+  assert.ok(measuredOnPlans({ name: "LED RECESSED PERIMETER FIXTURE ORDERED IN 1' INCREMENTS", length_ft: null }));
+  assert.ok(measuredOnPlans({ name: 'LED FLOOR RECESSED PERIMETER TAPE LIGHT FIXTURE', spec: 'Basis of design: CORE ALP23-LENGTH PER PLANS', length_ft: null }));
+  assert.ok(!measuredOnPlans({ name: "4' LINEAR UTILITY STRIP LIGHT", length_ft: null }));                 // stated: not measured
+  assert.ok(!measuredOnPlans({ name: 'LED RECESSED PERIMETER SLOT', length_ft: 8 }));                       // set by hand: kept
+  assert.ok(!measuredOnPlans({ name: 'WALL-MOUNTED SCONCE FIXTURE', length_ft: null }));                    // not a linear fixture
+});
+test("measuring: a slot beside its tag, at the sheet's scale; an open end or a note hexagon is not trusted", () => {
+  const seg = (x0: number, y0: number, x1: number, y1: number, w = 0.84) => ({ x0, y0, x1, y1, w });
+  const slot = (x: number, y0: number, len: number, capTop = true) => [seg(x, y0, x, y0 + len), seg(x + 4, y0, x + 4, y0 + len), ...(capTop ? [seg(x, y0, x + 4, y0)] : []), seg(x, y0 + len, x + 4, y0 + len)];
+  const segs = [
+    ...slot(100, 100, 54),            // a 6 ft slot (54 pt at 1/8" = 1'-0")
+    ...slot(300, 100, 72, false),     // an 8 ft slot whose top end is open: cut by something drawn over it
+    seg(500, 100, 505, 109), seg(504, 100, 509, 109),   // two edges of a note hexagon, side by side like a short slot
+  ];
+  const bodies = findBodies(buildRuns(segs));
+  assert.equal(scaleOf(`SCALE: 1/8" = 1'-0"`), 0.125);
+  assert.equal(scaleOf(`1/4" = 1'-0"`), 0.25);
+  const scales = [{ x: 200, y: 400, inPerFt: 0.125 }];
+  const r = measureTags([{ id: 1, x: 92, y: 104 }, { id: 2, x: 292, y: 104 }, { id: 3, x: 495, y: 100 }], bodies, scales, { grid: segmentGrid(segs), notes: [[505, 104]] });
+  assert.deepEqual([r.get(1)!.feet, r.get(1)!.sure], [6, true]);
+  assert.deepEqual([r.get(2)!.feet, r.get(2)!.sure], [8, false]);
+  assert.match(r.get(2)!.why!, /open at an end/);
+  assert.equal(r.get(3)!.body, null);                               // the hexagon is not a fixture
+  // two scales on the sheet: the known-length fixtures say which one the plan is drawn at
+  const two = [{ x: 200, y: 900, inPerFt: 0.125 }, { x: 1500, y: 900, inPerFt: 0.25 }];
+  const k = measureTags([{ id: 1, x: 92, y: 104, known: 6 }, { id: 2, x: 292, y: 104 }], bodies, two, { grid: segmentGrid(segs) });
+  assert.equal(k.get(1)!.feet, 6);
+});
