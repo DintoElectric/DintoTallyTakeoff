@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { DrawingFileRow, Detection, ItemTypeRow, SheetRow } from '../../shared/types.ts';
+import type { CategoryRow, DrawingFileRow, Detection, ItemTypeRow, SheetRow } from '../../shared/types.ts';
 import { BATCH_MAX_OPS } from '../../shared/limits.ts';
 import { api, ApiError } from '../auth/api.ts';
 import { Check, Dialog, plural } from '../app/ui.tsx';
@@ -9,6 +9,8 @@ import { findGridBubbles, inBubble, type GridBubble } from '../detect/gridBubble
 import { ceilingIndex, CEILING_TITLE, type CeilingIndex } from '../detect/ceiling.ts';
 import { buildTemplate, darkSmall, dropCounted, findSimilar, type SymbolMatch, type Template, type TextMark } from '../detect/symbolSearch.ts';
 import { flushAll, getStore, type SheetStore } from './sheetStore.ts';
+import { ItemPicker } from './ItemPicker.tsx';
+import { ItemDialog } from './ItemDialog.tsx';
 import { loadFilePdf, pdfjs } from '../viewer/pdf.ts';
 
 interface PageShapes { prims: Prim[]; texts: TextMark[]; bubbles: GridBubble[]; ceilings: CeilingIndex; width: number; height: number }
@@ -46,10 +48,15 @@ interface Row { sheet: SheetRow; matches: SymbolMatch[]; width: number; height: 
  * "Count similar": the estimator boxed one symbol; every look-alike on the sheet (and optionally the other counting
  * sheets) is found and counted as the chosen item, once they have looked at the numbers.
  */
-export default function SimilarDialog({ current, box, sheets, files, item, store, onClose, onDone }: {
+export default function SimilarDialog({ current, box, sheets, files, item: start, items, categories, projectId, store, onClose, onDone, onItemCreated }: {
   current: SheetRow; box: { a: { x: number; y: number }; b: { x: number; y: number } }; sheets: SheetRow[]; files: DrawingFileRow[];
-  item: ItemTypeRow; store: SheetStore | null; onClose: () => void; onDone: (msg: string) => void;
+  item: ItemTypeRow | null; items: ItemTypeRow[]; categories: CategoryRow[]; projectId: string;
+  store: SheetStore | null; onClose: () => void; onDone: (msg: string) => void; onItemCreated?: (item: ItemTypeRow) => void;
 }) {
+  // What the symbols are counted as: the active item to begin with, or picked (or added) here.
+  const [item, setItem] = useState<ItemTypeRow | null>(start);
+  const [picking, setPicking] = useState(start === null);
+  const [adding, setAdding] = useState(false);
   const [phase, setPhase] = useState<'prep' | 'review' | 'search' | 'write'>('prep');
   const [score, setScore] = useState(0.85);
   const [rows, setRows] = useState<Row[]>([]);
@@ -94,7 +101,7 @@ export default function SimilarDialog({ current, box, sheets, files, item, store
           const found = findSimilar(shapes.prims, t, { minScore: score, texts: shapes.texts }).filter((m) => !inBubble(m.x / shapes.width, m.y / shapes.height, shapes.bubbles));
           // Already counted as this item (a second run, or hand-placed): left out.
           const { detections } = await api<{ detections: Detection[] }>(`/sheets/${s.id}/detections`);
-          const counted = detections.filter((d) => d.item_type_id === item.id && d.status !== 'rejected').map((d) => ({ x: d.x * shapes.width, y: d.y * shapes.height }));
+          const counted = item ? detections.filter((d) => d.item_type_id === item.id && d.status !== 'rejected').map((d) => ({ x: d.x * shapes.width, y: d.y * shapes.height })) : [];
           const fresh = dropCounted(found, counted, Math.max(8, Math.max(t.w, t.h) * 0.6));
           if (found.length > 0 || s.id === current.id) out.push({ sheet: s, matches: fresh, width: shapes.width, height: shapes.height, skipped: found.length - fresh.length });
           await new Promise((r) => setTimeout(r, 0));
@@ -107,11 +114,12 @@ export default function SimilarDialog({ current, box, sheets, files, item, store
     })();
     return () => { off = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [score, others]);
+  }, [score, others, item?.id]);   // (another item: what is already counted as it is left out again)
 
   const total = rows.filter((r) => pick.has(r.sheet.id)).reduce((n, r) => n + r.matches.length, 0);
 
   async function add() {
+    if (!item) return;
     setPhase('write');
     setError(null);
     try {
@@ -139,10 +147,26 @@ export default function SimilarDialog({ current, box, sheets, files, item, store
   const busy = phase === 'prep' || phase === 'search' || phase === 'write';
   return (
     <Dialog title="Count similar symbols" onClose={phase === 'write' ? () => undefined : onClose} wide>
-      <div className="dialog-title">Count similar symbols as {item.code}</div>
+      <div className="dialog-title">Count similar symbols{item ? ` as ${item.code}` : ''}</div>
       <div className="muted" style={{ fontSize: 13 }}>
-        Finds every symbol that looks like the one you boxed, and counts it as <b>{item.code}</b> ({item.name}). Look at the numbers, then add them.
+        Finds every symbol that looks like the one you boxed{item ? <>, and counts it as <b>{item.code}</b> ({item.name})</> : ''}. Look at the numbers, then add them.
       </div>
+      <div className="field">
+        <label>Count them as</label>
+        {item && !picking ? (
+          <div className="row" style={{ gap: 8 }}>
+            <span><b>{item.code}</b> <span className="dim">{item.name}</span></span>
+            <button type="button" className="btn btn-ghost" disabled={phase === 'write'} onClick={() => setPicking(true)}>Change</button>
+          </div>
+        ) : (
+          <ItemPicker items={items} categories={categories} currentId={item?.id} maxHeight={180}
+            onPick={(it) => { setItem(it); setPicking(false); }} onNew={() => setAdding(true)} />
+        )}
+      </div>
+      {adding && (
+        <ItemDialog projectId={projectId} categories={categories} onClose={() => setAdding(false)}
+          onCreated={(it) => { setAdding(false); setItem(it); setPicking(false); onItemCreated?.(it); }} />
+      )}
       {looking && <div className="dim" style={{ fontSize: 12 }}>Looking for {looking}.</div>}
       <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
         <div className="field" style={{ minWidth: 260 }}>
@@ -172,7 +196,7 @@ export default function SimilarDialog({ current, box, sheets, files, item, store
       {error && <div className="err-text" role="alert">{error}</div>}
       <div className="dialog-actions">
         <button className="btn btn-secondary" onClick={onClose} disabled={phase === 'write'}>Cancel</button>
-        <button className="btn btn-primary" onClick={() => void add()} disabled={busy || total === 0}>Add {plural(total, 'count')}</button>
+        <button className="btn btn-primary" onClick={() => void add()} disabled={busy || total === 0 || !item} title={item ? undefined : 'Pick what to count them as first'}>{item ? `Add ${plural(total, 'count')}` : 'Pick an item to add them'}</button>
       </div>
     </Dialog>
   );

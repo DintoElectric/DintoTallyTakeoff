@@ -15,6 +15,7 @@ import { extractPrims } from '../detect/primitives.ts';
 import { countGroupOf, GROUP_LABEL, GROUPS, type CountGroup } from '../../shared/countGroup.ts';
 import { buildSheetPdf, sheetPdfName, type CountList } from '../export/sheetPdf.ts';
 import ReadScheduleDialog from './ReadScheduleDialog.tsx';
+import { ItemPicker } from './ItemPicker.tsx';
 import { circuitStats, mainLabel, type Panel } from '../../shared/panels.ts';
 import { ceilingIndex, CEILING_LABEL, CEILING_TITLE, type Ceiling, type CeilingIndex } from '../detect/ceiling.ts';
 import { flushAll, getStore, useSheetStore } from './sheetStore.ts';
@@ -95,6 +96,8 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   // Read schedule: the boxes drawn so far (one per column, or one across them all), and whether the dialog is showing
   const [readBoxes, setReadBoxes] = useState<{ x0: number; y0: number; x1: number; y1: number }[]>([]);
   const [readOpen, setReadOpen] = useState(false);
+  const [source, setSource] = useState<'all' | 'auto' | 'manual'>('all');   // all counts, or only Auto-count's, or only those placed by hand
+  const [changing, setChanging] = useState<'selection' | 'review' | null>(null);   // the Change to picker that is open
   const [showAuto, setShowAuto] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [reviewId, setReviewId] = useState<string | null>(null);
@@ -186,22 +189,23 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
 
   const markers: MarkerData[] = useMemo(
     () => (hideMarkers ? [] : snap.dets)
-      .filter((d) => !onlyActive || d.item_type_id === activeItemId)
+      .filter((d) => (!onlyActive || d.item_type_id === activeItemId) && (source === 'all' || d.source === source))
       .map((d) => ({ id: d.id, x: d.x, y: d.y, itemId: d.item_type_id, flagged: d.status === 'unreviewed' && d.confidence !== null && d.confidence < threshold })),
-    [snap.dets, onlyActive, activeItemId, threshold, hideMarkers],
+    [snap.dets, onlyActive, activeItemId, threshold, hideMarkers, source],
   );
 
   // Counts are always derived from detections (never stored constants).
   const localByItem = useMemo(() => {
     const m = new Map<string, { n: number; flagged: number }>();
     for (const d of snap.dets) {
+      if (source !== 'all' && d.source !== source) continue;   // Auto-count's only, or hand-placed only
       const e = m.get(d.item_type_id) ?? { n: 0, flagged: 0 };
       e.n++;
       if (d.status === 'unreviewed' && d.confidence !== null && d.confidence < threshold) e.flagged++;
       m.set(d.item_type_id, e);
     }
     return m;
-  }, [snap.dets, threshold]);
+  }, [snap.dets, threshold, source]);
 
   const otherSheetCounts = useMemo(() => (countsQ.data?.counts ?? []).filter((c) => c.sheet_id !== sheetId), [countsQ.data, sheetId]);
 
@@ -433,6 +437,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       if (reviewing && current && !readOnly) {
         if (k === 'y') { reviewAct('confirm'); return; }
         if (k === 'n') { reviewAct('reject'); return; }
+        if (k === 'c') { e.preventDefault(); setChanging('review'); return; }   // change its type: the picker opens, its search box ready
       }
       // Each tool's letter is the first letter of what it does: Navigate, Select, Count, Find similar, Ignore area,
       // count Area, Erase (and H to hide markers).
@@ -597,6 +602,11 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             <button className={`btn btn-secondary`} onClick={() => setOnlyActive(!onlyActive)} aria-pressed={onlyActive} title="Show all markers, or only the active item's">
               <Stack size={14} /> {onlyActive && activeItem ? `Only ${activeItem.code}` : 'All items'}
             </button>
+            <div className="source-switch" role="radiogroup" aria-label="Which counts to show" title="All counts, only Auto-count's, or only those placed by hand (Count, Find similar)">
+              {([['all', 'All'], ['auto', 'Auto'], ['manual', 'Hand']] as const).map(([v, label]) => (
+                <button key={v} type="button" role="radio" aria-checked={source === v} className={source === v ? 'on' : ''} onClick={() => setSource(v)}>{label}</button>
+              ))}
+            </div>
           </div>
           <div className="canvas-wrap">
             {readBoxes.length > 0 && !readOpen && (
@@ -627,9 +637,8 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                   setReadOpen(true);
                 }}
                 onSimilarBox={(a, b) => {
-                  if (!activeItemId) return toast('Pick the item type on the right first: the symbols found are counted as it.');
                   if (Math.abs(a.x - b.x) < 0.002 || Math.abs(a.y - b.y) < 0.002) return toast('Drag a box around one symbol.');
-                  setSimilarBox({ a, b });
+                  setSimilarBox({ a, b });   // what to count them as is picked in the dialog (the active item to begin with)
                 }}
               />
             ) : (
@@ -791,13 +800,17 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                 <span style={{ flex: 1, whiteSpace: 'nowrap' }}>{selected.size} selected</span>
                 {!readOnly && (
                   <>
-                    <select className="input" style={{ width: 130, minHeight: 28 }} value="" aria-label="Change selected to…" onChange={(e) => { if (e.target.value) { store?.retype([...selected], e.target.value); } }}>
-                      <option value="">Change to…</option>
-                      {items.map((i) => <option key={i.id} value={i.id}>{i.code} · {i.name}</option>)}
-                    </select>
+                    <button className="btn btn-secondary" style={{ minHeight: 28, padding: '2px 10px' }} aria-expanded={changing === 'selection'} onClick={() => setChanging(changing === 'selection' ? null : 'selection')}>Change to…</button>
                     <button className="btn btn-secondary" style={{ minHeight: 28, padding: '2px 10px' }} onClick={deleteSelected}>Delete</button>
                   </>
                 )}
+            {selected.size > 0 && changing === 'selection' && !readOnly && (
+              <div className="change-panel">
+                <div className="dim" style={{ fontSize: 12 }}>Change the {plural(selected.size, 'selected count')} to:</div>
+                <ItemPicker items={items} categories={categories} onPick={(it) => { store?.retype([...selected], it.id); setChanging(null); toast(`${plural(selected.size, 'count')} changed to ${it.code}.`); }} />
+              </div>
+            )}
+            {source !== 'all' && <div className="hint">Showing only {source === 'auto' ? 'Auto-count’s counts' : 'counts placed by hand'} on this sheet. <button className="btn btn-ghost" style={{ padding: '0 6px' }} onClick={() => setSource('all')}>Show all</button></div>}
               </div>
             )}
             {tool === 'add' && !activeItem && items.length > 0 && <div className="hint">Pick an item type below, then click the drawing.</div>}
@@ -855,9 +868,11 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                   <button className="btn btn-primary" style={{ flex: 1 }} onClick={() => reviewAct('confirm')}>Confirm (Y)</button>
                   <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => reviewAct('reject')}>Not a device (N)</button>
                 </div>
-                <select className="input" aria-label="Change type (C)" value="" onChange={(e) => { if (e.target.value && current) { store?.retype([current.id], e.target.value); store?.setStatus([current.id], 'confirmed'); stepAfter(queue[reviewIndex + 1]?.id); } }}>
-                  <option value="">Change type…</option>{items.map((i) => <option key={i.id} value={i.id}>{i.code} · {i.name}</option>)}
-                </select>
+                <button className="btn btn-secondary" aria-expanded={changing === 'review'} onClick={() => setChanging(changing === 'review' ? null : 'review')}>Change type… (C)</button>
+                {changing === 'review' && current && (
+                  <ItemPicker items={items} categories={categories} currentId={current.item_type_id}
+                    onPick={(it) => { store?.retype([current.id], it.id); store?.setStatus([current.id], 'confirmed'); setChanging(null); stepAfter(queue[reviewIndex + 1]?.id); }} />
+                )}
                 <button className="btn btn-ghost" onClick={() => { setReviewing(false); setReviewId(null); }}>Stop reviewing</button>
               </div>
             ) : (
@@ -889,9 +904,9 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
           </div>
         </Dialog>
       )}
-      {similarBox && sheet && activeItem && (
+      {similarBox && sheet && (
         <SimilarDialog current={sheet} box={similarBox} sheets={sheets.filter((s) => s.count_enabled && s.kind !== 'schedule' && s.kind !== 'legend')} files={filesQ.data?.files ?? []}
-          item={activeItem} store={store} onClose={() => { setSimilarBox(null); setTool('select'); }} onDone={(m) => { setSimilarBox(null); setTool('select'); toast(m); void countsQ.reload(); void sheetsQ.reload(); }} />
+          item={activeItem ?? null} items={items} categories={categories} projectId={projectId} onItemCreated={(it) => { setActiveItemId(it.id); void itemsQ.reload(); }} store={store} onClose={() => { setSimilarBox(null); setTool('select'); }} onDone={(m) => { setSimilarBox(null); setTool('select'); toast(m); void countsQ.reload(); void sheetsQ.reload(); }} />
       )}
       {showItemDialog && (
         <ItemDialog projectId={projectId} categories={categories} onClose={() => setShowItemDialog(false)} onCreated={(it) => { setShowItemDialog(false); setActiveItemId(it.id); void itemsQ.reload(); }} />
