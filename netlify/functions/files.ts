@@ -246,9 +246,9 @@ export default handle(async (req: Request, _ctx: Context) => {
     return json({ ok: true });
   }
 
-  // DELETE /api/files/:id  (admin; removes the set, its sheets and detections)
+  // DELETE /api/files/:id  (estimator or admin; removes the set, its sheets and detections)
   if (!action && req.method === 'DELETE') {
-    await requireRole('admin');
+    await requireRole('estimator');
     let f: FileRow;
     try {
       f = await loadFile(fileId);

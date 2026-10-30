@@ -53,6 +53,8 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
   const [autoOpen, setAutoOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [finderOpen, setFinderOpen] = useState(false); // Read schedules: the sheets with schedules, to box
+  const [picked, setPicked] = useState<Set<string>>(new Set());   // drawings ticked for deleting
+  const [delSheets, setDelSheets] = useState(false);
   const [schedSheetsOpen, setSchedSheetsOpen] = useState(false);
   const [dupOpen, setDupOpen] = useState(false);
   const cats = useFetch<{ categories: CategoryRow[] }>(`/categories?project=${projectId}`);
@@ -159,7 +161,7 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
                   <div className="dim" style={{ fontSize: 11 }}>{plural(f.page_count ?? 0, 'page')} · {fmtBytes(f.size_bytes)}</div>
                 </div>
                 <span className="muted" style={{ fontSize: 12 }}>{plural(f.page_count ?? 0, 'sheet')} indexed</span>
-                {isAdmin && <button className="btn btn-ghost btn-icon" aria-label={`Delete ${f.file_name}`} onClick={() => setConfirmDelete(f)}><Trash size={16} /></button>}
+                {canEdit && <button className="btn btn-ghost btn-icon" aria-label={`Delete ${f.file_name}`} title="Delete this drawing set (all its sheets)" onClick={() => setConfirmDelete(f)}><Trash size={16} /></button>}
               </div>
             ))}
           </div>
@@ -172,10 +174,26 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
             </div>
           )}
 
+          {canEdit && sheets.length > 0 && (
+            <div className="row sheet-pick-bar">
+              {picked.size > 0
+                ? <><span className="num"><b>{picked.size}</b> selected</span>
+                    <button className="btn btn-secondary" onClick={() => setDelSheets(true)}><Trash size={14} /> Delete selected</button>
+                    <button className="btn btn-ghost" onClick={() => setPicked(new Set())}>Clear</button></>
+                : <span className="dim">Tick drawings to delete them from the project.</span>}
+              <span style={{ flex: 1 }} />
+              {picked.size < sheets.length && <button className="btn btn-ghost" onClick={() => setPicked(new Set(sheets.map((x) => x.id)))}>Select all</button>}
+            </div>
+          )}
           {view === 'grid' ? (
             <div className="sheet-grid">
               {sheets.map((s) => (
-                <div key={s.id} className={`sheet-card${s.count_enabled ? ' on' : ''}`}>
+                <div key={s.id} className={`sheet-card${s.count_enabled ? ' on' : ''}${picked.has(s.id) ? ' picked' : ''}`}>
+                  {canEdit && (
+                    <label className="sheet-pick" title="Select this drawing">
+                      <input type="checkbox" aria-label={`Select ${s.number ?? `page ${s.page}`}`} checked={picked.has(s.id)} onChange={() => setPicked((cur) => { const n = new Set(cur); if (n.has(s.id)) n.delete(s.id); else n.add(s.id); return n; })} />
+                    </label>
+                  )}
                   {/* the thumbnail opens that drawing; the number and title below still edit in place */}
                   <button type="button" className="thumb thumb-open" onClick={() => navigate(paths.sheet(projectId, s.id))} aria-label={`Open sheet ${s.number ?? `page ${s.page}`}`} title="Open this drawing">
                     <img src={`/api/sheets/${s.id}/thumb`} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }} />
@@ -202,10 +220,13 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
           ) : (
             sheets.length > 0 && (
               <table className="table">
-                <thead><tr><th>Page</th><th>Number</th><th>Title</th><th>Kind</th><th>Floor</th><th>Count</th><th className="right">Counted</th><th /></tr></thead>
+                <thead><tr>
+                  {canEdit && <th style={{ width: 32 }}><input type="checkbox" aria-label="Select all drawings" checked={picked.size === sheets.length} ref={(el) => { if (el) el.indeterminate = picked.size > 0 && picked.size < sheets.length; }} onChange={(e) => setPicked(e.target.checked ? new Set(sheets.map((x) => x.id)) : new Set())} /></th>}
+                  <th>Page</th><th>Number</th><th>Title</th><th>Kind</th><th>Floor</th><th>Count</th><th className="right">Counted</th><th /></tr></thead>
                 <tbody>
                   {sheets.map((s) => (
                     <tr key={s.id}>
+                      {canEdit && <td><input type="checkbox" aria-label={`Select ${s.number ?? `page ${s.page}`}`} checked={picked.has(s.id)} onChange={() => setPicked((cur) => { const n = new Set(cur); if (n.has(s.id)) n.delete(s.id); else n.add(s.id); return n; })} /></td>}
                       <td className="num">{s.page}</td>
                       <td style={{ width: 120 }}><TextCell className="t1" label="Sheet number" value={s.number} disabled={!canEdit} onSave={(v) => patch(s, { number: v })} /></td>
                       <td><TextCell className="t2" label="Sheet title" value={s.title} disabled={!canEdit} onSave={(v) => patch(s, { title: v })} /></td>
@@ -268,10 +289,14 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
         <AutoCountDialog projectId={projectId} sheets={enabled} items={items.data?.items ?? []} onClose={() => setAutoOpen(false)}
           onDone={(msg) => { setAutoOpen(false); toast(msg); void sheetsQ.reload(); void items.reload(); void project.reload(); const first = enabled[0]; if (first) navigate(paths.sheet(projectId, first.id)); }} />
       )}
+      {delSheets && (
+        <DeleteSheetsDialog sheets={sheets.filter((x) => picked.has(x.id))} onClose={() => setDelSheets(false)}
+          onDone={(msg) => { setDelSheets(false); setPicked(new Set()); toast(msg); void files.reload(); void sheetsQ.reload(); void project.reload(); }} />
+      )}
       {confirmDelete && (
         <Dialog title="Delete drawing set" onClose={() => setConfirmDelete(null)}>
           <div className="dialog-title">Delete “{confirmDelete.file_name}”?</div>
-          <div className="dialog-body">This removes the file, its sheets and every count on them. It can't be undone.</div>
+          <div className="dialog-body">This removes the file, its {plural(sheets.filter((x) => x.file_id === confirmDelete.id).length, 'sheet')} and every count on them ({plural(sheets.filter((x) => x.file_id === confirmDelete.id).reduce((n, x) => n + x.detection_count, 0), 'count')}). It can't be undone.</div>
           <div className="dialog-actions">
             <button className="btn btn-secondary" onClick={() => setConfirmDelete(null)}>Cancel</button>
             <button className="btn btn-primary" onClick={async () => {
@@ -282,5 +307,49 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
         </Dialog>
       )}
     </>
+  );
+}
+
+/** Deleting drawings from the project: their counts go with them; a PDF goes once its last sheet is deleted. */
+function DeleteSheetsDialog({ sheets, onClose, onDone }: { sheets: SheetRow[]; onClose: () => void; onDone: (msg: string) => void }) {
+  const [typed, setTyped] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const counts = sheets.reduce((n, s) => n + s.detection_count, 0);
+  const ok = counts === 0 || typed.trim().toLowerCase() === 'delete';
+  const name = (s: SheetRow) => s.number ?? `Page ${s.page}`;
+  const go = async () => {
+    setErr(null);
+    let done = 0, files = 0;
+    try {
+      for (const s of sheets) {
+        setBusy(`Deleting ${done + 1} of ${sheets.length}…`);
+        const r = await api<{ ok: boolean; file_removed?: boolean }>(`/sheets/${s.id}`, { method: 'DELETE' });
+        done++; if (r.file_removed) files++;
+      }
+      onDone(`Deleted ${plural(done, 'drawing')}${counts ? ` and ${plural(counts, 'count')}` : ''}${files ? `; ${plural(files, 'PDF')} with no sheets left ${files === 1 ? 'was' : 'were'} removed` : ''}.`);
+    } catch (e) {
+      setErr(`${e instanceof ApiError ? e.message : 'Deleting stopped.'}${done ? ` ${plural(done, 'drawing')} ${done === 1 ? 'was' : 'were'} deleted before that.` : ''}`);
+      setBusy(null);
+    }
+  };
+  return (
+    <Dialog title="Delete drawings" onClose={busy ? () => undefined : onClose}>
+      <div className="dialog-title">Delete {plural(sheets.length, 'drawing')} from the project?</div>
+      <div className="dialog-body stack" style={{ gap: 10 }}>
+        <div>{sheets.slice(0, 10).map(name).join(', ')}{sheets.length > 10 ? `, and ${sheets.length - 10} more` : ''}.</div>
+        <div>{counts ? <>Every count on {sheets.length === 1 ? 'it' : 'them'} goes too: <b>{plural(counts, 'count')}</b>. </> : 'There are no counts on them. '}A drawing set's PDF is removed once its last sheet is deleted. This can't be undone.</div>
+        {counts > 0 && (
+          <label className="field"><span>To confirm, type <b>delete</b></span>
+            <input className="input" autoFocus value={typed} onChange={(e) => setTyped(e.target.value)} aria-label="Type delete to confirm" autoComplete="off" />
+          </label>
+        )}
+        {err && <div className="err-text" role="alert">{err}</div>}
+      </div>
+      <div className="dialog-actions">
+        <button className="btn btn-secondary" onClick={onClose} disabled={!!busy}>Cancel</button>
+        <button className="btn btn-primary" onClick={() => void go()} disabled={!ok || !!busy}>{busy ?? `Delete ${plural(sheets.length, 'drawing')}`}</button>
+      </div>
+    </Dialog>
   );
 }

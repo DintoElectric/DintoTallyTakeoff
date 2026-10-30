@@ -44,9 +44,10 @@ export default handle(async (req: Request, _ctx: Context) => {
       if (!r.rows[0]) throw notFound('That sheet');
       return json({ sheet: r.rows[0] });
     }
-    // DELETE /api/sheets/:id (admin): remove one sheet with its counts and areas. Used to remove duplicate drawings.
+    // DELETE /api/sheets/:id (estimator or admin): remove one sheet with its counts and areas (deleting drawings from a
+    // project, and removing duplicates).
     if (req.method === 'DELETE') {
-      await requireRole('admin');
+      await requireRole('estimator');
       const r = await pool.query(`select file_id, project_id from sheets where id = $1`, [id]);
       if (!r.rows[0]) return json({ ok: true, file_removed: false });   // already gone is success
       const { file_id: fileId, project_id: projectId } = r.rows[0] as { file_id: string; project_id: string };
