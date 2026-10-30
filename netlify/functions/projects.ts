@@ -8,12 +8,25 @@ import { chunkKeys, deleteKeys, keys } from './_lib/blobs.ts';
 import type { ExportData } from '../../shared/types.ts';
 import { areaNames, assignAreas, type AreaRow } from '../../shared/areas.ts';
 
+/** The job a project goes in (it must exist), or none. */
+async function jobOrNull(sql: ReturnType<typeof db>['sql'], v: unknown): Promise<string | null> {
+  if (v === null || v === undefined || v === '') return null;
+  const id = uuid(v, 'Job');
+  const [j] = await sql<{ id: string }>`select id from jobs where id = ${id}`;
+  if (!j) throw new HttpError(400, 'That job no longer exists.');
+  return id;
+}
+/** The system a workspace counts (its Auto-count and counts panel start on it), or none. */
+function systemOrNull(v: unknown): string | null {
+  return v === null || v === undefined || v === '' ? null : oneOf(v, ['lighting', 'power', 'fire_alarm', 'hvac', 'telecom', 'security', 'other'] as const, 'System');
+}
+
 async function listProjects(id: string | null) {
   const sql = db().sql;
   return sql<any>`
     select p.id, p.name, p.location, p.client,
            to_char(p.bid_due, 'YYYY-MM-DD') as bid_due,
-           p.status, p.review_threshold, p.created_by_name, p.created_at,
+           p.status, p.review_threshold, p.created_by_name, p.created_at, p.job_id, p.system,
            coalesce(s.sheet_count, 0)::int as sheet_count,
            coalesce(d.n, 0)::int as items_counted,
            (case when coalesce(s.enabled, 0) = 0 then 0
@@ -47,12 +60,13 @@ export default handle(async (req: Request, _ctx: Context) => {
     if (req.method === 'POST') {
       const actor = await requireRole('estimator');
       const b = await readJson(req);
-      onlyKeys(b, ['name', 'location', 'client', 'bid_due']);
+      onlyKeys(b, ['name', 'location', 'client', 'bid_due', 'job_id', 'system']);
       const name = reqStr(b.name, 'Project name');
+      const jobId = await jobOrNull(sql, b.job_id);
       const [row] = await sql<{ id: string }>`
-        insert into projects (name, location, client, bid_due, created_by, created_by_name)
+        insert into projects (name, location, client, bid_due, created_by, created_by_name, job_id, system)
         values (${name}, ${str(b.location, 'Location')}, ${str(b.client, 'Client')},
-                ${dateOnly(b.bid_due, 'Bid due')}, ${actor.id}, ${actor.name})
+                ${dateOnly(b.bid_due, 'Bid due')}, ${actor.id}, ${actor.name}, ${jobId}, ${systemOrNull(b.system)})
         returning id`;
       const [project] = await listProjects(row.id);
       return json({ project }, 201);
@@ -71,8 +85,8 @@ export default handle(async (req: Request, _ctx: Context) => {
     if (req.method === 'PATCH') {
       await requireRole('estimator');
       const b = await readJson(req);
-      onlyKeys(b, ['name', 'location', 'client', 'bid_due', 'status', 'review_threshold']);
-      const [cur] = await sql<any>`select name, location, client, to_char(bid_due,'YYYY-MM-DD') as bid_due, status, review_threshold from projects where id = ${id} and archived_at is null`;
+      onlyKeys(b, ['name', 'location', 'client', 'bid_due', 'status', 'review_threshold', 'job_id', 'system']);
+      const [cur] = await sql<any>`select name, location, client, to_char(bid_due,'YYYY-MM-DD') as bid_due, status, review_threshold, job_id, system from projects where id = ${id} and archived_at is null`;
       if (!cur) throw notFound('That project');
       const name = 'name' in b ? reqStr(b.name, 'Project name') : cur.name;
       const location = 'location' in b ? str(b.location, 'Location') : cur.location;
@@ -80,8 +94,10 @@ export default handle(async (req: Request, _ctx: Context) => {
       const bidDue = 'bid_due' in b ? dateOnly(b.bid_due, 'Bid due') : cur.bid_due;
       const status = 'status' in b ? oneOf(b.status, ['splitting', 'counting', 'in_review', 'exported'] as const, 'Status') : cur.status;
       const thr = 'review_threshold' in b ? num(b.review_threshold, 'Review threshold', 0, 1) : cur.review_threshold;
+      const jobId = 'job_id' in b ? await jobOrNull(sql, b.job_id) : cur.job_id;
+      const system = 'system' in b ? systemOrNull(b.system) : cur.system;
       await sql`update projects set name = ${name}, location = ${location}, client = ${client},
-                bid_due = ${bidDue}, status = ${status}, review_threshold = ${thr}, updated_at = now()
+                bid_due = ${bidDue}, status = ${status}, review_threshold = ${thr}, job_id = ${jobId}, system = ${system}, updated_at = now()
                 where id = ${id}`;
       const [project] = await listProjects(id);
       return json({ project });

@@ -82,7 +82,11 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [tab, setTab] = useState<'counts' | 'panels' | 'conduit'>('counts');
   const isItemTab = tab === 'counts';
   // The system shown: its items in the list and its counts on the drawing (Lighting takes fixtures and their controls).
-  const [system, setSystem] = useState<'all' | SystemKey>('all');
+  const [system, setSystemState] = useState<'all' | SystemKey>('all');
+  const systemPicked = useRef(false);
+  const setSystem = (k: 'all' | SystemKey) => { systemPicked.current = true; setSystemState(k); };
+  // a project that counts one system starts on it (until another chip is picked)
+  useEffect(() => { const k = project.data?.project.system; if (k && !systemPicked.current) setSystemState(k); }, [project.data?.project.system]);
   // The counts panel's width: drag its left edge (remembered), so long descriptions are not cut off.
   const [panelW, setPanelW] = useState(() => { try { const v = Number(localStorage.getItem('tally.panelWidth')); return v >= 300 && v <= 1200 ? v : 340; } catch { return 340; } });
   const savePanelW = (w: number) => { setPanelW(w); try { localStorage.setItem('tally.panelWidth', String(Math.round(w))); } catch { /* not remembered */ } };
@@ -1039,7 +1043,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
         <ItemDialog projectId={projectId} categories={categories} onClose={() => setShowItemDialog(false)} onCreated={(it) => { setShowItemDialog(false); setActiveItemId(it.id); void itemsQ.reload(); }} />
       )}
       {showAuto && sheet && (
-        <AutoCountDialog projectId={projectId} sheets={[sheet]} items={items} onClose={() => setShowAuto(false)}
+        <AutoCountDialog projectId={projectId} sheets={[sheet]} items={items} system={system !== 'all' ? system : null} onClose={() => setShowAuto(false)}
           onDone={(msg) => { setShowAuto(false); toast(msg); void itemsQ.reload(); void countsQ.reload(); void sheetsQ.reload(); void getStore(sheetId).load(true); }} />
       )}
       {autoItem && (

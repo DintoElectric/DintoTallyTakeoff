@@ -31,6 +31,8 @@ export interface ProjectRow {
   sheet_count: number;
   items_counted: number;
   progress: number; // 0..1, reviewed sheets / sheets enabled for counting
+  job_id?: string | null;   // the job (folder) it is in
+  system?: 'lighting' | 'power' | 'fire_alarm' | 'hvac' | 'telecom' | 'security' | 'other' | null;   // the system this workspace counts
 }
 
 export interface DrawingFileRow {
@@ -124,3 +126,6 @@ export interface ExportData {
   areas?: AreaRow[]; // named count areas (absent on older servers)
   panels?: import('./panels.ts').Panel[]; // panels with their circuits (absent on older servers)
 }
+
+/** A job: a folder on the home page grouping its workspaces (projects). */
+export interface JobRow { id: string; name: string; created_by_name: string | null; created_at: string; project_count: number }

@@ -1517,3 +1517,10 @@ test('systems: worked out from kind, category and description; set by hand wins'
   assert.equal(s(it('E40', 'Drawing note E40', 'NOTE')), 'other');
   assert.equal(s(it('P', '125/250V, 3P, 4W W/ GROUND - 50A', 'SPR', 'device', 'hvac')), 'hvac');   // set by hand
 });
+test('counting one system: only its items\' earlier counts are erased or removed; another system\'s are never touched', () => {
+  const det = (id: string, item: string, x = 0.5) => ({ id, sheet_id: 'S', item_type_id: item, x, y: 0.5, status: 'unreviewed', source: 'auto', confidence: 0.9 }) as never;
+  const zone = [{ points: [{ x: 0.8, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0.8, y: 1 }] }];
+  const plan = planSheetWrite({ hits: [], zones: zone, existing: [det('a', 'FIX-P'), det('b', 'REC-P'), det('c', 'REC-P', 0.9)], itemIdByCode: new Map(), ambiguous: new Set(),
+    clearItemIds: new Set(['FIX-P', 'REC-P']), reset: 'auto', ignorePast: true, scopeItemIds: new Set(['FIX-P']), newId: () => 'n' });
+  assert.deepEqual(plan.ops.filter((o) => o.op === 'delete').map((o) => (o as { id: string }).id), ['a']);   // the receptacle's counts stay, even past the matchline
+});

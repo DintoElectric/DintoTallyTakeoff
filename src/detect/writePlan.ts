@@ -26,6 +26,11 @@ export interface PlanInput {
   dropItemIds?: Set<string>;
   /** Start fresh: erase every earlier automatic count on the sheet ('auto'), or every count including hand-placed ones ('all'). */
   reset?: false | 'auto' | 'all';
+  /**
+   * Counting one system (or one item): only these items' earlier counts may be erased or removed; every other item's counts
+   * on the sheet are left exactly as they are, whatever else is asked.
+   */
+  scopeItemIds?: Set<string>;
   ignorePast: boolean;
   /** Leave out the lettered and numbered grid-line bubbles: no new counts on them, and earlier automatic counts on them go. */
   leaveOutGrid?: boolean;
@@ -42,6 +47,7 @@ export function planSheetWrite(p: PlanInput): Plan {
   const tickedItems = new Set(p.itemIdByCode.values());
   const keep: Detection[] = [];
   for (const d of p.existing) {
+    if (p.scopeItemIds && !p.scopeItemIds.has(d.item_type_id)) continue;   // another system's count: never touched
     if (p.reset === 'all' || (p.reset === 'auto' && d.source === 'auto')) {
       // Starting fresh: everything earlier of this kind goes, whatever its status.
       ops.push({ op: 'delete', id: d.id });

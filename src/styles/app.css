@@ -310,3 +310,9 @@ th.right { text-align: right; }
 .item-row .n1 { white-space: normal; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.3; overflow-wrap: anywhere; }
 .picker-name { white-space: normal; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.3; overflow-wrap: anywhere; }
 .picker-row { align-items: flex-start; }
+
+/* the home page: projects under their job folders */
+.job-row td { background: var(--color-neutral-900); cursor: pointer; padding-top: 8px; padding-bottom: 8px; }
+.job-row.none td { cursor: default; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.job-row .job-name { font-weight: 600; font-size: 14px; }
+tr.in-job td:first-child { padding-left: 34px; }

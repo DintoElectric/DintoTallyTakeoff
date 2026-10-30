@@ -8,6 +8,7 @@ import { lengthFeetFromText, measuredOnPlans } from '../detect/lengthText.ts';
 import { countGroupOf, type CountGroup } from '../../shared/countGroup.ts';
 
 import { planGroup as sheetGroup } from '../../shared/sheetKinds.ts';
+import { SYSTEMS, SYSTEM_LABEL, systemOf, type SystemKey } from '../../shared/systems.ts';
 
 // A count of a fixture measured on the plan goes to the item for its length ("P 7'"): its key is the code, this, the feet.
 const LENGTH_KEY = '\u0002';
@@ -16,12 +17,19 @@ import { EMERGENCY_KEY, discoverMarkers, emergencyCode, isEmergency, parseCustom
 import { flushAll, getStore } from './sheetStore.ts';
 
 /** Scans sheets for tags, shows what was found, then counts the ones you choose. */
-export default function AutoCountDialog({ projectId, sheets, items, onlyItem, onClose, onDone }: {
+export default function AutoCountDialog({ projectId, sheets, items, onlyItem, system, onClose, onDone }: {
   projectId: string; sheets: SheetRow[]; items: ItemTypeRow[]; onClose: () => void; onDone: (summary: string) => void;
   /** Count only this item, across the sheets: its code only, as this item, replacing only its own earlier automatic counts. */
   onlyItem?: ItemTypeRow | null;
+  /** The system to count to begin with (the one shown in the counts panel, or the project's); the estimator can change it. */
+  system?: SystemKey | null;
 }) {
   const only = onlyItem ? onlyItem.code.toUpperCase() : null;
+  // Counting one system: only codes whose library items are in it, on its kind of plan; only its earlier counts are replaced.
+  const [sys, setSys] = useState<'all' | SystemKey>(onlyItem ? 'all' : system ?? 'all');
+  const [cats, setCats] = useState<CategoryRow[]>([]);
+  useEffect(() => { void api<{ categories: CategoryRow[] }>(`/categories?project=${projectId}`).then((r) => setCats(r.categories)).catch(() => undefined); }, [projectId]);
+  const sysOfItem = (it: ItemTypeRow) => systemOf(it, cats);
   const [phase, setPhase] = useState<'scan' | 'pick' | 'write'>('scan');
   const [progress, setProgress] = useState({ done: 0, total: sheets.length, label: '' });
   const [scans, setScans] = useState<SheetScan[]>([]);
@@ -33,7 +41,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
   const [ignorePast, setIgnorePast] = useState(true);
   const [leaveOutGrid, setLeaveOutGrid] = useState(true); // grid-line bubbles (D, F, 4, E.2 ...) are not fixtures
   // What is already counted on these sheets, so a re-run can start fresh.
-  const [existing, setExisting] = useState<Map<string, { auto: number; confirmed: number; manual: number }>>(new Map());
+  const [existing, setExisting] = useState<Map<string, { auto: number; confirmed: number; manual: number; list?: { item: string; source: string; status: string }[] }>>(new Map());
   const [resetAuto, setResetAuto] = useState(true);
   const [resetManual, setResetManual] = useState(false);
   const [markers, setMarkers] = useState<Set<string>>(new Set()); // confirmed emergency label patterns
@@ -78,6 +86,20 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
       .sort((a, b) => rank(a) - rank(b) || b.total - a.total || a.code.localeCompare(b.code));
   }, [effective, byCode, showShort, only]);
   const shortRows = useMemo(() => discover(effective).filter((r) => r.kind === 'short' && !byCode.has(r.code.toUpperCase())), [effective, byCode]);
+  // the systems a code belongs to: its library items' (a switch is lighting; a note other; a camera security; an outlet telecom)
+  const codeSystems = (r: CodeRow): Set<SystemKey> =>
+    r.kind === 'switch' ? new Set(['lighting']) : r.kind === 'note' ? new Set(['other']) : r.kind === 'camera' ? new Set(['security']) : r.kind === 'outlet' ? new Set(['telecom'])
+      : new Set((byCode.get(r.code.toUpperCase()) ?? []).map(sysOfItem));
+  const inSys = (r: CodeRow) => sys === 'all' || codeSystems(r).has(sys);
+  const sysRows = useMemo(() => (sys === 'all' ? rows : rows.filter(inSys)), [rows, sys, cats, byCode]); // eslint-disable-line react-hooks/exhaustive-deps
+  const leftOutNew = sys === 'all' ? 0 : rows.filter((r) => !inSys(r) && !byCode.has(r.code.toUpperCase()) && (r.kind === 'tag' || r.kind === 'short')).length;
+  // the ticks the scan chose; picking a system keeps only its codes (All brings them all back)
+  const defaults = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (only || !defaults.current.size) return;
+    const byRow = new Map(discover(effective).map((r) => [r.code, r]));
+    setInc(new Set([...defaults.current].filter((c) => { const r = byRow.get(c); return !r || inSys(r); })));
+  }, [sys, cats]); // eslint-disable-line react-hooks/exhaustive-deps
   const shortMarks = shortRows.reduce((n, r) => n + r.total, 0);
 
   // Emergency markers: found from the labels beside fixtures, confirmed by the estimator.
@@ -89,7 +111,12 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
     for (const sc of effective) for (const h of sc.hits) if ((h.kind === 'tag' || h.kind === 'short') && isEmergency(h, activeMarkers)) m.set(h.code, (m.get(h.code) ?? 0) + 1);
     return m;
   }, [effective, activeMarkers]);
-  const exTotals = useMemo(() => [...existing.values()].reduce((a, v) => ({ auto: a.auto + v.auto, confirmed: a.confirmed + v.confirmed, manual: a.manual + v.manual }), { auto: 0, confirmed: 0, manual: 0 }), [existing]);
+  const sysItemIds = useMemo(() => (sys === 'all' ? null : new Set(items.filter((it) => sysOfItem(it) === sys).map((it) => it.id))), [sys, items, cats]); // eslint-disable-line react-hooks/exhaustive-deps
+  const exTotals = useMemo(() => [...existing.values()].reduce((a, v) => {
+    if (!sysItemIds || !v.list) return { auto: a.auto + v.auto, confirmed: a.confirmed + v.confirmed, manual: a.manual + v.manual };
+    const l = v.list.filter((d) => sysItemIds.has(d.item));   // counting one system: its own earlier counts only
+    return { auto: a.auto + l.filter((d) => d.source === 'auto').length, confirmed: a.confirmed + l.filter((d) => d.source === 'auto' && d.status === 'confirmed').length, manual: a.manual + l.filter((d) => d.source === 'manual').length };
+  }, { auto: 0, confirmed: 0, manual: 0 }), [sysItemIds, existing]);
   const emTotal = [...emByCode.values()].reduce((a, b) => a + b, 0);
   // A fixture type is split into normal and emergency when it has emergency fixtures, unless it is an exit sign
   // (always emergency), has several library variants already, or the estimator turned the split off.
@@ -98,7 +125,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
   // descriptions in the fixture schedule); a receptacle or a switch with the same code is not a variant.
   const fixtureOf = (code: string) => { const v = byCode.get(code.toUpperCase()) ?? []; return v.find((it) => countGroupOf(it, []) === 'fixture') ?? v[0]; };
   const variants = (code: string) => { const f = fixtureOf(code); return (byCode.get(code.toUpperCase()) ?? []).filter((it) => it.category_id === f?.category_id).length; };
-  const splits = (code: string) => (emByCode.get(code) ?? 0) > 0 && !splitOff.has(code) && variants(code) <= 1 && !/^XL/i.test(code);
+  const splits = (code: string) => (sys === 'all' || sys === 'lighting') && (emByCode.get(code) ?? 0) > 0 && !splitOff.has(code) && variants(code) <= 1 && !/^XL/i.test(code);
 
   useEffect(() => {
     let off = false;
@@ -116,16 +143,19 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
         const lib = found.filter((r) => r.kind !== 'room' && r.kind !== 'note' && r.kind !== 'camera' && r.kind !== 'outlet' && r.kind !== 'switch' && byCode.has(r.code.toUpperCase()));
         setLibraryDriven(lib.length > 0);
         const notes = found.filter((r) => r.kind === 'note' || r.kind === 'camera' || r.kind === 'outlet' || r.kind === 'switch'); // drawing notes, cameras, triangle outlets and switches are always counted
-        setInc(new Set(only ? found.filter((r) => r.code.toUpperCase() === only).map((r) => r.code) : [...(lib.length > 0 ? lib : found.filter((r) => r.kind === 'tag')), ...notes].map((r) => r.code)));
+        const first = new Set(only ? found.filter((r) => r.code.toUpperCase() === only).map((r) => r.code) : [...(lib.length > 0 ? lib : found.filter((r) => r.kind === 'tag')), ...notes].map((r) => r.code));
+        defaults.current = first;
+        setInc(new Set(sys === 'all' || only ? first : [...first].filter((c) => { const r = found.find((x) => x.code === c); return !r || inSys(r); })));
         if (only) { setResetAuto(false); setResetManual(false); }   // one item: never a fresh start of the whole sheet
         // Only markers with a normal twin are pre-ticked; "possible" ones (no twin) are left for the estimator.
         setMarkers(new Set(discoverMarkers(res.flatMap((sc) => sc.hits.filter((h) => !h.past))).filter((c) => c.partner !== null || c.likely).map((c) => c.pattern)));
         // How many counts are already there (so the estimator sees exactly what a fresh start erases).
         try {
-          const ex = new Map<string, { auto: number; confirmed: number; manual: number }>();
+          const ex = new Map<string, { auto: number; confirmed: number; manual: number; list?: { item: string; source: string; status: string }[] }>();
           await Promise.all(res.filter((sc) => !sc.error).map(async (sc) => {
             const r = await api<{ detections: Detection[] }>(`/sheets/${sc.sheet.id}/detections`);
             ex.set(sc.sheet.id, {
+              list: r.detections.map((d) => ({ item: d.item_type_id, source: d.source, status: d.status })),
               auto: r.detections.filter((d) => d.source === 'auto').length,
               confirmed: r.detections.filter((d) => d.source === 'auto' && d.status === 'confirmed').length,
               manual: r.detections.filter((d) => d.source === 'manual').length,
@@ -155,6 +185,13 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
       const ambiguous = new Set<string>();
       for (const r of rows.filter((x) => inc.has(x.code))) {
         if (only && onlyItem && r.code.toUpperCase() === only) { resolved.set(r.code, onlyItem); continue; }   // counted as this item, whatever else shares its code
+        if (sys !== 'all' && r.kind !== 'switch') {
+          // counting one system: a shared code (a fixture P and a receptacle P) counts as that system's item
+          const mine = (byCode.get(r.code.toUpperCase()) ?? []).filter((it) => sysOfItem(it) === sys);
+          // (in Lighting, a plain tag shared by a fixture and a control is the fixture: a switch's letters are read as $D2)
+          const pick = mine.length === 1 ? mine : sys === 'lighting' ? mine.filter((it) => countGroupOf(it, []) === 'fixture') : [];
+          if (pick.length === 1) { resolved.set(r.code, pick[0]); continue; }
+        }
         if (r.kind === 'switch') {
           // A lighting control switch ($D2): an item coded "$D2", else the D2 in a lighting control category (not fixture D2),
           // else a new "$D2" in Lighting controls.
@@ -292,9 +329,17 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
       let total = 0, removedPast = 0, removedGrid = 0, removedShort = 0, erased = 0, skipped = 0;
       const reset: false | 'auto' | 'all' = only ? false : resetAuto ? (resetManual ? 'all' : 'auto') : false;
       let i = 0;
+      // Counting one system (or one item): only its items' earlier counts can be replaced or erased; every other item's stay.
+      const scope = only && onlyItem ? new Set([onlyItem.id, ...clearIds])
+        : sys !== 'all' ? new Set([...items.filter((it) => sysOfItem(it) === sys).map((it) => it.id), ...[...resolved.values()].map((it) => it.id)]) : undefined;
+      if (scope) for (const id of [...clearIds]) if (!scope.has(id)) clearIds.delete(id);
+      // ... and only on its kind of plan (a lighting count on lighting plans); sheets whose title says neither are counted
+      const want = sys === 'lighting' ? 'fixture' : sys === 'fire_alarm' ? 'fire_alarm' : sys === 'all' || sys === 'other' ? null : 'device';
+      let otherKind = 0;
       for (const sc of scans) {
         i++;
         if (sc.error) { skipped++; continue; } // a sheet that could not be read is left exactly as it was
+        if (want && sheetGroup(sc.sheet) && sheetGroup(sc.sheet) !== want) { otherKind++; continue; }   // another system's plan
         setStatus(`Saving counts: sheet ${i} of ${scans.length}…`);
         // Fixtures of a split type go to their normal or emergency item, and measured ones to the item for their length.
         const hits = sc.hits.map(route);
@@ -308,7 +353,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
             if (fits.length === 1) { sheetResolved.set(code, fits[0]); sheetAmbiguous.delete(code); }
           }
         }
-        const r = await writeSheet({ ...sc, hits }, sheetResolved, writeInc, { ambiguous: sheetAmbiguous, clearItemIds: clearIds, reset, ignorePast, leaveOutGrid });
+        const r = await writeSheet({ ...sc, hits }, sheetResolved, writeInc, { ambiguous: sheetAmbiguous, clearItemIds: clearIds, scopeItemIds: scope, reset, ignorePast, leaveOutGrid });
         total += r.added;
         removedPast += r.removedPast;
         removedGrid += r.removedGrid;
@@ -317,14 +362,14 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
       }
       // Sheets already open in this session must show the new counts, not a cached copy.
       await Promise.all(scans.map((sc) => getStore(sc.sheet.id).load(true)));
-      onDone(`Counted ${plural(total, 'item')} across ${plural(scans.length, 'sheet')}.${erased ? ` Erased ${plural(erased, 'earlier count')} first.` : ''}${skipped ? ` ${plural(skipped, 'sheet')} could not be read and was left as it was.` : ''}${removedGrid ? ` Removed ${plural(removedGrid, 'earlier count')} that sat on grid-line bubbles.` : ''}${removedPast ? ` Removed ${plural(removedPast, 'earlier count')} that lay past matchlines.` : ''}${removedShort ? ` Removed ${plural(removedShort, 'earlier short-code count')}.` : ''}${ambiguous.size ? ` ${[...ambiguous].join(', ')} ${ambiguous.size === 1 ? 'has' : 'have'} several variants: review those and move each to the right item.` : ''} ${emKeys.size ? ` Emergency fixtures were counted under their own items (${[...emKeys].map((k) => emergencyCode(k.replace(EMERGENCY_KEY, ''), activeMarkers)).slice(0, 6).join(', ')}${emKeys.size > 6 ? '…' : ''}).` : ''} Counts are unreviewed until you confirm them.${lenKeys.size ? ` Measured fixtures went to ${plural(lenKeys.size, 'length item')}${lenCreated ? ` (${lenCreated} new)` : ''}.` : ''}${lenFilled ? ` Set the stated length of ${plural(lenFilled, 'type')}.` : ''}`);
+      onDone(`Counted ${plural(total, 'item')}${sys !== 'all' ? ` (${SYSTEM_LABEL[sys]})` : ''} across ${plural(scans.length - otherKind, 'sheet')}.${otherKind ? ` ${plural(otherKind, 'sheet')} of another system left as ${otherKind === 1 ? 'it was' : 'they were'}.` : ''}${erased ? ` Erased ${plural(erased, 'earlier count')} first.` : ''}${skipped ? ` ${plural(skipped, 'sheet')} could not be read and was left as it was.` : ''}${removedGrid ? ` Removed ${plural(removedGrid, 'earlier count')} that sat on grid-line bubbles.` : ''}${removedPast ? ` Removed ${plural(removedPast, 'earlier count')} that lay past matchlines.` : ''}${removedShort ? ` Removed ${plural(removedShort, 'earlier short-code count')}.` : ''}${ambiguous.size ? ` ${[...ambiguous].join(', ')} ${ambiguous.size === 1 ? 'has' : 'have'} several variants: review those and move each to the right item.` : ''} ${emKeys.size ? ` Emergency fixtures were counted under their own items (${[...emKeys].map((k) => emergencyCode(k.replace(EMERGENCY_KEY, ''), activeMarkers)).slice(0, 6).join(', ')}${emKeys.size > 6 ? '…' : ''}).` : ''} Counts are unreviewed until you confirm them.${lenKeys.size ? ` Measured fixtures went to ${plural(lenKeys.size, 'length item')}${lenCreated ? ` (${lenCreated} new)` : ''}.` : ''}${lenFilled ? ` Set the stated length of ${plural(lenFilled, 'type')}.` : ''}`);
     } catch (e) {
       setError(e instanceof ApiError || e instanceof Error ? e.message : 'Saving the counts failed.');
       setPhase('pick');
     }
   }
 
-  const totalSelected = rows.filter((r) => inc.has(r.code)).reduce((n, r) => n + r.total, 0);
+  const totalSelected = sysRows.filter((r) => inc.has(r.code)).reduce((n, r) => n + r.total, 0);
   // The folded emergency section says what it holds, and flags a marker that still needs a decision.
   const emToReview = candidates.filter((c) => !markers.has(c.pattern)).length;
   // Per measured type: how many at each length, how many to check, how many not measured.
@@ -347,7 +392,16 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
 
   return (
     <Dialog title="Auto-count" onClose={phase === 'write' ? () => undefined : onClose} wide className="ac">
-      <div className="dialog-title">{onlyItem ? `Auto-count ${onlyItem.code} on ${plural(sheets.length, 'sheet')}` : `Auto-count ${plural(sheets.length, 'sheet')}`}</div>
+      <div className="dialog-title">{onlyItem ? `Auto-count ${onlyItem.code} on ${plural(sheets.length, 'sheet')}` : `Auto-count ${plural(sheets.length, 'sheet')}${sys !== 'all' ? ` · ${SYSTEM_LABEL[sys]}` : ''}`}</div>
+      {!onlyItem && (
+        <label className="row ac-system" style={{ gap: 8, fontSize: 13, margin: '2px 0 6px' }}>Count
+          <select className="input" style={{ width: 200, minHeight: 30 }} value={sys} disabled={phase === 'write'} onChange={(e) => setSys(e.target.value as 'all' | SystemKey)} aria-label="Which system to count">
+            <option value="all">All systems</option>
+            {SYSTEMS.map((k) => <option key={k} value={k}>{SYSTEM_LABEL[k]}{k === 'lighting' ? ' (fixtures and controls)' : ''}</option>)}
+          </select>
+          {sys !== 'all' && <span className="dim" style={{ fontSize: 12 }}>Only {SYSTEM_LABEL[sys]} items in your library, on {sys === 'lighting' ? 'lighting' : sys === 'fire_alarm' ? 'fire alarm' : sys === 'other' ? 'all' : 'power and systems'} plans; other systems’ counts are left as they are.{leftOutNew ? ` ${plural(leftOutNew, 'code')} not in the library left out.` : ''}</span>}
+        </label>
+      )}
 
       {phase === 'scan' && (
         <div className="stack">
@@ -368,7 +422,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
             <table className="table">
               <thead><tr><th /><th>Tag</th><th>Library item</th><th>Emergency</th><th className="right">Found</th></tr></thead>
               <tbody>
-                {rows.map((r) => {
+                {sysRows.map((r) => {
                   const lib = byCode.get(r.code.toUpperCase());
                   return (
                     <tr key={r.code}>
@@ -382,7 +436,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
                     </tr>
                   );
                 })}
-                {rows.length === 0 && <tr><td colSpan={5} className="muted">No tags were found. Sheets drawn as pictures (scans) have no text to read.</td></tr>}
+                {sysRows.length === 0 && <tr><td colSpan={5} className="muted">{sys !== 'all' && rows.length > 0 ? `None of the tags found are ${SYSTEM_LABEL[sys]} items in your library.` : 'No tags were found. Sheets drawn as pictures (scans) have no text to read.'}</td></tr>}
               </tbody>
             </table>
           </div>

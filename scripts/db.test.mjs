@@ -281,5 +281,17 @@ console.log('db.test OK');
     for (const v of ['lighting', 'hvac', 'telecom', null]) await Y.query(`insert into item_types (code, name, created_by, system) values ($1,'x','u',$2)`, [`Y-${v}`, v]);
     await assert.rejects(Y.query(`insert into item_types (code, name, created_by, system) values ('Y-bad','x','u','plumbing')`));
   }
+  // jobs: a folder of workspaces; deleting it keeps its projects (out of any folder); a workspace's system is one of the list
+  {
+    const J = new P();
+    for (const f of files) await J.exec(readFileSync(`${dir}/${f}`, 'utf8'));
+    for (const f of files.filter((x) => x >= '20261102140000')) await J.exec(readFileSync(`${dir}/${f}`, 'utf8'));   // safe to run twice
+    const job = (await J.query(`insert into jobs (name, created_by) values ('Hillcrest Middle School','u') returning id`)).rows[0];
+    const pr = (await J.query(`insert into projects (name, created_by, job_id, system) values ('Hillcrest - Lighting','u',$1,'lighting') returning id`, [job.id])).rows[0];
+    await assert.rejects(J.query(`insert into projects (name, created_by, system) values ('x','u','plumbing')`));
+    await J.query(`delete from jobs where id = $1`, [job.id]);
+    const after = (await J.query(`select job_id, system from projects where id = $1`, [pr.id])).rows[0];
+    assert.equal(after.job_id, null); assert.equal(after.system, 'lighting');
+  }
   console.log('project libraries OK');
 }

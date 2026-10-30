@@ -14,6 +14,7 @@ import ScheduleSheetsDialog from './ScheduleSheetsDialog.tsx';
 import ScheduleFinderDialog from './ScheduleFinderDialog.tsx';
 import ArchAlignDialog from './ArchAlignDialog.tsx';
 import { autoCountSkips, isArchitectural } from '../../shared/sheetKinds.ts';
+import { SYSTEM_LABEL } from '../../shared/systems.ts';
 import DuplicatesDialog from './DuplicatesDialog.tsx';
 
 const KIND_LABEL: Record<SheetKind, string> = { floor_plan: 'Floor plan', legend: 'Legend', site_plan: 'Site plan', schedule: 'Schedule', other: 'Other' };
@@ -113,7 +114,7 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
 
   return (
     <>
-      <TopBar crumbs={[{ label: 'Projects', to: paths.projects() }, { label: proj?.name ?? '…', to: paths.project(projectId) }, { label: 'Drawing set' }]}>
+      <TopBar crumbs={[{ label: 'Projects', to: paths.projects() }, { label: proj?.name ? (proj.system ? `${proj.name} · ${SYSTEM_LABEL[proj.system]}` : proj.name) : '…', to: paths.project(projectId) }, { label: 'Drawing set' }]}>
         {canEdit && <button className="btn btn-secondary" onClick={() => picker.current?.click()}><UploadSimple size={14} /> Add drawings</button>}
         <input ref={picker} type="file" accept="application/pdf,.pdf" hidden onChange={(e) => { addFile(e.target.files?.[0]); e.target.value = ''; }} />
         <button className="btn btn-secondary" onClick={() => navigate(paths.library(projectId))}>Item library</button>
@@ -291,7 +292,7 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
           onClose={() => setScheduleOpen(false)} onDone={(msg) => { setScheduleOpen(false); toast(msg); void items.reload(); void cats.reload(); }} />
       )}
       {autoOpen && (
-        <AutoCountDialog projectId={projectId} sheets={enabled} items={items.data?.items ?? []} onClose={() => setAutoOpen(false)}
+        <AutoCountDialog projectId={projectId} sheets={enabled} items={items.data?.items ?? []} system={proj?.system ?? null} onClose={() => setAutoOpen(false)}
           onDone={(msg) => { setAutoOpen(false); toast(msg); void sheetsQ.reload(); void items.reload(); void project.reload(); const first = enabled[0]; if (first) navigate(paths.sheet(projectId, first.id)); }} />
       )}
       {archOpen && (
