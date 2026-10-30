@@ -180,8 +180,11 @@ test('excel export: Panel Boards in the estimating template layout, Breakers tot
   const all = rows.find((v) => v[1] === 'All breakers');
   assert.equal(all[4], 8); assert.equal(all[5], 2);
   assert.ok(rows.some((v) => v[0] === 'LSDH1201' && v[1] === '60 A 3-pole' && v[4] === 4));
-  // the Summary: a Fixtures heading and a Devices heading
-  const sm = wb.getWorksheet('Summary'); const heads: string[] = [];
-  sm.eachRow((row: any) => { const v = row.getCell(1).value; if (v === 'Fixtures' || v === 'Devices') heads.push(v); });
-  assert.deepEqual(heads, ['Fixtures', 'Devices']);
+  // the Summary: by system, the fixture under Lighting first, each system with its own total
+  const sm = wb.getWorksheet('Summary'); const heads: string[] = []; const totals: string[] = [];
+  const systems = ['Lighting', 'Power', 'Fire alarm', 'HVAC', 'Telecom / AV', 'Security', 'Other'];
+  sm.eachRow((row: any) => { const v = row.getCell(1).value, t = row.getCell(2).value; if (systems.includes(v)) heads.push(v); if (typeof t === 'string' && / total$/.test(t)) totals.push(t); });
+  assert.equal(heads[0], 'Lighting');
+  assert.ok(heads.length >= 2);
+  assert.deepEqual(totals, heads.map((h) => `${h} total`));
 });

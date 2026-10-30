@@ -7,6 +7,7 @@ import { Check, Dialog, Seg, Symbol, TopBar, plural, useToast } from '../app/ui.
 import { useFetch } from '../app/useFetch.ts';
 import { paths } from '../app/router.ts';
 import { lengthFeetFromText } from '../detect/lengthText.ts';
+import { SYSTEMS, SYSTEM_LABEL, systemOf } from '../../shared/systems.ts';
 import { ItemDialog } from './ItemDialog.tsx';
 
 const SHAPES: MarkerShape[] = ['circle', 'square', 'rect', 'diamond'];
@@ -20,14 +21,14 @@ function Editor({ item, categories, canEdit, isAdmin, onSaved, onDeleted }: {
   const [confirm, setConfirm] = useState(false);
   useEffect(() => setF(item), [item]);
   const cat = categories.find((c) => c.id === f.category_id)?.name ?? 'Uncategorized';
-  const dirty = JSON.stringify([f.code, f.name, f.spec, f.unit, f.category_id, f.detection_mode, f.marker_shape, f.marker_glyph, f.length_ft ?? null, f.count_group ?? null]) !==
-    JSON.stringify([item.code, item.name, item.spec, item.unit, item.category_id, item.detection_mode, item.marker_shape, item.marker_glyph, item.length_ft ?? null, item.count_group ?? null]);
+  const dirty = JSON.stringify([f.code, f.name, f.spec, f.unit, f.category_id, f.detection_mode, f.marker_shape, f.marker_glyph, f.length_ft ?? null, f.count_group ?? null, f.system ?? null]) !==
+    JSON.stringify([item.code, item.name, item.spec, item.unit, item.category_id, item.detection_mode, item.marker_shape, item.marker_glyph, item.length_ft ?? null, item.count_group ?? null, item.system ?? null]);
   const suggested = lengthFeetFromText(f.name, f.spec ?? '');
 
   async function save() {
     setBusy(true);
     try {
-      await api(`/items/${item.id}`, { method: 'PATCH', body: { code: f.code, name: f.name, spec: f.spec ?? '', unit: f.unit, category_id: f.category_id, detection_mode: f.detection_mode, marker_shape: f.marker_shape, marker_glyph: f.marker_glyph ?? '', length_ft: f.length_ft ?? null, count_group: f.count_group ?? null } });
+      await api(`/items/${item.id}`, { method: 'PATCH', body: { code: f.code, name: f.name, spec: f.spec ?? '', unit: f.unit, category_id: f.category_id, detection_mode: f.detection_mode, marker_shape: f.marker_shape, marker_glyph: f.marker_glyph ?? '', length_ft: f.length_ft ?? null, count_group: f.count_group ?? null, system: f.system ?? null } });
       toast('Item saved.');
       onSaved();
     } catch (e) { toast(e instanceof ApiError ? e.message : 'Could not save the item.'); }
@@ -69,6 +70,13 @@ function Editor({ item, categories, canEdit, isAdmin, onSaved, onDeleted }: {
           <option value="fire_alarm">Fire alarm</option>
         </select>
         <div className="dim" style={{ fontSize: 12, marginTop: 4 }}>Which counting tab it is in: Fixtures or Devices.</div>
+      <div className="field">
+        <label htmlFor="esys">System</label>
+        <select id="esys" className="input" style={{ width: 220 }} value={f.system ?? ''} disabled={!canEdit} onChange={(e) => setF({ ...f, system: (e.target.value || null) as ItemTypeRow['system'] })}>
+          <option value="">Automatic ({SYSTEM_LABEL[systemOf({ ...f, system: null }, categories)]})</option>
+          {SYSTEMS.map((k) => <option key={k} value={k}>{SYSTEM_LABEL[k]}</option>)}
+        </select>
+      </div>
       </div>
       <div className="row" style={{ alignItems: 'flex-end' }}>
         <div className="field"><label>Marker</label><Seg name="eshape" value={f.marker_shape} onChange={(v) => canEdit && setF({ ...f, marker_shape: v })} options={SHAPES.map((s) => ({ value: s, label: s[0].toUpperCase() + s.slice(1) }))} /></div>

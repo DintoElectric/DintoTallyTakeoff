@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { SYSTEMS, SYSTEM_LABEL } from '../../shared/systems.ts';
 import type { CategoryRow, ItemTypeRow, MarkerShape } from '../../shared/types.ts';
 import { api, ApiError } from '../auth/api.ts';
 import { Dialog, Seg, Symbol } from '../app/ui.tsx';
@@ -16,6 +17,7 @@ export function ItemDialog({ projectId, categories, defaultCategoryId, onClose, 
   const [unit, setUnit] = useState('EA');
   const [length, setLength] = useState('');                    // feet per fixture, for linear fixtures
   const [group, setGroup] = useState('');                      // fixture, device, or automatic
+  const [system, setSystem] = useState('');                    // a system, or automatic
   const [categoryId, setCategoryId] = useState(defaultCategoryId ?? '');
   const [shape, setShape] = useState<MarkerShape>('circle');
   const [glyph, setGlyph] = useState('');
@@ -30,7 +32,7 @@ export function ItemDialog({ projectId, categories, defaultCategoryId, onClose, 
     setErr(null);
     try {
       const { item } = await api<{ item: ItemTypeRow }>('/items', {
-        body: { project_id: projectId, code, name, spec: spec || null, unit: unit || 'EA', category_id: categoryId || null, count_group: group || null, marker_shape: shape, marker_glyph: glyph || null, length_ft: length.trim() ? Number(length) : null },
+        body: { project_id: projectId, code, name, spec: spec || null, unit: unit || 'EA', category_id: categoryId || null, count_group: group || null, system: system || null, marker_shape: shape, marker_glyph: glyph || null, length_ft: length.trim() ? Number(length) : null },
       });
       onCreated(item);
     } catch (e) {
@@ -66,7 +68,15 @@ export function ItemDialog({ projectId, categories, defaultCategoryId, onClose, 
           <option value="device">Device</option>
           <option value="fire_alarm">Fire alarm</option>
         </select>
-        <div className="dim" style={{ fontSize: 12, marginTop: 4 }}>Which counting tab it is in: Fixtures or Devices.</div>
+        <div className="dim" style={{ fontSize: 12, marginTop: 4 }}>A fixture can be split into emergency and measured lengths; a device is counted as it is.</div>
+      </div>
+      <div className="field">
+        <label htmlFor="isys">System</label>
+        <select id="isys" className="input" style={{ width: 220 }} value={system} onChange={(e) => setSystem(e.target.value)}>
+          <option value="">Automatic (from what it is)</option>
+          {SYSTEMS.map((k) => <option key={k} value={k}>{SYSTEM_LABEL[k]}</option>)}
+        </select>
+        <div className="dim" style={{ fontSize: 12, marginTop: 4 }}>The system it is counted and reported under (Lighting includes its controls).</div>
       </div>
       <div className="row">
         <div className="field" style={{ flex: 1 }}>

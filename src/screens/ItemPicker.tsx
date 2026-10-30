@@ -1,3 +1,4 @@
+import { SYSTEMS, SYSTEM_LABEL, systemOf, type SystemKey } from '../../shared/systems.ts';
 import { useMemo, useState } from 'react';
 import type { CategoryRow, ItemTypeRow } from '../../shared/types.ts';
 import { countGroupOf, GROUP_LABEL, GROUPS, type CountGroup } from '../../shared/countGroup.ts';
@@ -12,10 +13,10 @@ export function ItemPicker({ items, categories, onPick, onNew, currentId, autoFo
   currentId?: string | null; autoFocus?: boolean; maxHeight?: number;
 }) {
   const [q, setQ] = useState('');
-  const [group, setGroup] = useState<'all' | CountGroup>('all');
-  const groupOf = useMemo(() => new Map(items.map((i) => [i.id, countGroupOf(i, categories)])), [items, categories]);
+  const [group, setGroup] = useState<'all' | SystemKey>('all');
+  const groupOf = useMemo(() => new Map(items.map((i) => [i.id, systemOf(i, categories)])), [items, categories]);   // by system
   const catName = useMemo(() => new Map(categories.map((c) => [c.id, c.name])), [categories]);
-  const present = GROUPS.filter((g) => items.some((i) => groupOf.get(i.id) === g));
+  const present = SYSTEMS.filter((g) => items.some((i) => groupOf.get(i.id) === g));
   const shown = useMemo(() => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     return items
@@ -29,7 +30,7 @@ export function ItemPicker({ items, categories, onPick, onNew, currentId, autoFo
         <div className="picker-chips" role="radiogroup" aria-label="Show">
           {(['all', ...present] as const).map((g) => (
             <button key={g} type="button" role="radio" aria-checked={group === g} className={`chip${group === g ? ' on' : ''}`} onClick={() => setGroup(g)}>
-              {g === 'all' ? 'All' : GROUP_LABEL[g]}
+              {g === 'all' ? 'All' : SYSTEM_LABEL[g]}
             </button>
           ))}
         </div>
@@ -44,7 +45,7 @@ export function ItemPicker({ items, categories, onPick, onNew, currentId, autoFo
           <button key={i.id} type="button" role="option" aria-selected={i.id === currentId} className={`picker-row${i.id === currentId ? ' on' : ''}`} onClick={() => onPick(i)}>
             <Symbol shape={i.marker_shape} glyph={i.marker_glyph} />
             <b>{i.code}</b>
-            <span className="dim picker-name">{i.name}</span>
+            <span className="dim picker-name" title={i.name}>{i.name}</span>
             {i.category_id && catName.get(i.category_id) && <span className="picker-cat">{catName.get(i.category_id)}</span>}
           </button>
         ))}

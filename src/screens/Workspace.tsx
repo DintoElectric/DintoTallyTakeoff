@@ -19,6 +19,7 @@ import { ItemPicker } from './ItemPicker.tsx';
 import { countRegion } from '../detect/tagScan.ts';
 import { detailZones, findDetailViews } from '../detect/detailViews.ts';
 import { autoCountSkips, planGroup } from '../../shared/sheetKinds.ts';
+import { SYSTEMS, SYSTEM_LABEL, systemOf, type SystemKey } from '../../shared/systems.ts';
 import { circuitStats, mainLabel, type Panel } from '../../shared/panels.ts';
 import { ceilingIndex, CEILING_LABEL, CEILING_TITLE, type Ceiling, type CeilingIndex } from '../detect/ceiling.ts';
 import { flushAll, getStore, useSheetStore } from './sheetStore.ts';
@@ -78,8 +79,22 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [query, setQuery] = useState('');                              // search the items listed in the panel
   const [onlyCounted, setOnlyCounted] = useState(false);
   // The counting tabs: fixtures and devices are counted on the drawing; panels come from panel schedules; conduit runs come later.
-  const [tab, setTab] = useState<CountGroup | 'panels' | 'conduit'>('fixture');
-  const isItemTab = tab === 'fixture' || tab === 'device' || tab === 'fire_alarm';
+  const [tab, setTab] = useState<'counts' | 'panels' | 'conduit'>('counts');
+  const isItemTab = tab === 'counts';
+  // The system shown: its items in the list and its counts on the drawing (Lighting takes fixtures and their controls).
+  const [system, setSystem] = useState<'all' | SystemKey>('all');
+  // The counts panel's width: drag its left edge (remembered), so long descriptions are not cut off.
+  const [panelW, setPanelW] = useState(() => { try { const v = Number(localStorage.getItem('tally.panelWidth')); return v >= 300 && v <= 1200 ? v : 340; } catch { return 340; } });
+  const savePanelW = (w: number) => { setPanelW(w); try { localStorage.setItem('tally.panelWidth', String(Math.round(w))); } catch { /* not remembered */ } };
+  const maxPanelW = () => Math.max(320, Math.min(1200, window.innerWidth * 0.65));
+  const startResize = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const x0 = e.clientX, w0 = panelW, el = e.currentTarget;
+    el.setPointerCapture(e.pointerId);
+    const move = (ev: PointerEvent) => setPanelW(Math.max(300, Math.min(maxPanelW(), w0 + (x0 - ev.clientX))));
+    const up = (ev: PointerEvent) => { el.removeEventListener('pointermove', move); el.removeEventListener('pointerup', up); savePanelW(Math.max(300, Math.min(maxPanelW(), w0 + (x0 - ev.clientX)))); };
+    el.addEventListener('pointermove', move); el.addEventListener('pointerup', up);
+  };
   const tabPicked = useRef(false);
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get('read') !== '1' || readOnly) return;
@@ -253,13 +268,14 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
 
   // ----- derived data -----
   const itemById = useMemo(() => new Map(items.map((i) => [i.id, i])), [items]);
+  const sysOf = useMemo(() => new Map(items.map((i) => [i.id, systemOf(i, categories)])), [items, categories]);
   const styles = useMemo(() => new Map<string, ItemStyle>(items.map((i) => [i.id, { shape: i.marker_shape, glyph: i.marker_glyph }])), [items]);
 
   const markers: MarkerData[] = useMemo(
     () => (hideMarkers ? [] : snap.dets)
-      .filter((d) => (!onlyActive || d.item_type_id === activeItemId) && (source === 'all' || d.source === source))
+      .filter((d) => (!onlyActive || d.item_type_id === activeItemId) && (source === 'all' || d.source === source) && (system === 'all' || sysOf.get(d.item_type_id) === system))
       .map((d) => ({ id: d.id, x: d.x, y: d.y, itemId: d.item_type_id, flagged: d.status === 'unreviewed' && d.confidence !== null && d.confidence < threshold })),
-    [snap.dets, onlyActive, activeItemId, threshold, hideMarkers, source],
+    [snap.dets, onlyActive, activeItemId, threshold, hideMarkers, source, system, sysOf],
   );
 
   // Counts are always derived from detections (never stored constants).
@@ -312,19 +328,15 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
     return m;
   }, [otherSheetCounts, sheetId, snap.dets.length]);
 
-  // the items in the open tab (fixtures or devices)
-  const tabItems = useMemo(() => (isItemTab ? items.filter((it) => countGroupOf(it, categories) === tab) : items), [items, categories, tab, isItemTab]);
-  const groupCounts = useMemo(() => {
-    const n = { fixture: 0, device: 0, fire_alarm: 0 };
-    for (const it of items) n[countGroupOf(it, categories)] += shown.get(it.id)?.n ?? 0;
+  // the items of the chosen system (all of them under All)
+  const tabItems = useMemo(() => (isItemTab && system !== 'all' ? items.filter((it) => sysOf.get(it.id) === system) : items), [items, sysOf, system, isItemTab]);
+  // the counts per system, for the chips; only the systems the library has are offered
+  const systemCounts = useMemo(() => {
+    const n = new Map<SystemKey, number>();
+    for (const it of items) { const k = sysOf.get(it.id)!; n.set(k, (n.get(k) ?? 0) + (shown.get(it.id)?.n ?? 0)); }
     return n;
-  }, [items, categories, shown]);
-  // open on the tab that has this sheet's counts: Fixtures, unless only devices are counted here
-  useEffect(() => {
-    if (tabPicked.current || !itemsQ.data || !snap.loaded) return;
-    tabPicked.current = true;
-    if (groupCounts.fixture === 0) { if (groupCounts.device > 0) setTab('device'); else if (groupCounts.fire_alarm > 0) setTab('fire_alarm'); }
-  }, [itemsQ.data, snap.loaded, groupCounts]);
+  }, [items, sysOf, shown]);
+  const totalShown = useMemo(() => [...systemCounts.values()].reduce((a, b) => a + b, 0), [systemCounts]);
   const grouped = useMemo(() => {
     const catName = (id: string | null) => categories.find((c) => c.id === id)?.name ?? 'Uncategorized';
     const order = (id: string | null) => categories.find((c) => c.id === id)?.sort ?? 1e6;
@@ -813,14 +825,30 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
         </section>
 
         {/* right: counts */}
-        <aside className="ws-right" aria-label="Counts">
+        <aside className="ws-right" aria-label="Counts" style={{ width: panelW }}>
+        <div className="ws-resize" role="separator" aria-orientation="vertical" aria-label="Resize the counts panel" aria-valuenow={Math.round(panelW)} aria-valuemin={300} aria-valuemax={Math.round(maxPanelW())} tabIndex={0}
+          title="Drag to widen the panel (double-click: back to normal)" onPointerDown={startResize} onDoubleClick={() => savePanelW(340)}
+          onKeyDown={(e) => { if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); const step = e.key === 'ArrowLeft' ? 40 : -40; setPanelW((w) => { const v = Math.max(300, Math.min(maxPanelW(), w + step)); try { localStorage.setItem('tally.panelWidth', String(Math.round(v))); } catch { /* not remembered */ } return v; }); } }} />
         <div className="count-tabs" role="tablist" aria-label="What to count">
-          {([['fixture', 'Fixtures', groupCounts.fixture], ['device', 'Devices', groupCounts.device], ['fire_alarm', 'Fire alarm', groupCounts.fire_alarm], ['panels', 'Panels', null], ['conduit', 'Conduit', null]] as const).map(([k, label, n]) => (
+          {([['counts', 'Counts', totalShown], ['panels', 'Panels', null], ['conduit', 'Conduit', null]] as const).map(([k, label, n]) => (
             <button key={k} role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} title={k === 'conduit' ? 'Conduit runs' : undefined} onClick={() => { tabPicked.current = true; setTab(k); }}>
               {label}{n ? <span className="num"> {n}</span> : null}
             </button>
           ))}
         </div>
+        {isItemTab && (
+          <div className="system-chips" role="radiogroup" aria-label="System">
+            {(['all', ...SYSTEMS.filter((k) => systemCounts.has(k))] as const).map((k) => {
+              const n = k === 'all' ? totalShown : systemCounts.get(k) ?? 0;
+              return (
+                <button key={k} role="radio" aria-checked={system === k} className={`chip${system === k ? ' on' : ''}`} onClick={() => setSystem(k)}
+                  title={k === 'lighting' ? 'Light fixtures and their controls (switches, sensors)' : k === 'all' ? 'Every system' : undefined}>
+                  {k === 'all' ? 'All' : SYSTEM_LABEL[k]}{n ? <span className="num"> {n}</span> : null}
+                </button>
+              );
+            })}
+          </div>
+        )}
         {isItemTab && cardOpen && activeItem && (
           <div className="item-card" role="region" aria-label={`${activeItem.code} details`}>
             <div className="row-between">
@@ -941,7 +969,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                   return (
                     <button key={it.id} id={`item-row-${it.id}`} className={`item-row${it.id === activeItemId ? ' sel' : ''}`} onClick={() => openItem(it.id)} aria-pressed={it.id === activeItemId}>
                       <Symbol shape={it.marker_shape} glyph={it.marker_glyph} active={it.id === activeItemId} />
-                      <span style={{ minWidth: 0 }}><div className="n1">{it.name}</div><div className="n2">{[it.code, it.spec].filter(Boolean).join(' · ')}</div></span>
+                      <span style={{ minWidth: 0 }}><div className="n1" title={it.name}>{it.name}</div><div className="n2" title={[it.code, it.spec].filter(Boolean).join(' · ')}>{[it.code, it.spec].filter(Boolean).join(' · ')}</div></span>
                       {c.flagged > 0 ? <span className="tag tag-outline">{c.flagged} to review</span> : <span />}
                       <span className="cnt num">{c.n}</span>
                     </button>
@@ -1096,9 +1124,9 @@ function SheetPdfDialog({ page, file, sheet, dets, items, categories, projectNam
         list = {
           title: [projectName, [sheet.number, sheet.title].filter(Boolean).join(' ')].filter(Boolean).join(' · '),
           subtitle: `Counts on this sheet · Prepared ${new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}`,
-          groups: GROUPS.map((g) => ({
-            name: GROUP_LABEL[g],
-            rows: rows.filter((r) => countGroupOf(r.it, categories) === g).sort((a, b) => a.it.code.localeCompare(b.it.code, undefined, { numeric: true })).map((r) => ({ code: r.it.code, name: r.it.name, n: r.n })),
+          groups: SYSTEMS.map((g) => ({
+            name: SYSTEM_LABEL[g],
+            rows: rows.filter((r) => systemOf(r.it, categories) === g).sort((a, b) => a.it.code.localeCompare(b.it.code, undefined, { numeric: true })).map((r) => ({ code: r.it.code, name: r.it.name, n: r.n })),
           })),
         };
       }

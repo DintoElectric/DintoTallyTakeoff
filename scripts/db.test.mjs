@@ -273,5 +273,13 @@ console.log('db.test OK');
     await R.query(`delete from sheets where id = $1`, [a.id]);
     assert.equal((await R.query(`select ref_sheet_id from sheets where id = $1`, [e.id])).rows[0].ref_sheet_id, null);
   }
+  // an item's system: one of the list, or null (worked out); safe to run twice
+  {
+    const Y = new P();
+    for (const f of files) await Y.exec(readFileSync(`${dir}/${f}`, 'utf8'));
+    for (const f of files.filter((x) => x >= '20261102')) await Y.exec(readFileSync(`${dir}/${f}`, 'utf8'));
+    for (const v of ['lighting', 'hvac', 'telecom', null]) await Y.query(`insert into item_types (code, name, created_by, system) values ($1,'x','u',$2)`, [`Y-${v}`, v]);
+    await assert.rejects(Y.query(`insert into item_types (code, name, created_by, system) values ('Y-bad','x','u','plumbing')`));
+  }
   console.log('project libraries OK');
 }

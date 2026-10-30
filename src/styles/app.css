@@ -295,3 +295,18 @@ th.right { text-align: right; }
 .page-layer canvas.overlay-canvas { transform-origin: 0 0; pointer-events: none; z-index: 3; }
 .viewport.tool-align { cursor: crosshair; }
 .picker-cat { margin-left: auto; flex: none; font-size: 11px; color: var(--color-neutral-400); border: 1px solid var(--color-divider); border-radius: 999px; padding: 0 7px; white-space: nowrap; }
+
+/* the counts panel: wider by dragging its left edge; the systems it shows */
+.ws-right { position: relative; max-width: 65vw; }
+.ws-resize { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; cursor: col-resize; z-index: 6; touch-action: none; }
+.ws-resize::after { content: ''; position: absolute; left: 3px; top: 0; bottom: 0; width: 2px; background: transparent; transition: background .12s; }
+.ws-resize:hover::after, .ws-resize:focus-visible::after { background: var(--color-accent); }
+.ws-resize:focus-visible { outline: none; }
+.system-chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 16px 2px; flex: none; }
+.system-chips .chip { border: 1px solid var(--color-divider); background: transparent; color: var(--color-text); border-radius: 999px; padding: 2px 10px; font-size: 12px; cursor: pointer; }
+.system-chips .chip.on { background: var(--color-accent); border-color: var(--color-accent); color: #fff; }
+.system-chips .chip .num { opacity: .75; }
+/* long descriptions wrap (up to three lines) instead of being cut to one; the full text is in the tooltip */
+.item-row .n1 { white-space: normal; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.3; overflow-wrap: anywhere; }
+.picker-name { white-space: normal; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; line-height: 1.3; overflow-wrap: anywhere; }
+.picker-row { align-items: flex-start; }

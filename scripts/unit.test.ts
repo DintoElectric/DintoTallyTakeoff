@@ -1499,3 +1499,21 @@ test('overlay tint: lines orange, white paper and clear pixels clear; a blank pa
   const solid = new Uint8ClampedArray(4 * 1000); for (let i = 0; i < 1000; i++) solid.set([20, 20, 20, 255], i * 4);
   assert.equal(overlayLooksRight(tintOverlay(solid)), false);                            // nearly all dark: something went wrong
 });
+
+// ---- counting by system: Lighting takes fixtures and their controls; the rest from category and description ----
+import { systemOf } from '../shared/systems.ts';
+test('systems: worked out from kind, category and description; set by hand wins', () => {
+  const cats = [{ id: 'LUM', name: 'Luminaire schedule' }, { id: 'CTL', name: 'Lighting controls' }, { id: 'SPR', name: 'Special purpose receptacle schedule' }, { id: 'OUT', name: 'Outlets' }, { id: 'CAM', name: 'Cameras' }, { id: 'NOTE', name: 'Drawing notes' }, { id: 'FA', name: 'Fire alarm devices' }] as never[];
+  const it = (code: string, name: string, category_id: string | null, count_group: string | null = null, system: string | null = null) => ({ code, name, spec: null, category_id, count_group, system }) as never;
+  const s = (x: never) => systemOf(x, cats);
+  assert.equal(s(it('D2', '4" RECESSED DOWNLIGHT FIXTURE', 'LUM', 'fixture')), 'lighting');
+  assert.equal(s(it('D2', 'LOW VOLTAGE DIMMER SWITCH, 2 CHANNELS', 'CTL', 'device')), 'lighting');
+  assert.equal(s(it('$OS', 'Switch, OS', 'CTL', 'device')), 'lighting');
+  assert.equal(s(it('P', '125/250V, 3P, 4W W/ GROUND - 50A', 'SPR', 'device')), 'power');       // shares code P with a fixture
+  assert.equal(s(it('VAV', 'VAV BOX CONNECTION', null, 'device')), 'hvac');
+  assert.equal(s(it('WAP', 'Wireless access point', 'OUT', 'device')), 'telecom');
+  assert.equal(s(it('F-CLG', 'Fixed (F) camera, ceiling mounted', 'CAM', 'device')), 'security');
+  assert.equal(s(it('SD', 'SMOKE DETECTOR', 'FA', 'fire_alarm')), 'fire_alarm');
+  assert.equal(s(it('E40', 'Drawing note E40', 'NOTE')), 'other');
+  assert.equal(s(it('P', '125/250V, 3P, 4W W/ GROUND - 50A', 'SPR', 'device', 'hvac')), 'hvac');   // set by hand
+});

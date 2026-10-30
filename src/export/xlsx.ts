@@ -2,6 +2,7 @@ import type { ExportData } from '../../shared/types.ts';
 import { floorLabel } from '../upload/titleBlock.ts';
 import type { Agg } from './aggregate.ts';
 import { countGroupOf, GROUP_LABEL, GROUPS } from '../../shared/countGroup.ts';
+import { SYSTEMS, SYSTEM_LABEL, systemOf } from '../../shared/systems.ts';
 import { breakerCounts, breakerLabel, circuitStats, sumBreakers } from '../../shared/panels.ts';
 import type { ExportOptions } from './types.ts';
 
@@ -55,11 +56,12 @@ export async function buildXlsx(data: ExportData, agg: Agg, opts: ExportOptions)
     const hdrRowNo = hr.number;
     headerStyle(hr, 4);
     const nCols = header.length;
-    // Fixtures first, then devices, each under its heading (the two counting tabs); no heading when there is only one kind.
-    const sections = GROUPS.map((g) => [g, agg.rows.filter((r) => countGroupOf(r.item, data.categories) === g)] as const).filter(([, rows]) => rows.length > 0);
+    // By system (Lighting with its controls, Power, Fire alarm, HVAC ...), each under its heading with its own total; no
+    // headings when there is only one system.
+    const sections = SYSTEMS.map((g) => [g, agg.rows.filter((r) => systemOf(r.item, data.categories) === g)] as const).filter(([, rows]) => rows.length > 0);
     for (const [g, rows] of sections) {
      if (sections.length > 1) {
-      const h = ws.addRow([GROUP_LABEL[g]]);
+      const h = ws.addRow([SYSTEM_LABEL[g]]);
       style(h, { bold: true });
       for (let c = 1; c <= nCols; c++) h.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F5FE' } };
      }
@@ -71,6 +73,16 @@ export async function buildXlsx(data: ExportData, agg: Agg, opts: ExportOptions)
       row.eachCell((c: any, i: number) => { if (i >= 4) c.alignment = { horizontal: 'right', vertical: 'top' }; });
       if (showFeet) { const c0 = 4 + sheetCols.length + 1; row.getCell(c0).numFmt = '#,##0.0'; row.getCell(c0 + 1).numFmt = '#,##0.0'; } // Length each, Total (ft)
       if (showUnrev && r.unreviewed > 0) row.getCell(nCols).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: FLAG_FILL } };
+     }
+     if (sections.length > 1) {
+      // the system's total, per sheet and overall
+      const sum = (f: (r: (typeof rows)[number]) => number) => rows.reduce((a, r) => a + f(r), 0);
+      const st = ws.addRow(['', `${SYSTEM_LABEL[g]} total`, '', ...sheetCols.map((sh) => sum((r) => r.bySheet.get(sh.id) ?? 0)), sum((r) => r.total),
+        ...(showFeet ? ['', sum((r) => r.totalFeet ?? 0) || ''] : []), ...(showUnrev ? [sum((r) => r.unreviewed) || ''] : [])]);
+      style(st, { bold: true });
+      st.eachCell((c: any, i: number) => { if (i >= 4) c.alignment = { horizontal: 'right' }; });
+      if (showFeet) st.getCell(4 + sheetCols.length + 2).numFmt = '#,##0.0';
+      ws.addRow([]);
      }
     }
     const lastItemRow = ws.lastRow.number;
