@@ -1410,3 +1410,25 @@ test('schedule category: from the schedule title, without "(1 OF 2)" or "ELEC -"
   assert.equal(scheduleCategory('ELECTRICAL LEGEND'), 'Legend');
   assert.equal(scheduleCategory(null), null);
 });
+
+// ---- Auto-count leaves architectural drawings alone, as it does schedules and legends ----
+import { autoCountSkips } from '../shared/sheetKinds.ts';
+test('auto-count skips: architectural sheets by number, schedules and legends by kind; AV and electrical sheets are counted', () => {
+  const s = (number: string | null, kind = 'floor_plan') => autoCountSkips({ number, kind });
+  assert.equal(s('A1.02B'), 'architectural');
+  assert.equal(s('A0.03', 'other'), 'architectural');
+  assert.equal(s('A-101'), 'architectural');
+  assert.equal(s('AD1.01'), 'architectural');                 // demolition
+  assert.equal(s('AV1.01'), null);                             // audio-visual: its devices are counted
+  assert.equal(s('E2.02B'), null);
+  assert.equal(s(null), null);
+  assert.equal(s('E7.11', 'schedule'), 'schedule');
+  assert.equal(s('E0.01', 'legend'), 'legend');
+});
+import { planGroup } from '../shared/sheetKinds.ts';
+test('plan kind from the title: lighting plans count fixtures, power plans devices, fire alarm plans fire alarm devices', () => {
+  assert.equal(planGroup({ title: 'MAIN LEVEL ELECTRICAL LIGHTING PLAN - AREA B' }), 'fixture');
+  assert.equal(planGroup({ title: 'MAIN LEVEL ELECTRICAL POWER PLAN - AREA B' }), 'device');
+  assert.equal(planGroup({ title: 'FIRST FLOOR FIRE ALARM PLAN' }), 'fire_alarm');
+  assert.equal(planGroup({ title: 'ELECTRICAL ENLARGED PLANS' }), null);    // says neither: included either way
+});

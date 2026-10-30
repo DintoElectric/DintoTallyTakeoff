@@ -7,12 +7,7 @@ import { CONF_EMERGENCY, CONF_NORMAL_SPLIT } from '../detect/writePlan.ts';
 import { lengthFeetFromText, measuredOnPlans } from '../detect/lengthText.ts';
 import { countGroupOf, type CountGroup } from '../../shared/countGroup.ts';
 
-// What a sheet is a plan of decides between library items that share a code (a fixture C and a receptacle C): a lighting
-// plan counts the fixture, a power plan the device, a fire alarm plan the fire alarm device.
-const sheetGroup = (s: SheetRow): CountGroup | null => {
-  const t = (s.title ?? '').toUpperCase();
-  return /FIRE ALARM/.test(t) ? 'fire_alarm' : /LIGHTING/.test(t) ? 'fixture' : /POWER|SYSTEMS|TECHNOLOGY|TELECOM|\bDATA\b|SECURITY|AUDIO/.test(t) ? 'device' : null;
-};
+import { planGroup as sheetGroup } from '../../shared/sheetKinds.ts';
 
 // A count of a fixture measured on the plan goes to the item for its length ("P 7'"): its key is the code, this, the feet.
 const LENGTH_KEY = '\u0002';
@@ -21,9 +16,12 @@ import { EMERGENCY_KEY, discoverMarkers, emergencyCode, isEmergency, parseCustom
 import { flushAll, getStore } from './sheetStore.ts';
 
 /** Scans sheets for tags, shows what was found, then counts the ones you choose. */
-export default function AutoCountDialog({ projectId, sheets, items, onClose, onDone }: {
+export default function AutoCountDialog({ projectId, sheets, items, onlyItem, onClose, onDone }: {
   projectId: string; sheets: SheetRow[]; items: ItemTypeRow[]; onClose: () => void; onDone: (summary: string) => void;
+  /** Count only this item, across the sheets: its code only, as this item, replacing only its own earlier automatic counts. */
+  onlyItem?: ItemTypeRow | null;
 }) {
+  const only = onlyItem ? onlyItem.code.toUpperCase() : null;
   const [phase, setPhase] = useState<'scan' | 'pick' | 'write'>('scan');
   const [progress, setProgress] = useState({ done: 0, total: sheets.length, label: '' });
   const [scans, setScans] = useState<SheetScan[]>([]);
@@ -76,9 +74,9 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
     const rank = (r: CodeRow) => (r.kind === 'room' ? 4 : byCode.has(r.code.toUpperCase()) ? 0 : r.kind === 'note' || r.kind === 'camera' || r.kind === 'outlet' ? 1 : r.kind === 'tag' ? 2 : 3);
     // Short letter-only marks (S, OS, CR, MM ...) are easily mixed up with other text, so they are counted only when this
     // project's library has them (a security device CR, a fire alarm module MM), or when you ask to see them.
-    return [...discover(effective)].filter((r) => r.kind !== 'short' || byCode.has(r.code.toUpperCase()) || showShort)
+    return [...discover(effective)].filter((r) => (only ? r.code.toUpperCase() === only : r.kind !== 'short' || byCode.has(r.code.toUpperCase()) || showShort))
       .sort((a, b) => rank(a) - rank(b) || b.total - a.total || a.code.localeCompare(b.code));
-  }, [effective, byCode, showShort]);
+  }, [effective, byCode, showShort, only]);
   const shortRows = useMemo(() => discover(effective).filter((r) => r.kind === 'short' && !byCode.has(r.code.toUpperCase())), [effective, byCode]);
   const shortMarks = shortRows.reduce((n, r) => n + r.total, 0);
 
@@ -113,7 +111,8 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
         const lib = found.filter((r) => r.kind !== 'room' && r.kind !== 'note' && r.kind !== 'camera' && r.kind !== 'outlet' && byCode.has(r.code.toUpperCase()));
         setLibraryDriven(lib.length > 0);
         const notes = found.filter((r) => r.kind === 'note' || r.kind === 'camera' || r.kind === 'outlet'); // drawing notes, cameras and triangle outlets are always counted
-        setInc(new Set([...(lib.length > 0 ? lib : found.filter((r) => r.kind === 'tag')), ...notes].map((r) => r.code)));
+        setInc(new Set(only ? found.filter((r) => r.code.toUpperCase() === only).map((r) => r.code) : [...(lib.length > 0 ? lib : found.filter((r) => r.kind === 'tag')), ...notes].map((r) => r.code)));
+        if (only) { setResetAuto(false); setResetManual(false); }   // one item: never a fresh start of the whole sheet
         // Only markers with a normal twin are pre-ticked; "possible" ones (no twin) are left for the estimator.
         setMarkers(new Set(discoverMarkers(res.flatMap((sc) => sc.hits.filter((h) => !h.past))).filter((c) => c.partner !== null || c.likely).map((c) => c.pattern)));
         // How many counts are already there (so the estimator sees exactly what a fresh start erases).
@@ -149,6 +148,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
       const resolved = new Map<string, ItemTypeRow>();
       const ambiguous = new Set<string>();
       for (const r of rows.filter((x) => inc.has(x.code))) {
+        if (only && onlyItem && r.code.toUpperCase() === only) { resolved.set(r.code, onlyItem); continue; }   // counted as this item, whatever else shares its code
         const lib = byCode.get(r.code.toUpperCase());
         if (lib?.length) {
           resolved.set(r.code, lib[0]); // the first item with this code is the default
@@ -251,13 +251,23 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
       // their earlier unreviewed automatic counts are replaced by this run.
       const clearIds = new Set<string>();
       // (and the length items of a measured type: the scan reads "P", but earlier counts may be on "P 7'")
-      for (const it of items) { const m = /^(.+?)(?:\/EM)? \d+'$/i.exec(it.code); if (m && measure.measured.has(m[1].toUpperCase())) clearIds.add(it.id); }
-      for (const sc of scans) for (const h of sc.hits) for (const it of byCode.get(h.code.toUpperCase()) ?? []) clearIds.add(it.id);
-      for (const it of resolved.values()) clearIds.add(it.id);
+      if (only && onlyItem) {
+        // one item: its own earlier automatic counts only (and its emergency and measured-length items), never another item's
+        clearIds.add(onlyItem.id);
+        for (const k of [...emKeys, ...lenKeys]) { const it = resolved.get(k); if (it) clearIds.add(it.id); }
+        const esc = only.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const family = new RegExp(`^${esc}(?:/EM)?(?: \\d+')?$`, 'i');   // D3, D3/EM, D3 7', D3/EM 7'
+        // its own variants (same category, as they are made); another item with the very same code is another item: left alone
+        for (const it of items) if (it.id !== onlyItem.id && family.test(it.code) && it.code.toUpperCase() !== only && it.category_id === onlyItem.category_id) clearIds.add(it.id);
+      } else {
+        for (const it of items) { const m = /^(.+?)(?:\/EM)? \d+'$/i.exec(it.code); if (m && measure.measured.has(m[1].toUpperCase())) clearIds.add(it.id); }
+        for (const sc of scans) for (const h of sc.hits) for (const it of byCode.get(h.code.toUpperCase()) ?? []) clearIds.add(it.id);
+        for (const it of resolved.values()) clearIds.add(it.id);
+      }
       const writeInc = new Set([...inc, ...emKeys, ...lenKeys]);
       // 2. Write each sheet's detections.
       let total = 0, removedPast = 0, removedGrid = 0, removedShort = 0, erased = 0, skipped = 0;
-      const reset: false | 'auto' | 'all' = resetAuto ? (resetManual ? 'all' : 'auto') : false;
+      const reset: false | 'auto' | 'all' = only ? false : resetAuto ? (resetManual ? 'all' : 'auto') : false;
       let i = 0;
       for (const sc of scans) {
         i++;
@@ -314,7 +324,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
 
   return (
     <Dialog title="Auto-count" onClose={phase === 'write' ? () => undefined : onClose} wide className="ac">
-      <div className="dialog-title">Auto-count {plural(sheets.length, 'sheet')}</div>
+      <div className="dialog-title">{onlyItem ? `Auto-count ${onlyItem.code} on ${plural(sheets.length, 'sheet')}` : `Auto-count ${plural(sheets.length, 'sheet')}`}</div>
 
       {phase === 'scan' && (
         <div className="stack">
@@ -327,7 +337,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
       {phase !== 'scan' && (
         <>
           <div className="muted" style={{ fontSize: 13 }}>
-            Found {plural(rows.length, 'tag type')}.{libraryDriven ? ' The tags in your item library are ticked.' : ' New tags are added to your item library; you can rename them there.'} Counts stay unreviewed until you confirm them.
+            {onlyItem && rows.length === 0 ? <>No <b>{onlyItem.code}</b> tags were found on these sheets. If {onlyItem.code} is drawn as a symbol with no tag, use Find similar (F) on one of them instead. </> : onlyItem ? <>Only <b>{onlyItem.code}</b> is counted ({onlyItem.name}); its earlier automatic counts are replaced, every other item's are left as they are. </> : <>Found {plural(rows.length, 'tag type')}.</>}{libraryDriven ? ' The tags in your item library are ticked.' : ' New tags are added to your item library; you can rename them there.'} Counts stay unreviewed until you confirm them.
           </div>
 
           {/* the tags to count come first and take the room */}
@@ -355,7 +365,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
           </div>
 
           <div className="ac-options">
-            {exTotals.auto + exTotals.manual > 0 && (
+            {!onlyItem && exTotals.auto + exTotals.manual > 0 && (
               <div className="stack" style={{ gap: 4 }}>
                 <Check checked={resetAuto} disabled={phase === 'write'} onChange={(v) => { setResetAuto(v); if (!v) setResetManual(false); }}>
                   Start fresh: erase the {plural(exTotals.auto, 'earlier automatic count')}{exTotals.confirmed ? ` (${exTotals.confirmed} confirmed)` : ''} first, then count again.
