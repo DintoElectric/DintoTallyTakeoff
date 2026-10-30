@@ -1484,3 +1484,18 @@ test('a tag with its /EM mark under a room name is a fixture, not a room number'
   assert.equal(hits.find((h) => h.code === 'B3')!.kind, 'tag');     // B3/EM: a fixture
   assert.equal(hits.find((h) => h.code === 'B7')!.kind, 'room');    // a rare plain code under a room name is still taken for a room number
 });
+
+// ---- the architectural plan over a sheet: orange lines, clear paper; a blank or broken render is never a sheet of orange ----
+import { overlayLooksRight, tintOverlay } from '../src/viewer/overlayTint.ts';
+test('overlay tint: lines orange, white paper and clear pixels clear; a blank page is not shown', () => {
+  const px = (r: number, g: number, b: number, a: number) => new Uint8ClampedArray([r, g, b, a]);
+  const black = px(0, 0, 0, 255); tintOverlay(black); assert.deepEqual([...black], [232, 110, 20, 255]);
+  const white = px(255, 255, 255, 255); tintOverlay(white); assert.equal(white[3], 0);
+  const clear = px(0, 0, 0, 0); tintOverlay(clear); assert.equal(clear[3], 0);           // unpainted: paper, not black
+  const blank = new Uint8ClampedArray(4 * 1000);                                           // a canvas the browser handed back blank
+  assert.equal(overlayLooksRight(tintOverlay(blank)), false);
+  const page = new Uint8ClampedArray(4 * 1000).fill(255); for (let i = 0; i < 150; i++) page.set([0, 0, 0, 255], i * 4);   // 15% lines
+  assert.equal(overlayLooksRight(tintOverlay(page)), true);
+  const solid = new Uint8ClampedArray(4 * 1000); for (let i = 0; i < 1000; i++) solid.set([20, 20, 20, 255], i * 4);
+  assert.equal(overlayLooksRight(tintOverlay(solid)), false);                            // nearly all dark: something went wrong
+});

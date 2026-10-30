@@ -2,6 +2,7 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRe
 import type { PDFPageProxy, RenderTask } from 'pdfjs-dist';
 import type { MarkerShape } from '../../shared/types.ts';
 import { BASE_MAX_PX, DETAIL_MAX_PX } from '../../shared/limits.ts';
+import { overlayLooksRight, tintOverlay } from './overlayTint.ts';
 import { GridIndex } from '../detect/grid.ts';
 import type { Zone, ZonePoint } from '../../shared/zones.ts';
 import { appPalette, drawMarker, type Palette } from './markerDraw.ts';
@@ -290,40 +291,47 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
     if (!overlayPage || !layer) return;
     let cancelled = false;
     let task: RenderTask | null = null;
+    const free = (c: HTMLCanvasElement) => { c.width = 0; c.height = 0; };
     (async () => {
       const vp1 = overlayPage.getViewport({ scale: 1 });
-      const scale = clamp(Math.sqrt(BASE_MAX_PX / (vp1.width * vp1.height)), 0.4, 3);
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.ceil(vp1.width * scale);
-      canvas.height = Math.ceil(vp1.height * scale);
-      try {
-        task = overlayPage.render({ canvas, viewport: overlayPage.getViewport({ scale }), annotationMode: 0 });
-        await task.promise;
-      } catch (e) {
-        if ((e as { name?: string })?.name !== 'RenderingCancelledException') P.current.onError("The architectural plan couldn't be drawn.");
+      // Drawn at a modest size (outlines need little detail), and smaller again if the browser hands back a blank canvas (it
+      // does that, silently, when canvas memory runs short beside the drawing's own canvases).
+      for (const maxPx of [4e6, 1.5e6]) {
+        const scale = clamp(Math.sqrt(maxPx / (vp1.width * vp1.height)), 0.2, 2);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.ceil(vp1.width * scale);
+        canvas.height = Math.ceil(vp1.height * scale);
+        try {
+          task = overlayPage.render({ canvas, viewport: overlayPage.getViewport({ scale }), annotationMode: 0 });
+          await task.promise;
+        } catch (e) {
+          free(canvas);
+          if ((e as { name?: string })?.name === 'RenderingCancelledException' || cancelled) return;
+          continue;
+        }
+        if (cancelled) { free(canvas); return; }
+        const ctx = canvas.getContext('2d');
+        let ok = false;
+        if (ctx && canvas.width > 0) {
+          try {
+            const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            ok = overlayLooksRight(tintOverlay(img.data));   // dark lines orange, the paper clear
+            if (ok) ctx.putImageData(img, 0, 0);
+          } catch { ok = false; }
+        }
+        if (!ok) { free(canvas); continue; }
+        canvas.className = 'overlay-canvas';
+        canvas.style.width = `${vp1.width}px`;
+        canvas.style.height = `${vp1.height}px`;
+        if (overlayRef.current) { free(overlayRef.current); overlayRef.current.remove(); }
+        layer.appendChild(canvas);
+        overlayRef.current = canvas;
+        placeOverlay();
         return;
       }
-      if (cancelled) { canvas.width = canvas.height = 0; return; }
-      // dark lines become orange, the paper clear: both drawings stay readable on top of each other
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const d = img.data;
-        for (let i = 0; i < d.length; i += 4) {
-          const dark = 1 - (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
-          d[i] = 232; d[i + 1] = 110; d[i + 2] = 20; d[i + 3] = dark < 0.12 ? 0 : Math.min(255, Math.round(dark * 300));
-        }
-        ctx.putImageData(img, 0, 0);
-      }
-      canvas.className = 'overlay-canvas';
-      canvas.style.width = `${vp1.width}px`;
-      canvas.style.height = `${vp1.height}px`;
-      overlayRef.current?.remove();
-      layer.appendChild(canvas);
-      overlayRef.current = canvas;
-      placeOverlay();
+      if (!cancelled) P.current.onError("The architectural plan couldn't be drawn in this browser. Try closing other tabs, then turn it on again.");
     })();
-    return () => { cancelled = true; task?.cancel(); overlayRef.current?.remove(); overlayRef.current = null; };
+    return () => { cancelled = true; task?.cancel(); if (overlayRef.current) { free(overlayRef.current); overlayRef.current.remove(); } overlayRef.current = null; };
   }, [overlayPage]); // eslint-disable-line react-hooks/exhaustive-deps
   const placeOverlay = () => {
     const o = P.current.overlay, c = overlayRef.current;
