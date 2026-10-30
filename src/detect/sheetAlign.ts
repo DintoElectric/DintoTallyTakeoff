@@ -3,6 +3,7 @@
 // the grid bubbles (16, 19.7, P.8, S.5 …) say where each drawing sits on its sheet. A point on the electrical sheet maps to
 // the architectural one as  A = s × E + d  (s: scale, the same drawing scale gives 1; d: the shift between the sheets).
 import type { PageRun } from './pageRuns.ts';
+import { isArchitectural } from '../../shared/sheetKinds.ts';
 
 export interface Alignment { s: number; dx: number; dy: number; across: number; down: number; how: 'grid' | 'hand' }
 export interface GridLabels { cols: Map<string, number[]>; rows: Map<string, number[]> }   // label: x (columns) or y (rows), points
@@ -75,10 +76,10 @@ export function levelOf(title: string | null): { level: string | null; area: str
 const ARCH_NOT_PLAN = /CEILING|REFLECTED|\bRCP\b|FINISH|ROOF|ENLARGED|STAIR|TOILET|DETAIL|ELEVATION|SECTION|SLAB|DEMOLITION|DEMO\b|MOCK|SITE|FURNITURE/;
 /** An architectural floor plan: an A-sheet whose title names a level and is not a ceiling, finish, roof or detail plan. */
 export const isArchPlan = (s: { number: string | null; title: string | null }) =>
-  /^A\s?-?\d/i.test(s.number ?? '') && levelOf(s.title).level !== null && !ARCH_NOT_PLAN.test((s.title ?? '').toUpperCase());
+  isArchitectural(s) && levelOf(s.title).level !== null && !ARCH_NOT_PLAN.test((s.title ?? '').toUpperCase());
 /** An electrical (or other trade's) plan to pair with one: a plan naming a level, that is not an architectural sheet. */
 export const isTradePlan = (s: { number: string | null; title: string | null; kind: string }) =>
-  !/^A\s?-?\d/i.test(s.number ?? '') && s.kind === 'floor_plan' && levelOf(s.title).level !== null;
+  !isArchitectural(s) && s.kind === 'floor_plan' && levelOf(s.title).level !== null;
 
 /**
  * The architectural plans that may match an electrical plan, best first: the same level (and area, when both name one).

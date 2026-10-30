@@ -13,6 +13,7 @@ import ScheduleDialog from './ScheduleDialog.tsx';
 import ScheduleSheetsDialog from './ScheduleSheetsDialog.tsx';
 import ScheduleFinderDialog from './ScheduleFinderDialog.tsx';
 import ArchAlignDialog from './ArchAlignDialog.tsx';
+import { autoCountSkips, isArchitectural } from '../../shared/sheetKinds.ts';
 import DuplicatesDialog from './DuplicatesDialog.tsx';
 
 const KIND_LABEL: Record<SheetKind, string> = { floor_plan: 'Floor plan', legend: 'Legend', site_plan: 'Site plan', schedule: 'Schedule', other: 'Other' };
@@ -75,8 +76,9 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
   }, [busyRemote, activeJobs, files.reload, sheetsQ.reload]);
 
   const proj = project.data?.project;
-  // Schedules and legends are never auto-counted: the tags printed in their tables are not fixtures on a plan.
-  const isNonCounting = (s: SheetRow) => s.kind === 'schedule' || s.kind === 'legend';
+  // Schedules, legends and architectural drawings are never auto-counted: the tags in a schedule's table are not fixtures on
+  // a plan, and an architectural drawing's are wall types, doors and rooms.
+  const isNonCounting = (s: SheetRow) => autoCountSkips(s) !== null;
   const enabled = sheets.filter((s) => s.count_enabled && !isNonCounting(s));
   const skippedSheets = sheets.filter((s) => s.count_enabled && isNonCounting(s)).length;
   const libCount = items.data?.items.length ?? 0;
@@ -121,7 +123,7 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
         {canEdit && <button className="btn btn-secondary" onClick={() => setArchOpen(true)} disabled={sheets.length === 0} title="Pair each plan with its architectural floor plan and line them up (for wall types)">Architectural plans</button>}
         {canEdit && <button className="btn btn-secondary" onClick={() => setSchedSheetsOpen(true)} disabled={sheets.length === 0} title="Stop counting the sheets that are, or hold, schedules">Exclude schedules</button>}
         {isAdmin && <button className="btn btn-secondary" onClick={() => setDupOpen(true)} disabled={sheets.length < 2} title="Find and remove sheets that were uploaded more than once">Remove duplicates</button>}
-        {canEdit && <button className="btn btn-primary" onClick={() => setAutoOpen(true)} disabled={enabled.length === 0} title={enabled.length === 0 ? 'Tick Count on at least one sheet first.' : skippedSheets ? `${plural(skippedSheets, 'schedule or legend sheet')} ticked to count will be skipped.` : undefined}>Auto-count {enabled.length} sheet{enabled.length === 1 ? '' : 's'}</button>}
+        {canEdit && <button className="btn btn-primary" onClick={() => setAutoOpen(true)} disabled={enabled.length === 0} title={enabled.length === 0 ? 'Tick Count on at least one sheet first.' : skippedSheets ? `${plural(skippedSheets, 'schedule, legend or architectural sheet')} ticked to count will be skipped.` : undefined}>Auto-count {enabled.length} sheet{enabled.length === 1 ? '' : 's'}</button>}
       </TopBar>
       <div className="two-col">
         <main className="sheet-main">
@@ -200,7 +202,7 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
                   {/* the thumbnail opens that drawing; the number and title below still edit in place */}
                   <button type="button" className="thumb thumb-open" onClick={() => navigate(paths.sheet(projectId, s.id))} aria-label={`Open sheet ${s.number ?? `page ${s.page}`}`} title="Open this drawing">
                     <img src={`/api/sheets/${s.id}/thumb`} alt="" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.visibility = 'hidden'; }} />
-                    <span className="tag tag-neutral">{KIND_LABEL[s.kind]}</span>
+                    <span className="tag tag-neutral" title={isArchitectural(s) ? 'Architectural drawing: not auto-counted, used for wall types' : undefined}>{isArchitectural(s) ? 'Architectural' : KIND_LABEL[s.kind]}</span>
                     <span className="st">{STATUS_LABEL[s.count_status]}{s.detection_count > 0 ? ` · ${s.detection_count}` : ''}</span>
                     <span className="open-hint">Open</span>
                   </button>
