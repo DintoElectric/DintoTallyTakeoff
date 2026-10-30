@@ -1,4 +1,7 @@
-// The architectural plan drawn over a sheet: its lines in orange, its paper clear. A pixel's ink is how dark it is times how
+// The architectural plan drawn over a sheet: its lines in orange, its paper clear. The page is drawn into a canvas with no
+// transparency (pdf.js makes it opaque), so the recoloured pixels go into a fresh canvas that has it: written back into the
+// drawn canvas, the paper would stay solid (orange, in some browsers).
+// A pixel's ink is how dark it is times how
 // opaque it is, so both white paper and clear (unpainted) pixels stay clear: a page that failed to draw shows nothing, never a
 // sheet of solid orange.
 export const OVERLAY_INK: [number, number, number] = [232, 110, 20];
@@ -9,8 +12,8 @@ export function tintOverlay(d: Uint8ClampedArray | Uint8Array): number {
   for (let i = 0; i < d.length; i += 4) {
     const dark = (1 - (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255) * (d[i + 3] / 255);
     const a = dark < 0.18 ? 0 : Math.min(255, Math.round(dark * 300));
-    d[i] = OVERLAY_INK[0]; d[i + 1] = OVERLAY_INK[1]; d[i + 2] = OVERLAY_INK[2]; d[i + 3] = a;
-    if (a) ink++;
+    if (a) { d[i] = OVERLAY_INK[0]; d[i + 1] = OVERLAY_INK[1]; d[i + 2] = OVERLAY_INK[2]; d[i + 3] = a; ink++; }
+    else { d[i] = 0; d[i + 1] = 0; d[i + 2] = 0; d[i + 3] = 0; }   // paper: no colour at all
   }
   return ink / (d.length / 4 || 1);
 }

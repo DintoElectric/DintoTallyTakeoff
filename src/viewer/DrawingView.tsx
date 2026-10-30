@@ -310,22 +310,29 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
           continue;
         }
         if (cancelled) { free(canvas); return; }
+        // The page was drawn into an opaque canvas (pdf.js gives it no transparency): the recoloured pixels go into a fresh
+        // canvas that has it, so the paper is clear. (Written back into the drawn one, the paper stays solid.)
         const ctx = canvas.getContext('2d');
-        let ok = false;
+        let shown: HTMLCanvasElement | null = null;
         if (ctx && canvas.width > 0) {
           try {
             const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            ok = overlayLooksRight(tintOverlay(img.data));   // dark lines orange, the paper clear
-            if (ok) ctx.putImageData(img, 0, 0);
-          } catch { ok = false; }
+            if (overlayLooksRight(tintOverlay(img.data))) {   // dark lines orange, the paper clear
+              const out = document.createElement('canvas');
+              out.width = canvas.width; out.height = canvas.height;
+              const octx = out.getContext('2d', { alpha: true });
+              if (octx) { octx.putImageData(img, 0, 0); shown = out; } else free(out);
+            }
+          } catch { shown = null; }
         }
-        if (!ok) { free(canvas); continue; }
-        canvas.className = 'overlay-canvas';
-        canvas.style.width = `${vp1.width}px`;
-        canvas.style.height = `${vp1.height}px`;
+        free(canvas);
+        if (!shown) continue;
+        shown.className = 'overlay-canvas';
+        shown.style.width = `${vp1.width}px`;
+        shown.style.height = `${vp1.height}px`;
         if (overlayRef.current) { free(overlayRef.current); overlayRef.current.remove(); }
-        layer.appendChild(canvas);
-        overlayRef.current = canvas;
+        layer.appendChild(shown);
+        overlayRef.current = shown;
         placeOverlay();
         return;
       }
