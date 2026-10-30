@@ -14,14 +14,15 @@ export function ItemPicker({ items, categories, onPick, onNew, currentId, autoFo
   const [q, setQ] = useState('');
   const [group, setGroup] = useState<'all' | CountGroup>('all');
   const groupOf = useMemo(() => new Map(items.map((i) => [i.id, countGroupOf(i, categories)])), [items, categories]);
+  const catName = useMemo(() => new Map(categories.map((c) => [c.id, c.name])), [categories]);
   const present = GROUPS.filter((g) => items.some((i) => groupOf.get(i.id) === g));
   const shown = useMemo(() => {
     const words = q.trim().toLowerCase().split(/\s+/).filter(Boolean);
     return items
-      .filter((i) => (group === 'all' || groupOf.get(i.id) === group) && words.every((w) => `${i.code} ${i.name}`.toLowerCase().includes(w)))
+      .filter((i) => (group === 'all' || groupOf.get(i.id) === group) && words.every((w) => `${i.code} ${i.name} ${i.category_id ? catName.get(i.category_id) ?? '' : ''}`.toLowerCase().includes(w)))
       // a code that starts with what was typed comes first ("D1" before "BD1")
       .sort((a, b) => Number(!a.code.toLowerCase().startsWith(words[0] ?? '')) - Number(!b.code.toLowerCase().startsWith(words[0] ?? '')) || a.code.localeCompare(b.code, undefined, { numeric: true }));
-  }, [items, q, group, groupOf]);
+  }, [items, q, group, groupOf, catName]);
   return (
     <div className="item-picker">
       {present.length > 1 && (
@@ -44,6 +45,7 @@ export function ItemPicker({ items, categories, onPick, onNew, currentId, autoFo
             <Symbol shape={i.marker_shape} glyph={i.marker_glyph} />
             <b>{i.code}</b>
             <span className="dim picker-name">{i.name}</span>
+            {i.category_id && catName.get(i.category_id) && <span className="picker-cat">{catName.get(i.category_id)}</span>}
           </button>
         ))}
         {shown.length === 0 && <div className="dim" style={{ padding: 8, fontSize: 13 }}>No items match{q ? ` “${q}”` : ''}.</div>}

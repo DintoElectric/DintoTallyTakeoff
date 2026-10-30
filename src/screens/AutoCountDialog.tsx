@@ -5,6 +5,14 @@ import { Check, Dialog, plural } from '../app/ui.tsx';
 import { discover, scanSheets, writeSheet, type CodeRow, type SheetScan } from '../detect/autoCount.ts';
 import { CONF_EMERGENCY, CONF_NORMAL_SPLIT } from '../detect/writePlan.ts';
 import { lengthFeetFromText, measuredOnPlans } from '../detect/lengthText.ts';
+import { countGroupOf, type CountGroup } from '../../shared/countGroup.ts';
+
+// What a sheet is a plan of decides between library items that share a code (a fixture C and a receptacle C): a lighting
+// plan counts the fixture, a power plan the device, a fire alarm plan the fire alarm device.
+const sheetGroup = (s: SheetRow): CountGroup | null => {
+  const t = (s.title ?? '').toUpperCase();
+  return /FIRE ALARM/.test(t) ? 'fire_alarm' : /LIGHTING/.test(t) ? 'fixture' : /POWER|SYSTEMS|TECHNOLOGY|TELECOM|\bDATA\b|SECURITY|AUDIO/.test(t) ? 'device' : null;
+};
 
 // A count of a fixture measured on the plan goes to the item for its length ("P 7'"): its key is the code, this, the feet.
 const LENGTH_KEY = '\u0002';
@@ -257,7 +265,17 @@ export default function AutoCountDialog({ projectId, sheets, items, onClose, onD
         setStatus(`Saving counts: sheet ${i} of ${scans.length}…`);
         // Fixtures of a split type go to their normal or emergency item, and measured ones to the item for their length.
         const hits = sc.hits.map(route);
-        const r = await writeSheet({ ...sc, hits }, resolved, writeInc, { ambiguous, clearItemIds: clearIds, reset, ignorePast, leaveOutGrid });
+        // a code shared by several items: the one this kind of plan counts, when exactly one fits (else it stays flagged)
+        let sheetResolved = resolved, sheetAmbiguous = ambiguous;
+        const g = sheetGroup(sc.sheet);
+        if (g && ambiguous.size) {
+          sheetResolved = new Map(resolved); sheetAmbiguous = new Set(ambiguous);
+          for (const code of ambiguous) {
+            const fits = (byCode.get(code.toUpperCase()) ?? []).filter((it) => countGroupOf(it, []) === g);
+            if (fits.length === 1) { sheetResolved.set(code, fits[0]); sheetAmbiguous.delete(code); }
+          }
+        }
+        const r = await writeSheet({ ...sc, hits }, sheetResolved, writeInc, { ambiguous: sheetAmbiguous, clearItemIds: clearIds, reset, ignorePast, leaveOutGrid });
         total += r.added;
         removedPast += r.removedPast;
         removedGrid += r.removedGrid;

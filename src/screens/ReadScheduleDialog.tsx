@@ -7,7 +7,7 @@ import { pdfjs } from '../viewer/pdf.ts';
 import { extractRuns } from '../detect/pageRuns.ts';
 import { extractPrims } from '../detect/primitives.ts';
 import { lengthFeetFromText } from '../detect/lengthText.ts';
-import { areaRows, headerLabel, readAreaTable, rowToItem, sectionName, suggestColumns, type AreaTable, type Box, type ColumnChoice } from '../detect/areaSchedule.ts';
+import { areaRows, headerLabel, readAreaTable, rowToItem, scheduleCategory, sectionName, suggestColumns, type AreaTable, type Box, type ColumnChoice } from '../detect/areaSchedule.ts';
 import { Check, Dialog, plural, useToast } from '../app/ui.tsx';
 
 // What was picked last time (by header name), so the next sheet of the same schedule is set up already.
@@ -20,8 +20,8 @@ const remember = (projectId: string, v: Memory) => { try { localStorage.setItem(
  * Reads the schedule in the boxed areas. The estimator picks the Type and Description columns; every other column read
  * goes into each item's details under its header (untick the ones not wanted, or draw an ignore area over them).
  */
-export default function ReadScheduleDialog({ page, projectId, boxes, zones, items, categories, onAddBox, onIgnoreColumn, onStartOver, onClose, onDone }: {
-  page: PDFPageProxy; projectId: string; boxes: Box[]; zones: Zone[]; items: ItemTypeRow[]; categories: CategoryRow[];
+export default function ReadScheduleDialog({ page, projectId, boxes, zones, items, categories, sheetTitle, onAddBox, onIgnoreColumn, onStartOver, onClose, onDone }: {
+  page: PDFPageProxy; projectId: string; boxes: Box[]; zones: Zone[]; items: ItemTypeRow[]; categories: CategoryRow[]; sheetTitle?: string | null;
   onAddBox: () => void; onIgnoreColumn: () => void; onStartOver: () => void; onClose: () => void; onDone: () => void;
 }) {
   const toast = useToast();
@@ -30,7 +30,11 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
   const [off, setOff] = useState<Set<string>>(new Set());         // rows unticked, by code
   const [update, setUpdate] = useState(true);
   const [group, setGroup] = useState<'fixture' | 'device' | 'fire_alarm'>('fixture');
-  const [useSections, setUseSections] = useState(true);
+  // The library category the read goes into: a schedule's items are matched by code within it only, so a receptacle C and a
+  // fixture C stay two items. 'new': a category of that name (the schedule's title); 'sections': the section headings; else
+  // an existing category's id.
+  const [catMode, setCatMode] = useState<string>('new');
+  const [newCat, setNewCat] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => {
@@ -44,6 +48,9 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
       if (gone) return;
       setTable(t);
       if (t) {
+        const name = scheduleCategory(t.title) ?? scheduleCategory(sheetTitle) ?? 'Schedule items';
+        const known = categories.find((c) => c.name.toLowerCase() === name.toLowerCase());
+        if (known) setCatMode(known.id); else { setCatMode('new'); setNewCat(name); }
         const c = suggestColumns(t.columns, recall(projectId));
         setChoice(c);
         // a schedule of devices (receptacles, outlets) reads as devices; a light fixture schedule as fixtures
@@ -55,7 +62,12 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
     return () => { gone = true; };
   }, [page, boxes, zones, projectId]);
 
-  const byCode = useMemo(() => new Map(items.map((i) => [i.code.toUpperCase(), i])), [items]);
+  const catByName = useMemo(() => new Map(categories.map((c) => [c.name.toLowerCase(), c])), [categories]);
+  // the category a row goes into (null: one that does not exist yet), and the item of that code already in it
+  const catOf = (section: string | null): string | null =>
+    catMode === 'sections' ? (section ? catByName.get(sectionName(section).toLowerCase())?.id ?? null : null)
+      : catMode === 'new' ? catByName.get(newCat.trim().toLowerCase())?.id ?? null : catMode;
+  const inLib = (r: { code: string; section: string | null }) => { const c = catOf(r.section); return c ? items.find((i) => i.code.toUpperCase() === r.code && i.category_id === c) : undefined; };
   const rows = useMemo(() => {
     if (!table) return [];
     // A code read twice: the same type again is left out; a different item with the same code (two "MS" from initials) gets "-2".
@@ -74,8 +86,8 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
     return out;
   }, [table, choice]);
   const sections = [...new Set(rows.map((r) => r.section).filter(Boolean))] as string[];
-  const chosen = rows.filter((r) => !off.has(r.code) && (update || !byCode.has(r.code)));
-  const fresh = chosen.filter((r) => !byCode.has(r.code)).length;
+  const chosen = rows.filter((r) => !off.has(r.code) && (update || !inLib(r)));
+  const fresh = chosen.filter((r) => !inLib(r)).length;
 
   const write = async () => {
     if (!table) return;
@@ -85,22 +97,27 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
       skip: table.columns.map((c, i) => (i !== choice.type && i !== choice.description && !choice.extra.includes(i) ? c.header : '')).filter(Boolean) });
     let added = 0, updated = 0;
     try {
-      // the section headings as categories (made when missing)
+      // the categories (made when missing): the schedule's, or one per section heading
       const catId = new Map(categories.map((c) => [c.name.toLowerCase(), c.id]));
-      if (useSections) for (const s of sections) {
-        const name = sectionName(s);
+      const need = catMode === 'sections' ? sections.map(sectionName) : catMode === 'new' ? [newCat.trim() || 'Schedule items'] : [];
+      for (const name of need) {
         if (catId.has(name.toLowerCase())) continue;
         setBusy(`Adding category ${name}…`);
-        try { const { category } = await api<{ category: CategoryRow }>('/categories', { body: { project_id: projectId, name } }); catId.set(name.toLowerCase(), category.id); } catch { /* a teammate may have just added it */ }
+        try { const { category } = await api<{ category: CategoryRow }>('/categories', { body: { project_id: projectId, name } }); catId.set(name.toLowerCase(), category.id); }
+        catch { const fresh = (await api<{ categories: CategoryRow[] }>(`/categories?project=${projectId}`)).categories.find((c) => c.name.toLowerCase() === name.toLowerCase()); if (fresh) catId.set(name.toLowerCase(), fresh.id); }   // a teammate may have just added it
       }
+      const categoryOf = (section: string | null) => catMode === 'sections' ? (section ? catId.get(sectionName(section).toLowerCase()) ?? null : null) : catMode === 'new' ? catId.get((newCat.trim() || 'Schedule items').toLowerCase()) ?? null : catMode;
+      let clashes = 0;
       for (const [i, r] of chosen.entries()) {
         setBusy(`Saving ${i + 1} of ${chosen.length}…`);
-        const category_id = useSections && r.section ? catId.get(sectionName(r.section).toLowerCase()) ?? null : undefined;
-        const cur = byCode.get(r.code);
-        if (cur) { await api(`/items/${cur.id}`, { method: 'PATCH', body: { name: r.name, spec: r.spec, count_group: group, ...(category_id !== undefined ? { category_id } : {}) } }); updated++; }
-        else { await api('/items', { body: { project_id: projectId, code: r.code, name: r.name, spec: r.spec, unit: 'EA', count_group: group, length_ft: group === 'fixture' ? lengthFeetFromText(r.name, r.spec ?? '') : null, ...(category_id ? { category_id } : {}) } }); added++; }
+        const category_id = categoryOf(r.section);
+        // the item of this code in this category only: the same code in another category is another item
+        const cur = items.find((it) => it.code.toUpperCase() === r.code && it.category_id === category_id);
+        if (cur) { await api(`/items/${cur.id}`, { method: 'PATCH', body: { name: r.name, spec: r.spec, count_group: group } }); updated++; continue; }
+        try { await api('/items', { body: { project_id: projectId, code: r.code, name: r.name, spec: r.spec, unit: 'EA', count_group: group, category_id, length_ft: group === 'fixture' ? lengthFeetFromText(r.name, r.spec ?? '') : null } }); added++; }
+        catch (e) { if (e instanceof ApiError && e.status === 409) clashes++; else throw e; }   // the same code and description is already in the library
       }
-      toast([added && `Added ${plural(added, 'type')}`, updated && `updated ${plural(updated, 'type')}`].filter(Boolean).join(', ') + '.');
+      toast([added && `Added ${plural(added, 'type')}`, updated && `updated ${plural(updated, 'type')}`, clashes && `${plural(clashes, 'type')} left out: the same code and description is already in another category`].filter(Boolean).join(', ') + '.');
       onDone();
     } catch (e) {
       toast(`${e instanceof ApiError ? e.message : 'Saving stopped.'} ${added + updated ? `${added + updated} were saved before that.` : ''}`);
@@ -158,7 +175,7 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
                 <thead><tr><th style={{ width: 28 }} /><th>Type</th><th>Description</th><th>Details</th>{sections.length > 0 && <th>Section</th>}<th /></tr></thead>
                 <tbody>
                   {rows.map((r, idx) => {
-                    const inLib = byCode.has(r.code);
+                    const inLibrary = !!inLib(r);
                     const sectionStart = sections.length > 0 && r.section && (idx === 0 || rows[idx - 1].section !== r.section);
                     const inSection = rows.filter((x) => x.section === r.section);
                     const allOn = inSection.every((x) => !off.has(x.code));
@@ -169,13 +186,13 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
                           <td colSpan={5}><b>{sectionName(r.section!)}</b> <span className="dim num">· {plural(inSection.length, 'item')}</span></td>
                         </tr>
                       )}
-                      <tr key={r.code} className={off.has(r.code) || (inLib && !update) ? 'dim' : ''}>
+                      <tr key={r.code} className={off.has(r.code) || (inLibrary && !update) ? 'dim' : ''}>
                         <td><input type="checkbox" checked={!off.has(r.code)} onChange={() => setOff((s) => { const n = new Set(s); if (n.has(r.code)) n.delete(r.code); else n.add(r.code); return n; })} aria-label={`Read ${r.code}`} /></td>
                         <td><b>{r.code}</b></td>
                         <td><div className="clamp3">{r.name}</div></td>
                         <td title={r.spec ?? ''}><div className="clamp3">{r.spec}</div></td>
                         {sections.length > 0 && <td className="dim">{r.section ? sectionName(r.section) : ''}</td>}
-                        <td>{inLib ? <span className="tag tag-outline">In library</span> : <span className="tag tag-accent">New</span>}</td>
+                        <td>{inLibrary ? <span className="tag tag-outline" title="Already in this category: updated if you tick Update below">In library</span> : <span className="tag tag-accent">New</span>}</td>
                       </tr>
                     </Fragment>);
                   })}
@@ -188,8 +205,18 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
             <label className="row" style={{ gap: 8, fontSize: 13 }}>New types are
               <select className="input" style={{ width: 120, minHeight: 30 }} value={group} onChange={(e) => setGroup(e.target.value as 'fixture' | 'device' | 'fire_alarm')}><option value="fixture">Fixtures</option><option value="device">Devices</option><option value="fire_alarm">Fire alarm</option></select>
             </label>
-            {sections.length > 0 && <Check checked={useSections} onChange={setUseSections}>Use the section headings as categories ({sections.map(sectionName).join(', ')})</Check>}
-            <Check checked={update} onChange={setUpdate}>Update the types already in the library ({rows.filter((r) => byCode.has(r.code)).length})</Check>
+            <label className="row" style={{ gap: 8, fontSize: 13 }}>Put them in
+              <select className="input" style={{ width: 230, minHeight: 30 }} value={catMode} onChange={(e) => setCatMode(e.target.value)}>
+                <option value="new">New category…</option>
+                {sections.length > 0 && <option value="sections">Section headings ({sections.map(sectionName).join(', ')})</option>}
+                {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+              {catMode === 'new' && <input className="input" style={{ width: 300, minHeight: 30 }} value={newCat} onChange={(e) => setNewCat(e.target.value)} placeholder="Category name" aria-label="New category name" />}
+            </label>
+            <Check checked={update} onChange={setUpdate}>Update the types already in this category ({rows.filter((r) => inLib(r)).length})</Check>
+          </div>
+          <div className="dim" style={{ fontSize: 12 }}>
+            Codes are matched within the category only: a C read here is a different item from a C in another category (a light fixture C and a receptacle C stay apart).
           </div>
         </div>
       )}

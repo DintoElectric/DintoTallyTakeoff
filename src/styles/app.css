@@ -294,3 +294,4 @@ th.right { text-align: right; }
 /* the architectural plan over the sheet */
 .page-layer canvas.overlay-canvas { transform-origin: 0 0; pointer-events: none; z-index: 3; }
 .viewport.tool-align { cursor: crosshair; }
+.picker-cat { margin-left: auto; flex: none; font-size: 11px; color: var(--color-neutral-400); border: 1px solid var(--color-divider); border-radius: 999px; padding: 0 7px; white-space: nowrap; }

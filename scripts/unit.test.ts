@@ -1400,3 +1400,13 @@ test('line-up: levels and areas from titles; architectural floor plans are told 
   assert.equal(candidates({ title: 'MAIN LEVEL ELECTRICAL POWER PLAN - AREA B' }, arch)[0].number, 'A1.02B');
   assert.equal(candidates({ title: 'LOWER LEVEL ELECTRICAL LIGHTING PLAN' }, arch)[0].number, 'A1.01');
 });
+
+// ---- a schedule's items go in a category of its own (codes matched within it: a fixture C and a receptacle C stay apart) ----
+import { scheduleCategory } from '../src/detect/areaSchedule.ts';
+test('schedule category: from the schedule title, without "(1 OF 2)" or "ELEC -"', () => {
+  assert.equal(scheduleCategory('ELEC - LUMINAIRE SCHEDULE (1 OF 2)'), 'Luminaire schedule');
+  assert.equal(scheduleCategory('ELEC - LUMINAIRE SCHEDULE (2 OF 2)'), 'Luminaire schedule');            // both halves: one category
+  assert.equal(scheduleCategory('SPECIAL PURPOSE RECEPTACLE SCHEDULE'), 'Special purpose receptacle schedule');
+  assert.equal(scheduleCategory('ELECTRICAL LEGEND'), 'Legend');
+  assert.equal(scheduleCategory(null), null);
+});

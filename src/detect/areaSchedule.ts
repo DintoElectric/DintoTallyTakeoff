@@ -14,7 +14,7 @@ interface Word { s: string; x0: number; x1: number; y: number; h: number }  // p
 export interface AreaColumn { header: string; x0: number; x1: number; sample: string }
 /** A row band between two of the table's horizontal lines; merged: no column line runs through it (a section heading). */
 export interface Band { y0: number; y1: number; merged: boolean }
-export interface AreaTable { columns: AreaColumn[]; lines: Word[][]; bands: Band[] }
+export interface AreaTable { columns: AreaColumn[]; lines: Word[][]; bands: Band[]; title?: string | null }   // title: the schedule's own, above its header
 export interface AreaRow { cells: string[]; section: string | null }
 
 // The words schedule headers are made of (fixtures, receptacles and devices, equipment, panels). Only used to tell the
@@ -189,7 +189,22 @@ export function readAreaTable(runs: PageRun[], boxIn: Box | Box[], opts: { pageW
     const through = (x: number) => (opts.vlines ?? []).some((v) => Math.abs(v.x - x) < 1.5 && v.y0 - 1 <= ym && v.y1 + 1 >= ym);
     return { y0, y1, merged: firstInner !== null && !through(firstInner) };
   });
-  const table: AreaTable = { columns: cols, lines: data, bands };
+  // The schedule's title: a line above the header naming a schedule or legend ("SPECIAL PURPOSE RECEPTACLE SCHEDULE"), in the
+  // boxes or just above them over the same columns.
+  const hTop = Math.min(...head.map((w) => w.y));
+  // (a title is centred over the whole table, which can be far wider than the boxed columns: the nearest one above is taken)
+  const cx = (cols[0].x0 + cols[cols.length - 1].x1) / 2;
+  const over = lines(words.filter((w) => w.y < hTop - 0.5 * h0 && w.y > hTop - 90 && Math.abs(mid(w) - cx) < 1500));
+  // (a line across the sheet holds other text too: split it at wide gaps, and keep the phrase naming a schedule or legend)
+  const phrases = over.flatMap((l) => {
+    const out: Word[][] = [];
+    for (const w of l) { const cur = out[out.length - 1]; if (cur && w.x0 - cur[cur.length - 1].x1 < 3 * h0) cur.push(w); else out.push([w]); }
+    return out;
+  });
+  const named = phrases.filter((l) => /SCHEDULE|LEGEND/i.test(l.map((w) => w.s).join(' ')));
+  const titleLine = named.sort((p, q) => Math.abs((p[0].x0 + p[p.length - 1].x1) / 2 - cx) - Math.abs((q[0].x0 + q[q.length - 1].x1) / 2 - cx))[0];
+  const title = titleLine ? titleLine.map((w) => w.s).join(' ').replace(/\s+/g, ' ').trim() : null;
+  const table: AreaTable = { columns: cols, lines: data, bands, title };
   // a sample of each column, to recognize it by (a heading that starts in a column to its left is not a sample)
   for (let c = 0; c < cols.length; c++) cols[c].sample = data.flatMap((l) => l.filter((w) => colOf(table, w) === c && w.x0 >= cols[c].x0 - 2).map((w) => w.s)).join(' ').slice(0, 60);
   return table;
@@ -304,4 +319,13 @@ export function legendCode(row: AreaRow, choice: ColumnChoice, cols: AreaColumn[
   const desc = choice.description === null ? row.cells.find(Boolean) ?? '' : row.cells[choice.description] ?? '';
   const ws = desc.toUpperCase().replace(/\(.*?\)/g, ' ').split(/[^A-Z0-9]+/).filter((w) => w.length > 2 && !/^(THE|AND|WITH|FOR|OR|OF|TO|IN|ON)$/.test(w));
   return ws.slice(0, 4).map((w) => w[0]).join('') || 'ITEM';
+}
+
+/** A schedule's title as a library category: "ELEC - LUMINAIRE SCHEDULE (1 OF 2)" -> "Luminaire schedule". */
+export function scheduleCategory(title: string | null | undefined): string | null {
+  if (!title) return null;
+  const t = title.replace(/\(\s*\d+\s+OF\s+\d+\s*\)/gi, '').replace(/^\s*(ELEC(TRICAL)?\.?\s*-?\s*)/i, '').replace(/\s+/g, ' ').trim();
+  if (!t) return null;
+  const s = t.toLowerCase();
+  return (s.charAt(0).toUpperCase() + s.slice(1)).slice(0, 60);
 }

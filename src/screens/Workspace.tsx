@@ -1000,7 +1000,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
           onDone={(msg) => { setShowAuto(false); toast(msg); void itemsQ.reload(); void countsQ.reload(); void sheetsQ.reload(); void getStore(sheetId).load(true); }} />
       )}
       {readOpen && readBoxes.length > 0 && page && sheet && (
-        <ReadScheduleDialog page={page} projectId={projectId} boxes={readBoxes} zones={zonesShown} items={items} categories={categories}
+        <ReadScheduleDialog page={page} projectId={projectId} boxes={readBoxes} zones={zonesShown} items={items} categories={categories} sheetTitle={sheet.title}
           onAddBox={() => { setReadOpen(false); setTool('read'); toast('Drag a box around the next column header.'); }}
           onIgnoreColumn={() => { setReadOpen(false); setTool('zone'); setDraft([]); toast('Outline the column to leave out (click its corners, then click the first point), then Continue reading.'); }}
           onStartOver={() => { setReadBoxes([]); setReadOpen(false); setTool('read'); toast('Boxes cleared. Drag a box around a column header.'); }}
