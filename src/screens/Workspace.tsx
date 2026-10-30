@@ -16,6 +16,8 @@ import { countGroupOf, GROUP_LABEL, GROUPS, type CountGroup } from '../../shared
 import { buildSheetPdf, sheetPdfName, type CountList } from '../export/sheetPdf.ts';
 import ReadScheduleDialog from './ReadScheduleDialog.tsx';
 import { ItemPicker } from './ItemPicker.tsx';
+import { countRegion } from '../detect/tagScan.ts';
+import { detailZones, findDetailViews } from '../detect/detailViews.ts';
 import { autoCountSkips, planGroup } from '../../shared/sheetKinds.ts';
 import { circuitStats, mainLabel, type Panel } from '../../shared/panels.ts';
 import { ceilingIndex, CEILING_LABEL, CEILING_TITLE, type Ceiling, type CeilingIndex } from '../detect/ceiling.ts';
@@ -230,7 +232,17 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
     setAutoZones([]);
     if (!page || !sheet) return;
     let off = false;
-    extractRuns(page).then((runs) => { if (!off) setAutoZones(zonesFromMatchlines(findMatchlines(runs, sheet.number))); }).catch(() => undefined);
+    extractRuns(page).then(async (runs) => {
+      const lines = zonesFromMatchlines(findMatchlines(runs, sheet.number));
+      if (!off) setAutoZones(lines);
+      // and details beside the plan at another scale (an enlarged callout, a section), as Auto-count leaves them out
+      try {
+        const vp = page.getViewport({ scale: 1 });
+        const { prims } = await extractPrims(page, pdfjs.OPS);
+        const details = detailZones(findDetailViews(prims, runs, vp.width, vp.height, countRegion(prims, vp.width, vp.height)), vp.width, vp.height);
+        if (!off && details.length) setAutoZones([...lines, ...details]);
+      } catch { /* the matchline areas stand */ }
+    }).catch(() => undefined);
     return () => { off = true; };
   }, [page, sheet?.id, sheet?.number]); // eslint-disable-line react-hooks/exhaustive-deps
 

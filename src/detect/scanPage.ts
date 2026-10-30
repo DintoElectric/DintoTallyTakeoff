@@ -9,6 +9,8 @@ import { extractPrims, type OpsLike } from './primitives.ts';
 import { findHexNotes } from './notes.ts';
 import { findMatchlines, zonesFromMatchlines, type Matchline } from './matchlines.ts';
 import { inZones, type Zone } from '../../shared/zones.ts';
+import { detailZones, findDetailViews } from './detailViews.ts';
+import { findSwitches } from './switches.ts';
 import { countRegion, DEFAULT_COUNT_REGION, scanTags, type Region, type TagHit } from './tagScan.ts';
 import { attachLabels } from './emergency.ts';
 
@@ -23,13 +25,27 @@ const pageSize = async (page: { getViewport(o: { scale: number }): { width: numb
  * `sheetNumber` is this sheet's own number (needed to tell which side of a matchline is the neighbour's).
  * `handZones` are the estimator's own exclusion zones for the sheet; null means use the ones found from the matchlines.
  */
-export async function scanPage(page: PageForRuns & PageForPrims, OPS: OpsLike, sheetNumber: string | null, handZones: Zone[] | null = null, knownCodes?: Set<string>): Promise<PageScan> {
+export async function scanPage(page: PageForRuns & PageForPrims, OPS: OpsLike, sheetNumber: string | null, handZones: Zone[] | null = null, knownCodes?: Set<string>,
+  /** for comparing with earlier behaviour in tests: the old margins, and no details left out */
+  legacy?: { margins?: boolean; details?: boolean }): Promise<PageScan> {
   const runs = await extractRuns(page);
   // The linework first: it shows where the title block starts, and so how far across the sheet to count.
   let drawn: Awaited<ReturnType<typeof extractPrims>> | null = null;
   try { drawn = await extractPrims(page, OPS, { keepPoints: true }); } catch (e) { console.warn('Reading the linework failed for a sheet; counting tags only', e); }
-  const R: Region = drawn ? countRegion(drawn.prims, drawn.width, drawn.height) : DEFAULT_COUNT_REGION;
+  const found: Region = drawn ? countRegion(drawn.prims, drawn.width, drawn.height) : DEFAULT_COUNT_REGION;
+  const R: Region = legacy?.margins ? { ...DEFAULT_COUNT_REGION, x1: found.x1 } : found;
   let hits = scanTags(runs, R, knownCodes);
+  // Lighting control switches first: the drawn "$" and its letters ($D2, $DOS). The letters are taken away from the tags,
+  // so a switch's D2 is never counted as fixture D2.
+  if (drawn) {
+    const sw = findSwitches(drawn.prims, runs, drawn.width, drawn.height, R);
+    if (sw.length) {
+      const letters = sw.flatMap((s) => s.letters);
+      const covered = (h: TagHit) => letters.some((r) => Math.abs(h.x - r.cx) <= r.w / 2 + 1e-4 && Math.abs(h.y - r.cy) <= r.h / 2 + 1e-4);
+      hits = hits.filter((h) => !covered(h));
+      for (const s of sw) hits.push({ code: s.code, x: s.x, y: s.y, kind: 'switch', h: s.h });
+    }
+  }
   let bubbles: GridBubble[] = [];
   // Drawing notes: hexagons with a label inside. A tag-looking label inside a hexagon (EM2, EX3) is a note, not a device.
   try {
@@ -74,7 +90,8 @@ export async function scanPage(page: PageForRuns & PageForPrims, OPS: OpsLike, s
   const dims = await pageSize(page);
   attachLabels(hits, runs, dims.w, dims.h);
   const lines = findMatchlines(runs, sheetNumber);
-  const autoZones = zonesFromMatchlines(lines);
+  // and details beside the plan at another scale (an enlarged callout, a section): they repeat what is on the plan
+  const autoZones = [...zonesFromMatchlines(lines), ...(drawn && !legacy?.details ? detailZones(findDetailViews(drawn.prims, runs, drawn.width, drawn.height, R), drawn.width, drawn.height) : [])];
   const zones = handZones ?? autoZones;
   for (const h of hits) if (inZones(h.x, h.y, zones)) h.past = true;
   return { hits, lines, zones, autoZones, runs, bubbles };

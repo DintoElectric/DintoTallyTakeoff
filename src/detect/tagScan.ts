@@ -38,13 +38,23 @@ export function countRegion(prims: LinePrim[], W: number, H: number): Region {
     const longest = Math.max(...near.map((q) => q.y1 - q.y0));
     if (top < 0.06 * H && bottom > 0.94 * H && longest > 0.5 * H) edges.push(x);   // solid and the sheet's full height
   }
-  if (!edges.length) return DEFAULT_COUNT_REGION;
-  const x1 = Math.min(...edges) / W - 0.003;
-  // (never narrower than the default: a line further left can belong to a table on the sheet, and nothing is gained there)
-  return { ...DEFAULT_COUNT_REGION, x1: Math.min(0.97, Math.max(DEFAULT_COUNT_REGION.x1, x1)) };
+  // The sheet's frame: its inner line on the left, top and bottom (the border's references, A-J and 1-11, sit outside it).
+  // A long solid line, the whole height (or width) of the sheet, near that edge; the innermost one is the frame's inside.
+  const left = prims.filter((p) => p.x1 - p.x0 < 1.5 && p.y1 - p.y0 > 0.8 * H && p.x0 > 0.005 * W && p.x0 < 0.08 * W).map((p) => p.x0);
+  // (a frame line starts at the left edge: a view title's long underline does not)
+  const top = prims.filter((p) => p.y1 - p.y0 < 1.5 && p.x1 - p.x0 > 0.6 * W && p.x0 < 0.08 * W && p.y0 > 0.005 * H && p.y0 < 0.08 * H).map((p) => p.y0);
+  const bottom = prims.filter((p) => p.y1 - p.y0 < 1.5 && p.x1 - p.x0 > 0.6 * W && p.x0 < 0.08 * W && p.y0 > 0.92 * H && p.y0 < 0.995 * H).map((p) => p.y0);
+  // (each edge only moves in from the default, never out: the counting area never grows past it)
+  const x0 = left.length ? Math.max(DEFAULT_COUNT_REGION.x0, Math.max(...left) / W + 0.004) : DEFAULT_COUNT_REGION.x0;
+  const y0 = top.length ? Math.max(DEFAULT_COUNT_REGION.y0, Math.max(...top) / H + 0.004) : DEFAULT_COUNT_REGION.y0;
+  const y1 = bottom.length ? Math.min(DEFAULT_COUNT_REGION.y1, Math.min(...bottom) / H - 0.004) : DEFAULT_COUNT_REGION.y1;
+  const x1 = edges.length ? Math.min(0.97, Math.max(DEFAULT_COUNT_REGION.x1, Math.min(...edges) / W - 0.003)) : DEFAULT_COUNT_REGION.x1;
+  // (the title block edge: never narrower than the default, as a line further left can belong to a table on the sheet)
+  if (x0 === DEFAULT_COUNT_REGION.x0 && y0 === DEFAULT_COUNT_REGION.y0 && y1 === DEFAULT_COUNT_REGION.y1 && x1 === DEFAULT_COUNT_REGION.x1) return DEFAULT_COUNT_REGION;
+  return { x0, y0, x1, y1 };
 }
 
-export type TagKind = 'tag' | 'short' | 'room' | 'note' | 'camera' | 'outlet';
+export type TagKind = 'tag' | 'short' | 'room' | 'note' | 'camera' | 'outlet' | 'switch';   // switch: a lighting control "$D2"
 export interface TagHit {
   lengthFt?: number | null;   // measured on the plan (fixtures whose length is left to the drawings), nearest foot
   lengthSure?: boolean;       // the measurement is certain (else flagged for review)
@@ -136,6 +146,20 @@ export function scanTags(runs: PageRun[], region: Region = DEFAULT_COUNT_REGION,
       }
       offset += p.length;
     }
+  }
+  // A mark written as its own piece of text right after a tag on the same line ("SC2" then "/EM"): that tag's mark.
+  for (const r of live) {
+    const m = /^\/([A-Z]{1,4})$/.exec(r.str.trim());
+    if (!m) continue;
+    const charW = r.w / Math.max(1, r.str.trim().length), left = r.cx - r.w / 2;
+    let best: TagHit | null = null, gap = Infinity;
+    for (const h of hits) {
+      if ((h.kind !== 'tag' && h.kind !== 'short') || Math.abs(h.y - r.cy) > (h.h ?? r.h) * 0.7) continue;
+      const right = h.x + (h.code.length / 2) * charW;      // the tag's right edge (letters about as wide as the mark's)
+      const g = left - right;
+      if (g > -charW && g < 2.5 * charW && g < gap) { gap = g; best = h; }
+    }
+    if (best) (best.suffixes ??= []).push(`/${m[1]}`);
   }
   return markRoomNumbers(hits, live);
 }

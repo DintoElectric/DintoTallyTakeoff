@@ -6,7 +6,7 @@ import type { TagHit } from './tagScan.ts';
 export interface ScanLike { sheet: { id: string }; hits: TagHit[] }
 
 export interface CodeRow { code: string; kind: TagKind; total: number; bySheet: Map<string, number>; name?: string; shape?: string; glyph?: string }
-const KIND_RANK: Record<TagKind, number> = { camera: 0, outlet: 0, note: 0, tag: 1, short: 2, room: 3 };
+const KIND_RANK: Record<TagKind, number> = { switch: 0, camera: 0, outlet: 0, note: 0, tag: 1, short: 2, room: 3 };
 export function discover(scans: ScanLike[]): CodeRow[] {
   const m = new Map<string, CodeRow & { rooms: number; real: number; notes: number }>();
   for (const sc of scans) {
@@ -21,7 +21,7 @@ export function discover(scans: ScanLike[]): CodeRow[] {
     }
   }
   // A code is a room number only if EVERY occurrence looks like one (EM2 is a fixture even if one hit sits under a room name).
-  const rows = [...m.values()].map(({ rooms, real, notes, ...r }) => ({ ...r, kind: (r.kind === 'camera' || r.kind === 'outlet' ? r.kind : notes > 0 && notes >= r.total - rooms ? 'note' : rooms === r.total ? 'room' : real > 0 ? 'tag' : 'short') as TagKind }));
+  const rows = [...m.values()].map(({ rooms, real, notes, ...r }) => ({ ...r, kind: (r.kind === 'camera' || r.kind === 'outlet' || r.kind === 'switch' ? r.kind : notes > 0 && notes >= r.total - rooms ? 'note' : rooms === r.total ? 'room' : real > 0 ? 'tag' : 'short') as TagKind }));
   return rows.sort((a, b) => KIND_RANK[a.kind] - KIND_RANK[b.kind] || b.total - a.total || a.code.localeCompare(b.code));
 }
 

@@ -71,7 +71,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
   const [showShort, setShowShort] = useState(false);
   const [emOpen, setEmOpen] = useState(false); // the emergency options start folded up so the tag table has the room
   const rows: CodeRow[] = useMemo(() => {
-    const rank = (r: CodeRow) => (r.kind === 'room' ? 4 : byCode.has(r.code.toUpperCase()) ? 0 : r.kind === 'note' || r.kind === 'camera' || r.kind === 'outlet' ? 1 : r.kind === 'tag' ? 2 : 3);
+    const rank = (r: CodeRow) => (r.kind === 'room' ? 4 : r.kind === 'switch' || byCode.has(r.code.toUpperCase()) ? 0 : r.kind === 'note' || r.kind === 'camera' || r.kind === 'outlet' ? 1 : r.kind === 'tag' ? 2 : 3);
     // Short letter-only marks (S, OS, CR, MM ...) are easily mixed up with other text, so they are counted only when this
     // project's library has them (a security device CR, a fire alarm module MM), or when you ask to see them.
     return [...discover(effective)].filter((r) => (only ? r.code.toUpperCase() === only : r.kind !== 'short' || byCode.has(r.code.toUpperCase()) || showShort))
@@ -108,9 +108,9 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
         // With a library (for example from a fixture schedule) only tags that match it are pre-ticked, so grid
         // labels and other look-alikes stay out. With no matches yet, every tag is pre-ticked to get you started.
         // Room numbers are never pre-ticked.
-        const lib = found.filter((r) => r.kind !== 'room' && r.kind !== 'note' && r.kind !== 'camera' && r.kind !== 'outlet' && byCode.has(r.code.toUpperCase()));
+        const lib = found.filter((r) => r.kind !== 'room' && r.kind !== 'note' && r.kind !== 'camera' && r.kind !== 'outlet' && r.kind !== 'switch' && byCode.has(r.code.toUpperCase()));
         setLibraryDriven(lib.length > 0);
-        const notes = found.filter((r) => r.kind === 'note' || r.kind === 'camera' || r.kind === 'outlet'); // drawing notes, cameras and triangle outlets are always counted
+        const notes = found.filter((r) => r.kind === 'note' || r.kind === 'camera' || r.kind === 'outlet' || r.kind === 'switch'); // drawing notes, cameras, triangle outlets and switches are always counted
         setInc(new Set(only ? found.filter((r) => r.code.toUpperCase() === only).map((r) => r.code) : [...(lib.length > 0 ? lib : found.filter((r) => r.kind === 'tag')), ...notes].map((r) => r.code)));
         if (only) { setResetAuto(false); setResetManual(false); }   // one item: never a fresh start of the whole sheet
         // Only markers with a normal twin are pre-ticked; "possible" ones (no twin) are left for the estimator.
@@ -145,10 +145,26 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
       // 1. Resolve each chosen tag to a library item, creating items for new tags.
       let noteCat: string | undefined;
       const devCats = new Map<string, string>(); // Cameras, Outlets
+      let controlCats: CategoryRow[] | null = null;   // the categories, when a switch needs its lighting control item
       const resolved = new Map<string, ItemTypeRow>();
       const ambiguous = new Set<string>();
       for (const r of rows.filter((x) => inc.has(x.code))) {
         if (only && onlyItem && r.code.toUpperCase() === only) { resolved.set(r.code, onlyItem); continue; }   // counted as this item, whatever else shares its code
+        if (r.kind === 'switch') {
+          // A lighting control switch ($D2): an item coded "$D2", else the D2 in a lighting control category (not fixture D2),
+          // else a new "$D2" in Lighting controls.
+          const letters = r.code.slice(1).toUpperCase();
+          if (!controlCats) controlCats = (await api<{ categories: CategoryRow[] }>(`/categories?project=${projectId}`)).categories;
+          const isControl = (it: ItemTypeRow) => { const c = controlCats!.find((k) => k.id === it.category_id); return !!c && /CONTROL|SWITCH/i.test(c.name); };
+          const hit = byCode.get(r.code.toUpperCase())?.[0] ?? (letters ? items.find((it) => it.code.toUpperCase() === letters && isControl(it)) : undefined);
+          if (hit) { resolved.set(r.code, hit); continue; }
+          let cat = controlCats.find((c) => /^lighting controls?$/i.test(c.name.trim()));
+          if (!cat) { setStatus('Adding the Lighting controls category…'); cat = (await api<{ category: CategoryRow }>('/categories', { body: { project_id: projectId, name: 'Lighting controls' } })).category; controlCats.push(cat); }
+          setStatus(`Adding ${r.code} to the library…`);
+          const { item } = await api<{ item: ItemTypeRow }>('/items', { body: { project_id: projectId, code: r.code, name: (names[r.code] ?? '').trim() || (letters ? `Switch, ${letters}` : 'Switch'), category_id: cat.id, marker_shape: 'square', unit: 'EA', count_group: 'device' } });
+          resolved.set(r.code, item);
+          continue;
+        }
         const lib = byCode.get(r.code.toUpperCase());
         if (lib?.length) {
           resolved.set(r.code, lib[0]); // the first item with this code is the default

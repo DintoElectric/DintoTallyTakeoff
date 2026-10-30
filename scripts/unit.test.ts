@@ -1432,3 +1432,48 @@ test('plan kind from the title: lighting plans count fixtures, power plans devic
   assert.equal(planGroup({ title: 'FIRST FLOOR FIRE ALARM PLAN' }), 'fire_alarm');
   assert.equal(planGroup({ title: 'ELECTRICAL ENLARGED PLANS' }), null);    // says neither: included either way
 });
+
+// ---- lighting control switches first; /EM written apart; the frame; details at another scale (Hillcrest E1.01-E1.02B) ----
+import { findSwitches } from '../src/detect/switches.ts';
+import { findDetailViews } from '../src/detect/detailViews.ts';
+{
+  const W = 3024, H = 2160;
+  const run = (str: string, x: number, y: number, hPt = 8.1) => ({ str, cx: x / W, cy: y / H, w: (str.length * hPt * 0.6) / W, h: hPt / H, rotated: false });
+  // a drawn "$": an 8.3 pt stroke, and an S of tiny pieces (narrower and shorter than the stroke, crossing it in the middle)
+  const dollar = (x: number, y: number) => {
+    const out: { x0: number; y0: number; x1: number; y1: number; n: number; lum: number }[] = [{ x0: x, y0: y - 4.15, x1: x, y1: y + 4.15, n: 2, lum: 0 }];
+    for (let k = 0; k < 28; k++) {
+      const t = k / 27, sy = y - 3.1 + 6.2 * t, sx = x - 2 * Math.sin(Math.PI * 2 * t);   // about 4 pt wide, as drawn on the sheets
+      out.push({ x0: sx - 0.2, y0: sy - 0.2, x1: sx + 0.2, y1: sy + 0.2, n: 2, lum: 0 });
+    }
+    return out;
+  };
+  // a receptacle: a circle (10 pt) with a line through it
+  const circle = (x: number, y: number) => [{ x0: x, y0: y - 4.15, x1: x, y1: y + 4.15, n: 2, lum: 0 }, ...Array.from({ length: 30 }, (_, k) => { const a = (k / 30) * 2 * Math.PI, cx = x + 5 * Math.cos(a), cy = y + 4.6 * Math.sin(a); return { x0: cx - 0.2, y0: cy - 0.2, x1: cx + 0.2, y1: cy + 0.2, n: 2, lum: 0 }; })];
+  const region = { x0: 0.05, y0: 0.03, x1: 0.9, y1: 0.97 };
+  test('switches: a drawn $ with its letters on any side; a fixture tag beside it is not its letters; a circle is not a $', () => {
+    const prims = [...dollar(1000, 500), ...dollar(1200, 500), ...circle(1400, 500)];
+    const runs = [run('D2', 1012, 506), run('DOS', 1203, 488), run('D2', 1180, 520, 9.6), run('JJ', 1410, 506)];   // DOS above the second $; a 9.6 pt fixture tag D2 below-left of it
+    const sw = findSwitches(prims, runs as never, W, H, region);
+    assert.deepEqual(sw.map((s) => s.code), ['$D2', '$DOS']);
+    assert.equal(sw[1].letters[0].str, 'DOS');
+  });
+  test("/EM written as its own piece right after a tag is that tag's mark", () => {
+    const hits = scanTags([run('SC2', 2235, 460, 9.6), run('/EM', 2253, 460, 9.6), run('SC2', 1800, 460, 9.6)] as never, undefined, new Set(['SC2']));
+    assert.deepEqual(hits.filter((h) => h.code === 'SC2').map((h) => (h.suffixes ?? []).join()), ['/EM', '']);
+  });
+  test("counting area: the frame's inner line keeps the border references (A-J) out", () => {
+    const frame = [{ x0: 126, x1: 126, y0: 36, y1: 2124 }, { x0: 126, x1: 2988, y0: 36, y1: 36 }, { x0: 126, x1: 2988, y0: 2124, y1: 2124 }];
+    const r = countRegion(frame, W, H);
+    assert.ok(r.x0 * W > 126 && r.x0 * W < 140);         // the letters at x 109 are left out
+    assert.equal(r.y1, DCR.y1);                         // never wider than before
+  });
+  test('details: an island with its own title at another scale is a detail; the plan and a same-scale view are not', () => {
+    const block = (x0: number, y0: number, x1: number, y1: number) => { const out = []; for (let x = x0; x < x1; x += 10) for (let y = y0; y < y1; y += 10) out.push({ x0: x, y0: y, x1: x + 8, y1: y + 8 }); return out; };
+    const prims = [...block(800, 300, 2600, 1900), ...block(200, 1100, 600, 1350), ...block(200, 1500, 500, 1650)];
+    const runs = [run('SCALE: 1/8" = 1\'-0"', 650, 1960, 9.6), run('SCALE: 1/4" = 1\'-0"', 260, 1400, 9.6), run('SCALE: 1/8" = 1\'-0"', 260, 1700, 9.6)];
+    const views = findDetailViews(prims, runs as never, W, H, { x0: 0.046, y0: 0.03, x1: 0.92, y1: 0.97 });
+    assert.equal(views.length, 1);
+    assert.ok(views[0].x0 < 220 && views[0].y1 < 1400 && views[0].inPerFt === 0.25);
+  });
+}
