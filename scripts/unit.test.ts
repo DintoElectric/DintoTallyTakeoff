@@ -1425,3 +1425,10 @@ test('auto-count skips: architectural sheets by number, schedules and legends by
   assert.equal(s('E7.11', 'schedule'), 'schedule');
   assert.equal(s('E0.01', 'legend'), 'legend');
 });
+import { planGroup } from '../shared/sheetKinds.ts';
+test('plan kind from the title: lighting plans count fixtures, power plans devices, fire alarm plans fire alarm devices', () => {
+  assert.equal(planGroup({ title: 'MAIN LEVEL ELECTRICAL LIGHTING PLAN - AREA B' }), 'fixture');
+  assert.equal(planGroup({ title: 'MAIN LEVEL ELECTRICAL POWER PLAN - AREA B' }), 'device');
+  assert.equal(planGroup({ title: 'FIRST FLOOR FIRE ALARM PLAN' }), 'fire_alarm');
+  assert.equal(planGroup({ title: 'ELECTRICAL ENLARGED PLANS' }), null);    // says neither: included either way
+});

@@ -16,7 +16,7 @@ import { countGroupOf, GROUP_LABEL, GROUPS, type CountGroup } from '../../shared
 import { buildSheetPdf, sheetPdfName, type CountList } from '../export/sheetPdf.ts';
 import ReadScheduleDialog from './ReadScheduleDialog.tsx';
 import { ItemPicker } from './ItemPicker.tsx';
-import { autoCountSkips } from '../../shared/sheetKinds.ts';
+import { autoCountSkips, planGroup } from '../../shared/sheetKinds.ts';
 import { circuitStats, mainLabel, type Panel } from '../../shared/panels.ts';
 import { ceilingIndex, CEILING_LABEL, CEILING_TITLE, type Ceiling, type CeilingIndex } from '../detect/ceiling.ts';
 import { flushAll, getStore, useSheetStore } from './sheetStore.ts';
@@ -107,6 +107,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [alignStep, setAlignStep] = useState<'p1' | 'q1' | 'p2' | 'q2' | 'done' | null>(null);
   const alignPts = useRef<{ p1?: [number, number]; p2?: [number, number] }>({});
   const [showAuto, setShowAuto] = useState(false);
+  const [autoItem, setAutoItem] = useState<ItemTypeRow | null>(null);   // Auto-count one item across the sheets
   const [reviewing, setReviewing] = useState(false);
   const [reviewId, setReviewId] = useState<string | null>(null);
   const viewRef = useRef<DrawingViewHandle>(null);
@@ -837,6 +838,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             </div>
             <div className="btns">
               <button className="btn btn-secondary" disabled={itemDets.length === 0} onClick={() => setSelected(new Set(itemDets.map((d) => d.id)))}>Select all here</button>
+              {!readOnly && <button className="btn btn-secondary" onClick={() => setAutoItem(activeItem)} title={`Find ${activeItem.code} tags on every counting sheet of its kind (lighting plans for a fixture, power plans for a device) and count them as this item. Other items' counts are left as they are.`}>Auto-count on all sheets</button>}
               {!readOnly && <button className="btn btn-secondary" disabled={itemDets.length === 0} onClick={deleteItemOnSheet}>Delete on this sheet</button>}
               {!readOnly && <button className="btn btn-secondary" disabled={itemInProject === 0} onClick={() => setConfirmClear(true)}>Delete everywhere…</button>}
             </div>
@@ -999,6 +1001,14 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       {showAuto && sheet && (
         <AutoCountDialog projectId={projectId} sheets={[sheet]} items={items} onClose={() => setShowAuto(false)}
           onDone={(msg) => { setShowAuto(false); toast(msg); void itemsQ.reload(); void countsQ.reload(); void sheetsQ.reload(); void getStore(sheetId).load(true); }} />
+      )}
+      {autoItem && (
+        // one item across the counting sheets of its kind: a fixture on lighting plans, a device on power plans (a C on a
+        // power plan can be another item); sheets whose title says neither are included
+        <AutoCountDialog projectId={projectId} items={items} onlyItem={autoItem}
+          sheets={sheets.filter((s) => s.count_enabled && autoCountSkips(s) === null && (planGroup(s) === null || planGroup(s) === countGroupOf(autoItem, categories)))}
+          onClose={() => setAutoItem(null)}
+          onDone={(msg) => { setAutoItem(null); toast(msg); void itemsQ.reload(); void countsQ.reload(); void sheetsQ.reload(); void getStore(sheetId).load(true); }} />
       )}
       {readOpen && readBoxes.length > 0 && page && sheet && (
         <ReadScheduleDialog page={page} projectId={projectId} boxes={readBoxes} zones={zonesShown} items={items} categories={categories} sheetTitle={sheet.title}
