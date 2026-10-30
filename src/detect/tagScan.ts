@@ -176,6 +176,7 @@ export function markRoomNumbers(hits: TagHit[], runs: PageRun[]): TagHit[] {
   for (const h of hits) perCode.set(h.code, (perCode.get(h.code) ?? 0) + 1);
   for (const h of hits) {
     if (h.kind !== 'tag') continue;
+    if ((h.suffixes ?? []).some((w) => w.startsWith('/'))) continue;   // "B3/EM": a fixture with its mark, never a room number
     const rare = (perCode.get(h.code) ?? 0) <= 2;
     const leadingZero = /^[A-Z]{1,3}0\d/.test(h.code);
     const gh = h.h ?? 0.0044;

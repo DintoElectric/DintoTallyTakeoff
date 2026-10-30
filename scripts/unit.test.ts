@@ -1477,3 +1477,10 @@ import { findDetailViews } from '../src/detect/detailViews.ts';
     assert.ok(views[0].x0 < 220 && views[0].y1 < 1400 && views[0].inPerFt === 0.25);
   });
 }
+test('a tag with its /EM mark under a room name is a fixture, not a room number', () => {
+  const W = 3024, H = 2160;
+  const run = (str: string, x: number, y: number) => ({ str, cx: x / W, cy: y / H, w: (str.length * 5.8) / W, h: 9.6 / H, rotated: false });
+  const hits = scanTags([run('CLASSROOM', 2282, 404), run('B3/EM', 2282, 416), run('CLASSROOM', 1500, 404), run('B7', 1500, 416)] as never, undefined, new Set(['B3', 'B7']));
+  assert.equal(hits.find((h) => h.code === 'B3')!.kind, 'tag');     // B3/EM: a fixture
+  assert.equal(hits.find((h) => h.code === 'B7')!.kind, 'room');    // a rare plain code under a room name is still taken for a room number
+});

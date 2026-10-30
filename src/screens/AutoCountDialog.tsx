@@ -93,7 +93,12 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
   const emTotal = [...emByCode.values()].reduce((a, b) => a + b, 0);
   // A fixture type is split into normal and emergency when it has emergency fixtures, unless it is an exit sign
   // (always emergency), has several library variants already, or the estimator turned the split off.
-  const splits = (code: string) => (emByCode.get(code) ?? 0) > 0 && !splitOff.has(code) && (byCode.get(code.toUpperCase())?.length ?? 0) <= 1 && !/^XL/i.test(code);
+  // Of several items sharing a code (a fixture P and a receptacle P, a fixture D2 and a D2 dimmer switch), the fixture: the
+  // emergency split and measured lengths belong to it. Variants of one fixture are items in the same category (two D9
+  // descriptions in the fixture schedule); a receptacle or a switch with the same code is not a variant.
+  const fixtureOf = (code: string) => { const v = byCode.get(code.toUpperCase()) ?? []; return v.find((it) => countGroupOf(it, []) === 'fixture') ?? v[0]; };
+  const variants = (code: string) => { const f = fixtureOf(code); return (byCode.get(code.toUpperCase()) ?? []).filter((it) => it.category_id === f?.category_id).length; };
+  const splits = (code: string) => (emByCode.get(code) ?? 0) > 0 && !splitOff.has(code) && variants(code) <= 1 && !/^XL/i.test(code);
 
   useEffect(() => {
     let off = false;
@@ -195,7 +200,8 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
       const emKeys = new Set<string>();
       let emCreated = 0;
       for (const r of rows.filter((x) => inc.has(x.code) && (x.kind === 'tag' || x.kind === 'short') && splits(x.code))) {
-        const base = resolved.get(r.code);
+        // (a code shared with a receptacle or a switch: the emergency item is the fixture's)
+        const base = (byCode.get(r.code.toUpperCase())?.length ?? 0) > 1 ? fixtureOf(r.code) ?? resolved.get(r.code) : resolved.get(r.code);
         if (!base) continue;
         const emCode = emergencyCode(r.code, activeMarkers);
         let emItem = byCode.get(emCode.toUpperCase())?.[0];
@@ -203,7 +209,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
           setStatus(`Adding ${emCode} (emergency ${r.code}) to the library…`);
           try {
             emItem = (await api<{ item: ItemTypeRow }>('/items', {
-              body: { project_id: projectId, code: emCode, name: `${base.name}, emergency`.slice(0, 200), spec: base.spec, category_id: base.category_id, unit: base.unit, length_ft: base.length_ft ?? null, /* an emergency strip is as long as its normal twin, so its footage is counted too */ marker_shape: base.marker_shape, marker_glyph: base.marker_glyph },
+              body: { project_id: projectId, code: emCode, name: `${base.name}, emergency`.slice(0, 200), spec: base.spec, category_id: base.category_id, unit: base.unit, count_group: base.count_group ?? null, length_ft: base.length_ft ?? null, /* an emergency strip is as long as its normal twin, so its footage is counted too */ marker_shape: base.marker_shape, marker_glyph: base.marker_glyph },
             })).item;
             emCreated++;
           } catch (e) {
@@ -232,7 +238,8 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, on
       for (const sc of scans) for (const h of sc.hits) { const k = route(h).code; if (k.includes(LENGTH_KEY)) keys.add(k); }
       for (const k of [...keys].sort()) {
         const [baseKey, ft] = k.split(LENGTH_KEY);
-        const base = resolved.get(baseKey);
+        // (a code shared with a receptacle or a switch: the length item is the fixture's)
+        const base = !baseKey.includes(EMERGENCY_KEY) && (byCode.get(baseKey.toUpperCase())?.length ?? 0) > 1 ? fixtureOf(baseKey) ?? resolved.get(baseKey) : resolved.get(baseKey);
         if (!base) continue;
         const code = `${base.code} ${ft}'`.slice(0, 40);
         let item = byCode.get(code.toUpperCase())?.[0];
