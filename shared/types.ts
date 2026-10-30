@@ -63,6 +63,8 @@ export interface SheetRow {
   read_source: 'text' | 'ocr' | 'manual';
   title_unsure: boolean;
   version: number;
+  ref_sheet_id?: string | null;   // the architectural floor plan this sheet is lined up with
+  ref_align?: { s: number; dx: number; dy: number; across: number; down: number; how: 'grid' | 'hand' } | null;   // A = s * E + d, points
   detection_count: number;
   flagged_count: number;
   exclusion_zones: Zone[] | null; // null = automatic (from the matchlines)

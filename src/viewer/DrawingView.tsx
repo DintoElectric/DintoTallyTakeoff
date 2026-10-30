@@ -6,7 +6,7 @@ import { GridIndex } from '../detect/grid.ts';
 import type { Zone, ZonePoint } from '../../shared/zones.ts';
 import { appPalette, drawMarker, type Palette } from './markerDraw.ts';
 
-export type Tool = 'select' | 'add' | 'box' | 'erase' | 'zone' | 'area' | 'similar' | 'read';
+export type Tool = 'select' | 'add' | 'box' | 'erase' | 'zone' | 'area' | 'similar' | 'read' | 'align';
 export interface MarkerData { id: string; x: number; y: number; itemId: string; flagged: boolean }
 export interface ItemStyle { shape: MarkerShape; glyph: string | null }
 export interface DrawingViewHandle { zoomBy(factor: number): void; fit(): void; centerOn(x: number, y: number, zoomFactor?: number): void }
@@ -38,6 +38,13 @@ interface Props {
   draft?: ZonePoint[];
   onZonePoint?(x: number, y: number): void;
   onZoneFinish?(): void;
+  /**
+   * The architectural floor plan drawn over the sheet, in orange, where the alignment puts it: a point E of this sheet is at
+   * s * E + (dx, dy) on the architectural page (PDF points).
+   */
+  overlay?: { page: PDFPageProxy; s: number; dx: number; dy: number } | null;
+  /** A click with the line-up tool, in normalized page coordinates. */
+  onAlignClick?(x: number, y: number): void;
 }
 
 const DEFAULT_STYLE: ItemStyle = { shape: 'circle', glyph: null };
@@ -275,6 +282,56 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
     return () => ro.disconnect();
   }, [fit, apply]);
 
+  /* ---------- the architectural plan over the sheet (orange lines on a clear background) ---------- */
+  const overlayRef = useRef<HTMLCanvasElement | null>(null);
+  const overlayPage = props.overlay?.page ?? null;
+  useEffect(() => {
+    const layer = layerRef.current;
+    if (!overlayPage || !layer) return;
+    let cancelled = false;
+    let task: RenderTask | null = null;
+    (async () => {
+      const vp1 = overlayPage.getViewport({ scale: 1 });
+      const scale = clamp(Math.sqrt(BASE_MAX_PX / (vp1.width * vp1.height)), 0.4, 3);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(vp1.width * scale);
+      canvas.height = Math.ceil(vp1.height * scale);
+      try {
+        task = overlayPage.render({ canvas, viewport: overlayPage.getViewport({ scale }), annotationMode: 0 });
+        await task.promise;
+      } catch (e) {
+        if ((e as { name?: string })?.name !== 'RenderingCancelledException') P.current.onError("The architectural plan couldn't be drawn.");
+        return;
+      }
+      if (cancelled) { canvas.width = canvas.height = 0; return; }
+      // dark lines become orange, the paper clear: both drawings stay readable on top of each other
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const d = img.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const dark = 1 - (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]) / 255;
+          d[i] = 232; d[i + 1] = 110; d[i + 2] = 20; d[i + 3] = dark < 0.12 ? 0 : Math.min(255, Math.round(dark * 300));
+        }
+        ctx.putImageData(img, 0, 0);
+      }
+      canvas.className = 'overlay-canvas';
+      canvas.style.width = `${vp1.width}px`;
+      canvas.style.height = `${vp1.height}px`;
+      overlayRef.current?.remove();
+      layer.appendChild(canvas);
+      overlayRef.current = canvas;
+      placeOverlay();
+    })();
+    return () => { cancelled = true; task?.cancel(); overlayRef.current?.remove(); overlayRef.current = null; };
+  }, [overlayPage]); // eslint-disable-line react-hooks/exhaustive-deps
+  const placeOverlay = () => {
+    const o = P.current.overlay, c = overlayRef.current;
+    if (!o || !c) return;
+    c.style.transform = `translate(${-o.dx / o.s}px, ${-o.dy / o.s}px) scale(${1 / o.s})`;
+  };
+  useEffect(placeOverlay, [props.overlay?.s, props.overlay?.dx, props.overlay?.dy]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     // New page: fit it, and render the base bitmap of the whole page (capped for tablets).
     const layer = layerRef.current;
@@ -444,6 +501,7 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
       const hit = gridRef.current.nearest(n.x, n.y, rx, ry);
       if (pr.tool === 'select' || pr.tool === 'box') pr.onPick(hit?.id ?? null, s.shift); // Navigate and Select both pick a count you click
       else if (pr.tool === 'add') { if (!pr.readOnly) pr.onPlace(n.x, n.y); }
+      else if (pr.tool === 'align') pr.onAlignClick?.(n.x, n.y);
       else if (pr.tool === 'erase') { if (!pr.readOnly && hit) pr.onErase(hit.id); }
       else if ((pr.tool === 'zone' || pr.tool === 'area') && !pr.readOnly) {
         // Clicking the first corner (with 3 or more placed) closes the outline.

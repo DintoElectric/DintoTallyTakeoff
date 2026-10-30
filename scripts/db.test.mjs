@@ -259,5 +259,19 @@ console.log('db.test OK');
     for (const g of ['fixture', 'device', 'fire_alarm', null]) await F.query(`insert into item_types (code, name, created_by, count_group) values ($1,'x','u',$2)`, [`G-${g}`, g]);
     await assert.rejects(F.query(`insert into item_types (code, name, created_by, count_group) values ('G-bad','x','u','lighting')`));
   }
+  // an electrical plan lined up with an architectural one: the pairing is cleared when the architectural sheet is deleted
+  {
+    const R = new P();
+    for (const f of files) await R.exec(readFileSync(`${dir}/${f}`, 'utf8'));
+    for (const f of files.filter((x) => x >= '20261031')) await R.exec(readFileSync(`${dir}/${f}`, 'utf8'));   // safe to run twice
+    const pr = (await R.query(`insert into projects (name, created_by) values ('W','u') returning id`)).rows[0];
+    const fl = (await R.query(`insert into drawing_files (project_id,file_name,size_bytes,chunk_count,uploaded_by,upload_status) values ($1,'e.pdf',1,1,'u','ready') returning id`, [pr.id])).rows[0];
+    const e = (await R.query(`insert into sheets (project_id,file_id,page,number,page_width_pt,page_height_pt,count_enabled) values ($1,$2,1,'E2.02B',3024,2160,true) returning id`, [pr.id, fl.id])).rows[0];
+    const a = (await R.query(`insert into sheets (project_id,file_id,page,number,page_width_pt,page_height_pt,count_enabled) values ($1,$2,2,'A1.02B',3024,2160,false) returning id`, [pr.id, fl.id])).rows[0];
+    await R.query(`update sheets set ref_sheet_id = $2, ref_align = $3::jsonb where id = $1`, [e.id, a.id, JSON.stringify({ s: 1, dx: -435, dy: -136, across: 21, down: 13, how: 'grid' })]);
+    assert.equal((await R.query(`select ref_align->>'dx' as dx from sheets where id = $1`, [e.id])).rows[0].dx, '-435');
+    await R.query(`delete from sheets where id = $1`, [a.id]);
+    assert.equal((await R.query(`select ref_sheet_id from sheets where id = $1`, [e.id])).rows[0].ref_sheet_id, null);
+  }
   console.log('project libraries OK');
 }

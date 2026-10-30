@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import {
-  ArrowCounterClockwise, ArrowClockwise, CaretLeft, CaretRight, Cursor, Eraser, FilePdf, Table, Eye, EyeSlash, Polygon, Shapes, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus, PlusCircle, Plus, Selection, Stack, WarningCircle, Crosshair, MagnifyingGlass, Hand,
+  ArrowCounterClockwise, ArrowClockwise, Buildings, CaretLeft, CaretRight, Cursor, Eraser, FilePdf, Table, Eye, EyeSlash, Polygon, Shapes, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus, PlusCircle, Plus, Selection, Stack, WarningCircle, Crosshair, MagnifyingGlass, Hand,
 } from '@phosphor-icons/react';
 import type { CategoryRow, CountRow, DrawingFileRow, ItemTypeRow, ProjectRow, SheetRow } from '../../shared/types.ts';
 import { api, ApiError } from '../auth/api.ts';
@@ -98,6 +98,13 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const [readOpen, setReadOpen] = useState(false);
   const [source, setSource] = useState<'all' | 'auto' | 'manual'>('all');   // all counts, or only Auto-count's, or only those placed by hand
   const [changing, setChanging] = useState<'selection' | 'review' | null>(null);   // the Change to picker that is open
+  // The architectural floor plan this sheet is paired with, drawn over it; and lining it up by hand (two clicks per pair:
+  // a point on the drawing, then the same point on the orange plan; arrow keys nudge it).
+  const [showArch, setShowArch] = useState(false);
+  const [archPage, setArchPage] = useState<PDFPageProxy | null>(null);
+  const [work, setWork] = useState<{ s: number; dx: number; dy: number } | null>(null);
+  const [alignStep, setAlignStep] = useState<'p1' | 'q1' | 'p2' | 'q2' | 'done' | null>(null);
+  const alignPts = useRef<{ p1?: [number, number]; p2?: [number, number] }>({});
   const [showAuto, setShowAuto] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [reviewId, setReviewId] = useState<string | null>(null);
@@ -117,7 +124,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
     };
     return () => { store.onSaved = null; };
   }, [store, reloadCounts, reloadSheets, reloadAreaTotals]);
-  useEffect(() => { setSelected(new Set()); setReadBoxes([]); setReadOpen(false); }, [sheetId]);   // nothing carries over to the next drawing
+  useEffect(() => { setSelected(new Set()); setReadBoxes([]); setReadOpen(false); setWork(null); setAlignStep(null); }, [sheetId]);   // nothing carries over to the next drawing
 
   // Default the active item to the first library item.
   useEffect(() => {
@@ -127,6 +134,53 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
 
   // ----- drawing: load the PDF for this sheet's file, then the page -----
   const file = filesQ.data?.files.find((f) => f.id === sheet?.file_id) ?? null;
+  const archSheet = sheet?.ref_sheet_id ? sheets.find((s) => s.id === sheet.ref_sheet_id) ?? null : null;
+  const archFile = archSheet ? filesQ.data?.files.find((f) => f.id === archSheet.file_id) ?? null : null;
+  useEffect(() => {
+    setArchPage(null);
+    if (!showArch || !archSheet || !archFile) return;
+    let off = false;
+    (async () => {
+      try {
+        const doc = await loadFilePdf({ id: archFile.id, chunk_count: archFile.chunk_count });
+        const pg = await doc.getPage(archSheet.page);
+        if (!off) setArchPage(pg);
+      } catch { if (!off) toast("The architectural plan couldn't be opened."); }
+    })();
+    return () => { off = true; };
+  }, [showArch, archSheet?.id, archFile?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  const alignNow = work ?? (sheet?.ref_align ? { s: sheet.ref_align.s, dx: sheet.ref_align.dx, dy: sheet.ref_align.dy } : { s: 1, dx: 0, dy: 0 });
+  const startAlign = () => { setWork(alignNow); setAlignStep('p1'); alignPts.current = {}; setTool('align'); };
+  const stopAlign = () => { setWork(null); setAlignStep(null); setTool('select'); };
+  const saveAlign = async () => {
+    if (!sheet || !work) return;
+    try {
+      await api(`/sheets/${sheet.id}`, { method: 'PATCH', body: { ref_sheet_id: sheet.ref_sheet_id, ref_align: { ...work, across: 0, down: 0, how: 'hand' } } });
+      await sheetsQ.reload();
+      setWork(null); setAlignStep(null); setTool('select');
+      toast('Lined up with the architectural plan.');
+    } catch (e) { toast(e instanceof ApiError ? e.message : 'Could not save the line-up.'); }
+  };
+  // a click while lining up: a point on the drawing, then the same point on the orange plan (E: this sheet; A: the plan)
+  const onAlignClick = (nx: number, ny: number) => {
+    if (!pageDims || !work) return;
+    const E: [number, number] = [nx * pageDims.w, ny * pageDims.h];
+    const toA = (p: [number, number]): [number, number] => [work.s * p[0] + work.dx, work.s * p[1] + work.dy];
+    if (alignStep === 'p1') { alignPts.current.p1 = E; setAlignStep('q1'); }
+    else if (alignStep === 'q1' && alignPts.current.p1) {
+      const A = toA(E), p1 = alignPts.current.p1;   // the plan's point under the click must move to the drawing's point
+      setWork({ s: work.s, dx: A[0] - work.s * p1[0], dy: A[1] - work.s * p1[1] });
+      setAlignStep('p2');
+    } else if (alignStep === 'p2') { alignPts.current.p2 = E; setAlignStep('q2'); }
+    else if (alignStep === 'q2' && alignPts.current.p1 && alignPts.current.p2) {
+      const p1 = alignPts.current.p1, p2 = alignPts.current.p2, A1 = toA(p1), A2 = toA(E);
+      const d = Math.hypot(p2[0] - p1[0], p2[1] - p1[1]);
+      if (d < 50) { toast('Pick a second point further from the first.'); setAlignStep('p2'); return; }
+      const s2 = Math.hypot(A2[0] - A1[0], A2[1] - A1[1]) / d;
+      setWork({ s: s2, dx: A1[0] - s2 * p1[0], dy: A1[1] - s2 * p1[1] });
+      setAlignStep('done');
+    }
+  };
   const [pdf, setPdf] = useState<PDFDocumentProxy | null>(null);
   const [pdfPct, setPdfPct] = useState(0);
   const [pdfError, setPdfError] = useState<string | null>(null);
@@ -421,6 +475,14 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       const t = e.target as HTMLElement;
       if (t.closest('input, select, textarea, [role="dialog"]')) return;
       const mod = e.ctrlKey || e.metaKey;
+      if (alignStep && work && e.key.startsWith('Arrow')) {
+        // nudge the plan: right moves it right on the drawing (one point, or ten with Shift)
+        e.preventDefault();
+        const step = (e.shiftKey ? 10 : 1) * work.s;
+        const [mx, my] = e.key === 'ArrowLeft' ? [-1, 0] : e.key === 'ArrowRight' ? [1, 0] : e.key === 'ArrowUp' ? [0, -1] : [0, 1];
+        setWork({ ...work, dx: work.dx - mx * step, dy: work.dy - my * step });
+        return;
+      }
       if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); if (readOnly) return; if (e.shiftKey) store?.redo(); else store?.undo(); return; }
       if (mod && e.key.toLowerCase() === 'y') { e.preventDefault(); if (!readOnly) store?.redo(); return; }
       if (mod) return;
@@ -455,7 +517,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
     };
     window.addEventListener('keydown', on);
     return () => window.removeEventListener('keydown', on);
-  }, [store, readOnly, deleteSelected, reviewing, current, tool, draft, finishZone, prevSheet, nextSheet]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [store, readOnly, deleteSelected, reviewing, current, tool, draft, finishZone, prevSheet, nextSheet, alignStep, work]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ----- missing sheet -----
   if (sheetsQ.data && !sheet) {
@@ -602,6 +664,11 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             <button className={`btn btn-secondary`} onClick={() => setOnlyActive(!onlyActive)} aria-pressed={onlyActive} title="Show all markers, or only the active item's">
               <Stack size={14} /> {onlyActive && activeItem ? `Only ${activeItem.code}` : 'All items'}
             </button>
+            {sheet?.ref_sheet_id && (
+              <button className="btn btn-secondary" aria-pressed={showArch} onClick={() => { setShowArch(!showArch); if (showArch) stopAlign(); }} title="Show the architectural floor plan over this sheet (orange), to check the line-up and see the wall types">
+                <Buildings size={14} /> {showArch ? 'Hide' : 'Architectural plan'}
+              </button>
+            )}
             <div className="source-switch" role="radiogroup" aria-label="Which counts to show" title="All counts, only Auto-count's, or only those placed by hand (Count, Find similar)">
               {([['all', 'All'], ['auto', 'Auto'], ['manual', 'Hand']] as const).map(([v, label]) => (
                 <button key={v} type="button" role="radio" aria-checked={source === v} className={source === v ? 'on' : ''} onClick={() => setSource(v)}>{label}</button>
@@ -609,6 +676,22 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             </div>
           </div>
           <div className="canvas-wrap">
+            {showArch && archSheet && (
+              <div className="read-bar arch-bar" role="status">
+                {!alignStep ? (
+                  <>
+                    <span><b>{archSheet.number ?? `Page ${archSheet.page}`}</b> in orange · {!archPage ? 'opening…' : sheet?.ref_align ? (sheet.ref_align.how === 'hand' ? 'lined up by hand' : `lined up by ${sheet.ref_align.across} + ${sheet.ref_align.down} grid lines`) : 'not lined up yet'}</span>
+                    {!readOnly && archPage && <button className="btn btn-secondary" style={{ minHeight: 28, padding: '2px 12px' }} onClick={startAlign}>Line up by hand</button>}
+                  </>
+                ) : (
+                  <>
+                    <span>{alignStep === 'p1' ? 'Click a point on the drawing: a grid line crossing or a wall corner.' : alignStep === 'q1' ? 'Now click the same point on the orange plan.' : alignStep === 'p2' ? 'Lined up. For the scale too, click a second point far from the first (or save).' : alignStep === 'q2' ? 'Now click that same point on the orange plan.' : 'Lined up. Arrow keys nudge it (Shift: 10 times as far).'}</span>
+                    <button className="btn btn-primary" style={{ minHeight: 28, padding: '2px 12px' }} disabled={alignStep === 'p1' || alignStep === 'q1'} onClick={() => void saveAlign()}>Save</button>
+                    <button className="btn btn-ghost" style={{ minHeight: 28, padding: '2px 8px' }} onClick={stopAlign}>Cancel</button>
+                  </>
+                )}
+              </div>
+            )}
             {readBoxes.length > 0 && !readOpen && (
               <div className="read-bar" role="status">
                 <span>Reading a schedule · {plural(readBoxes.length, 'box', 'boxes')}</span>
@@ -619,6 +702,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             {page && pageDims ? (
               <DrawingView
                 ref={viewRef} page={page} pageW={pageDims.w} pageH={pageDims.h} markers={markers} styles={styles}
+                overlay={showArch && archPage ? { page: archPage, ...alignNow } : null} onAlignClick={onAlignClick}
                 activeItemId={activeItemId} selected={selected} tool={tool} readOnly={readOnly}
                 onPlace={place}
                 onPick={(id, add) => setSelected((cur) => { if (!id) return add ? cur : new Set(); const n = new Set(add ? cur : []); if (add && cur.has(id)) n.delete(id); else n.add(id); return n; })}

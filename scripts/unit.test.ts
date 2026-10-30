@@ -1373,3 +1373,30 @@ test("measuring: a slot beside its tag, at the sheet's scale; an open end or a n
   const k = measureTags([{ id: 1, x: 92, y: 104, known: 6 }, { id: 2, x: 292, y: 104 }], bodies, two, { grid: segmentGrid(segs) });
   assert.equal(k.get(1)!.feet, 6);
 });
+
+// ---- lining up an electrical plan with the architectural floor plan (Hillcrest: E2.02B with A1.02B) ----
+import { alignByGrids, candidates, isArchPlan, isTradePlan, levelOf } from '../src/detect/sheetAlign.ts';
+test('line-up: the shift and scale the shared grid lines agree on; too few agreeing gives none', () => {
+  const g = (cols: Record<string, number>, rows: Record<string, number>) => ({ cols: new Map(Object.entries(cols).map(([k, v]) => [k, [v]])), rows: new Map(Object.entries(rows).map(([k, v]) => [k, [v]])) });
+  const ec = { '16': 757, '17': 912, '18': 1102, '19.7': 1300, '21': 1572, '24': 2023, '25': 2203 }, er = { 'C.2': 600, 'G.1': 900, 'J.5': 1200, 'L': 1500 };
+  const shift = (o: Record<string, number>, s: number, d: number) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, s * v + d]));
+  const a = alignByGrids(g(ec, er), g({ ...shift(ec, 1, -434.6), 'X9': 40 }, shift(er, 1, -136.2)))!;   // a stray label too
+  assert.ok(Math.abs(a.s - 1) < 1e-9 && Math.abs(a.dx + 434.6) < 1e-6 && Math.abs(a.dy + 136.2) < 1e-6);
+  assert.deepEqual([a.across, a.down, a.how], [7, 4, 'grid']);
+  const half = alignByGrids(g(ec, er), g(shift(ec, 2, -1215), shift(er, 2, -1888)))!;                      // a plan at half the scale
+  assert.ok(Math.abs(half.s - 2) < 1e-9 && Math.abs(half.dy + 1888) < 1e-6);
+  assert.equal(alignByGrids(g({ '16': 757, '17': 912 }, er), g(shift({ '16': 757, '17': 912 }, 1, 5), shift(er, 1, 5))), null);   // two lines: not trusted
+});
+test('line-up: levels and areas from titles; architectural floor plans are told from ceiling and finish plans', () => {
+  assert.deepEqual(levelOf('MAIN LEVEL ELECTRICAL POWER PLAN - AREA B'), { level: 'MAIN', area: 'B' });
+  assert.deepEqual(levelOf('AREA-C LOWER LEVEL'), { level: 'LOWER', area: 'C' });
+  assert.deepEqual(levelOf('SECOND FLOOR POWER PLAN'), { level: 'SECOND', area: null });
+  assert.deepEqual(levelOf('LEVEL 3 LIGHTING PLAN'), { level: '3', area: null });
+  assert.ok(isArchPlan({ number: 'A1.02B', title: 'MAIN LEVEL AREA B' }));
+  assert.ok(!isArchPlan({ number: 'A2.02B', title: 'MAIN LEVEL REFLECTED CEILING PLAN AREA B' }));
+  assert.ok(!isArchPlan({ number: 'A10.02B', title: 'MAIN LEVEL AREA B FINISH AND FLR PATTERN' }));
+  assert.ok(isTradePlan({ number: 'E2.02B', title: 'MAIN LEVEL ELECTRICAL POWER PLAN - AREA B', kind: 'floor_plan' }));
+  const arch = [{ id: '1', number: 'A1.01', title: 'LOWER LEVEL' }, { id: '2', number: 'A1.02A', title: 'MAIN LEVEL AREA A' }, { id: '3', number: 'A1.02B', title: 'MAIN LEVEL AREA B' }];
+  assert.equal(candidates({ title: 'MAIN LEVEL ELECTRICAL POWER PLAN - AREA B' }, arch)[0].number, 'A1.02B');
+  assert.equal(candidates({ title: 'LOWER LEVEL ELECTRICAL LIGHTING PLAN' }, arch)[0].number, 'A1.01');
+});

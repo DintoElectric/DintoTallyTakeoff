@@ -11,7 +11,7 @@ import { cleanAreaName } from '../../shared/areas.ts';
 const SHEET_SELECT = `
   select s.id, s.project_id, s.file_id, s.page, s.number, s.title, s.kind, s.floor, s.scale,
          s.page_width_pt, s.page_height_pt, s.rotation, s.count_enabled, s.count_status,
-         s.read_source, s.title_unsure, s.version, s.exclusion_zones,
+         s.read_source, s.title_unsure, s.version, s.exclusion_zones, s.ref_sheet_id, s.ref_align,
          (select count(*) from detections d where d.sheet_id = s.id and d.status <> 'rejected')::int as detection_count,
          (select count(*) from detections d where d.sheet_id = s.id and d.status = 'unreviewed'
              and d.confidence is not null and d.confidence < p.review_threshold)::int as flagged_count
@@ -71,7 +71,7 @@ export default handle(async (req: Request, _ctx: Context) => {
     if (req.method === 'PATCH') {
       await requireRole('estimator');
       const b = await readJson(req);
-      onlyKeys(b, ['number', 'title', 'kind', 'floor', 'scale', 'count_enabled', 'count_status', 'exclusion_zones']);
+      onlyKeys(b, ['number', 'title', 'kind', 'floor', 'scale', 'count_enabled', 'count_status', 'exclusion_zones', 'ref_sheet_id', 'ref_align']);
       const cur = await pool.query(`select number, title, kind, floor, scale, count_enabled, count_status, read_source from sheets where id = $1`, [id]);
       const c = cur.rows[0];
       if (!c) throw notFound('That sheet');
@@ -100,6 +100,26 @@ export default handle(async (req: Request, _ctx: Context) => {
           try { zones = validateZones(b.exclusion_zones); } catch (e) { throw new HttpError(400, e instanceof Error ? e.message : 'Those zones are not valid.'); }
         }
         await pool.query(`update sheets set exclusion_zones = $2::jsonb where id = $1`, [id, zones === null ? null : JSON.stringify(zones)]);
+      }
+      if ('ref_sheet_id' in b || 'ref_align' in b) {
+        // The architectural plan this sheet is lined up with (in the same project, not itself), and how they line up.
+        const ref = b.ref_sheet_id === null || b.ref_sheet_id === undefined ? null : uuid(b.ref_sheet_id, 'Architectural sheet');
+        if (ref) {
+          if (ref === id) throw new HttpError(400, 'A sheet cannot be lined up with itself.');
+          const same = await pool.query(`select 1 from sheets a join sheets s on s.project_id = a.project_id where a.id = $1 and s.id = $2`, [ref, id]);
+          if (!same.rows[0]) throw new HttpError(400, 'That architectural sheet is not in this project.');
+        }
+        let align: unknown = null;
+        if (ref && b.ref_align !== null && b.ref_align !== undefined) {
+          const a = b.ref_align as Record<string, unknown>;
+          const num = (v: unknown, lo: number, hi: number, label: string) => { if (typeof v !== 'number' || !Number.isFinite(v) || v < lo || v > hi) throw new HttpError(400, `${label} is not valid.`); return v; };
+          align = {
+            s: num(a.s, 0.05, 20, 'The scale'), dx: num(a.dx, -1e5, 1e5, 'The shift across'), dy: num(a.dy, -1e5, 1e5, 'The shift down'),
+            across: Math.round(num(a.across ?? 0, 0, 999, 'Grid lines across')), down: Math.round(num(a.down ?? 0, 0, 999, 'Grid lines down')),
+            how: oneOf(a.how, ['grid', 'hand'] as const, 'How it was lined up'),
+          };
+        }
+        await pool.query(`update sheets set ref_sheet_id = $2, ref_align = $3::jsonb where id = $1`, [id, ref, align === null ? null : JSON.stringify(align)]);
       }
       const r = await pool.query(`${SHEET_SELECT} where s.id = $1`, [id]);
       return json({ sheet: r.rows[0] });
