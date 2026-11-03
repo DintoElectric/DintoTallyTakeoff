@@ -292,7 +292,7 @@ export default function DrawingSet({ projectId }: { projectId: string }) {
           onClose={() => setScheduleOpen(false)} onDone={(msg) => { setScheduleOpen(false); toast(msg); void items.reload(); void cats.reload(); }} />
       )}
       {autoOpen && (
-        <AutoCountDialog projectId={projectId} sheets={enabled} items={items.data?.items ?? []} system={proj?.system ?? null} onClose={() => setAutoOpen(false)}
+        <AutoCountDialog projectId={projectId} onLibraryChanged={() => void items.reload()} sheets={enabled} items={items.data?.items ?? []} system={proj?.system ?? null} onClose={() => setAutoOpen(false)}
           onDone={(msg) => { setAutoOpen(false); toast(msg); void sheetsQ.reload(); void items.reload(); void project.reload(); const first = enabled[0]; if (first) navigate(paths.sheet(projectId, first.id)); }} />
       )}
       {archOpen && (

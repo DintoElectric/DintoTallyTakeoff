@@ -8,6 +8,7 @@ import { useFetch } from '../app/useFetch.ts';
 import { paths } from '../app/router.ts';
 import { lengthFeetFromText } from '../detect/lengthText.ts';
 import { SYSTEMS, SYSTEM_LABEL, systemOf } from '../../shared/systems.ts';
+import { duplicateCopies } from '../../shared/duplicates.ts';
 import { ItemDialog } from './ItemDialog.tsx';
 
 const SHAPES: MarkerShape[] = ['circle', 'square', 'rect', 'diamond'];
@@ -163,6 +164,18 @@ export default function Library({ projectId }: { projectId: string }) {
   // Items from before libraries were per project, not yet in any project.
   const legacyQ = useFetch<{ items: ItemTypeRow[] }>('/items?unassigned=1');
   const [showCopy, setShowCopy] = useState(false);
+  // copies of one fixture (the same code twice in a category): the same check Auto-count makes, and the same merge
+  const dupes = useMemo(() => duplicateCopies(itemsQ.data?.items ?? []), [itemsQ.data]);
+  const [merging, setMerging] = useState(false);
+  const mergeCopies = async () => {
+    setMerging(true);
+    try {
+      const r = await api<{ merged: number; codes: string[]; counts_moved: number }>('/items/merge-duplicates', { body: { project_id: projectId } });
+      toast(`Merged ${plural(r.merged, 'copy', 'copies')} of ${plural(r.codes.length, 'code')} (${r.codes.slice(0, 6).join(', ')}${r.codes.length > 6 ? '…' : ''}); ${plural(r.counts_moved, 'count')} moved onto the copy kept.`);
+      await itemsQ.reload();
+    } catch (e) { toast(e instanceof ApiError ? e.message : 'Could not merge the copies.'); }
+    setMerging(false);
+  };
   const [cat, setCat] = useState<string>('all');
   const [q, setQ] = useState('');
   const [sel, setSel] = useState<string | null>(null);
@@ -208,6 +221,12 @@ export default function Library({ projectId }: { projectId: string }) {
         </aside>
 
         <main className="lib-main">
+          {dupes.length > 0 && (
+            <div className="ac-libcheck" role="status" style={{ marginBottom: 10 }}>
+              {plural(dupes.length, 'code')} {dupes.length === 1 ? 'is' : 'are'} in this library twice in the same category ({dupes.slice(0, 8).map((d) => d.code).join(', ')}{dupes.length > 8 ? '…' : ''}): copies of one fixture, from a schedule read again or a library imported. Merge them so counts are not split between the copies.
+              {canEdit && <button className="btn btn-secondary" style={{ minHeight: 26, padding: '1px 10px', marginLeft: 8 }} disabled={merging} onClick={() => void mergeCopies()}>{merging ? 'Merging…' : 'Merge copies'}</button>}
+            </div>
+          )}
           <div className="row-between">
             <div>
               <h3 style={{ marginBottom: 2 }}>Item library</h3>

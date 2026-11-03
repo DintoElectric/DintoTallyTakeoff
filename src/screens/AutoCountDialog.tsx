@@ -9,6 +9,7 @@ import { countGroupOf, type CountGroup } from '../../shared/countGroup.ts';
 
 import { planGroup as sheetGroup } from '../../shared/sheetKinds.ts';
 import { SYSTEMS, SYSTEM_LABEL, systemOf, type SystemKey } from '../../shared/systems.ts';
+import { duplicateCopies, isEmergencyVersion } from '../../shared/duplicates.ts';
 
 // A count of a fixture measured on the plan goes to the item for its length ("P 7'"): its key is the code, this, the feet.
 const LENGTH_KEY = '\u0002';
@@ -17,13 +18,30 @@ import { EMERGENCY_KEY, discoverMarkers, emergencyCode, isEmergency, parseCustom
 import { flushAll, getStore } from './sheetStore.ts';
 
 /** Scans sheets for tags, shows what was found, then counts the ones you choose. */
-export default function AutoCountDialog({ projectId, sheets, items, onlyItem, system, onClose, onDone }: {
+export default function AutoCountDialog({ projectId, sheets, items: itemsProp, onlyItem, onLibraryChanged, system, onClose, onDone }: {
   projectId: string; sheets: SheetRow[]; items: ItemTypeRow[]; onClose: () => void; onDone: (summary: string) => void;
   /** Count only this item, across the sheets: its code only, as this item, replacing only its own earlier automatic counts. */
   onlyItem?: ItemTypeRow | null;
   /** The system to count to begin with (the one shown in the counts panel, or the project's); the estimator can change it. */
   system?: SystemKey | null;
+  /** The library changed here (copies merged): the caller reloads its items. */
+  onLibraryChanged?: () => void;
 }) {
+  // the library, as this dialog sees it (merging copies here reloads it)
+  const [items, setItems] = useState<ItemTypeRow[]>(itemsProp);
+  const dupes = useMemo(() => duplicateCopies(items), [items]);
+  const [merging, setMerging] = useState(false);
+  const mergeCopies = async () => {
+    setMerging(true);
+    try {
+      const r = await api<{ merged: number; codes: string[]; counts_moved: number }>('/items/merge-duplicates', { body: { project_id: projectId } });
+      setItems((await api<{ items: ItemTypeRow[] }>(`/items?project=${projectId}`)).items);
+      onLibraryChanged?.();
+      setMergeNote(`Merged ${plural(r.merged, 'copy', 'copies')} of ${plural(r.codes.length, 'code')}; ${plural(r.counts_moved, 'count')} moved onto the copy kept.`);
+    } catch (e) { setMergeNote(e instanceof ApiError ? e.message : 'Could not merge the copies.'); }
+    setMerging(false);
+  };
+  const [mergeNote, setMergeNote] = useState<string | null>(null);
   const only = onlyItem ? onlyItem.code.toUpperCase() : null;
   // Counting one system: only codes whose library items are in it, on its kind of plan; only its earlier counts are replaced.
   const [sys, setSys] = useState<'all' | SystemKey>(onlyItem ? 'all' : system ?? 'all');
@@ -123,12 +141,14 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, sy
   // Of several items sharing a code (a fixture P and a receptacle P, a fixture D2 and a D2 dimmer switch), the fixture: the
   // emergency split and measured lengths belong to it. Variants of one fixture are items in the same category (two D9
   // descriptions in the fixture schedule); a receptacle or a switch with the same code is not a variant.
+  // Of several items with one code, the one that already has counts (copies of one item keep their counts together).
+  const mainOf = (code: string): ItemTypeRow | undefined => [...(byCode.get(code.toUpperCase()) ?? [])].sort((a, b) => b.detection_count - a.detection_count)[0];
   const fixtureOf = (code: string) => { const v = byCode.get(code.toUpperCase()) ?? []; return v.find((it) => countGroupOf(it, []) === 'fixture') ?? v[0]; };
   // A library that keeps the emergency version under the same code (a D9 and a "D9 ... EM" description) counts it itself; the
   // split is left to it then. Two copies of the same fixture (a schedule read again, a library imported) do not stop it.
   // (an emergency version: its description says so where another of the same code's does not; a note in the specification
   // about emergency fixtures, shared by both copies, is not one)
-  const emVersion = (it: ItemTypeRow) => /\bEM\b|EMERGENCY|\/EM\b|BATTERY/i.test(it.name);
+  const emVersion = (it: ItemTypeRow) => isEmergencyVersion(it.name);
   const hasEmVersion = (code: string) => { const f = fixtureOf(code); const same = (byCode.get(code.toUpperCase()) ?? []).filter((it) => it.category_id === f?.category_id); return same.some(emVersion) && same.some((it) => !emVersion(it)); };
   const splits = (code: string) => (sys === 'all' || sys === 'lighting') && (emByCode.get(code) ?? 0) > 0 && !splitOff.has(code) && !hasEmVersion(code) && !/^XL/i.test(code);
 
@@ -214,8 +234,13 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, sy
         }
         const lib = byCode.get(r.code.toUpperCase());
         if (lib?.length) {
-          resolved.set(r.code, lib[0]); // the first item with this code is the default
-          if (lib.length > 1) ambiguous.add(r.code);
+          // Copies of one fixture (the same code in the same category, neither an emergency version: a schedule read again,
+          // a library imported) are one item: the copy that already has counts takes them, else the oldest. Items that really
+          // differ (another category, an emergency version) stay to be told apart on review.
+          const copies = lib.length > 1 && lib.every((it) => it.category_id === lib[0].category_id) && !(lib.some(emVersion) && lib.some((it) => !emVersion(it)));
+          const main = copies ? [...lib].sort((a, b) => b.detection_count - a.detection_count)[0] : lib[0];
+          resolved.set(r.code, main); // the first item with this code is the default
+          if (lib.length > 1 && !copies) ambiguous.add(r.code);
           continue;
         }
         setStatus(`Adding ${r.code} to the library…`);
@@ -246,7 +271,8 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, sy
         const base = (byCode.get(r.code.toUpperCase())?.length ?? 0) > 1 ? fixtureOf(r.code) ?? resolved.get(r.code) : resolved.get(r.code);
         if (!base) continue;
         const emCode = emergencyCode(r.code, activeMarkers);
-        let emItem = byCode.get(emCode.toUpperCase())?.[0];
+        // (two copies of the emergency item, one made here and one imported: the copy that has counts takes them)
+        let emItem = mainOf(emCode);
         if (!emItem) {
           setStatus(`Adding ${emCode} (emergency ${r.code}) to the library…`);
           try {
@@ -284,7 +310,7 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, sy
         const base = !baseKey.includes(EMERGENCY_KEY) && (byCode.get(baseKey.toUpperCase())?.length ?? 0) > 1 ? fixtureOf(baseKey) ?? resolved.get(baseKey) : resolved.get(baseKey);
         if (!base) continue;
         const code = `${base.code} ${ft}'`.slice(0, 40);
-        let item = byCode.get(code.toUpperCase())?.[0];
+        let item = mainOf(code);   // (of copies, the one with counts)
         if (!item) {
           setStatus(`Adding ${code} to the library…`);
           try {
@@ -355,7 +381,10 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, sy
           sheetResolved = new Map(resolved); sheetAmbiguous = new Set(ambiguous);
           for (const code of ambiguous) {
             const fits = (byCode.get(code.toUpperCase()) ?? []).filter((it) => countGroupOf(it, []) === g);
-            if (fits.length === 1) { sheetResolved.set(code, fits[0]); sheetAmbiguous.delete(code); }
+            // (copies of one fixture count as one: the copy with counts takes them)
+            const copies = fits.length > 1 && fits.every((it) => it.category_id === fits[0].category_id) && !(fits.some(emVersion) && fits.some((it) => !emVersion(it)));
+            const pick = fits.length === 1 ? fits[0] : copies ? [...fits].sort((x, y) => y.detection_count - x.detection_count)[0] : null;
+            if (pick) { sheetResolved.set(code, pick); sheetAmbiguous.delete(code); }
           }
         }
         const r = await writeSheet({ ...sc, hits }, sheetResolved, writeInc, { ambiguous: sheetAmbiguous, clearItemIds: clearIds, scopeItemIds: scope, reset, ignorePast, leaveOutGrid });
@@ -424,6 +453,13 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, sy
       {phase !== 'scan' && (
         <>
           <div className="muted" style={{ fontSize: 13 }}>
+            {(dupes.length > 0 || mergeNote) && (
+              <div className="ac-libcheck" role="status">
+                {dupes.length > 0
+                  ? <>Your library has {plural(dupes.length, 'code')} twice in the same category ({dupes.slice(0, 6).map((d) => d.code).join(', ')}{dupes.length > 6 ? '…' : ''}): copies of one fixture. Counts go to one copy of each; merge them so every project's library is the same. <button className="btn btn-secondary" style={{ minHeight: 26, padding: '1px 10px', marginLeft: 6 }} disabled={merging || phase === 'write'} onClick={() => void mergeCopies()}>{merging ? 'Merging…' : 'Merge copies'}</button></>
+                  : mergeNote}
+              </div>
+            )}
             {onlyItem && rows.length === 0 ? <>No <b>{onlyItem.code}</b> tags were found on these sheets. If {onlyItem.code} is drawn as a symbol with no tag, use Find similar (F) on one of them instead. </> : onlyItem ? <>Only <b>{onlyItem.code}</b> is counted ({onlyItem.name}); its earlier automatic counts are replaced, every other item's are left as they are. </> : <>Found {plural(rows.length, 'tag type')}.</>}{libraryDriven ? ' The tags in your item library are ticked.' : ' New tags are added to your item library; you can rename them there.'} Counts stay unreviewed until you confirm them.
           </div>
 

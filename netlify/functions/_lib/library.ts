@@ -72,3 +72,36 @@ export async function clearItemCounts(q: Q, itemId: string, opts: { sheetId?: st
   for (const sid of sheets) await q(`update sheets set version = version + 1 where id = $1`, [sid]);
   return { deleted: gone.rows.length, sheets: sheets.length };
 }
+
+/**
+ * Copies of the same fixture in one project (the same code in the same category, worded a little differently: a schedule
+ * read again, a library imported) are merged: the copy with the most counts is kept (else the oldest), every count of the
+ * others moves to it, and they go. A code whose items really differ (an emergency version under the same code) is left.
+ * Returns the stored symbol samples of the copies removed, for the caller to delete.
+ */
+export async function mergeDuplicates(q: Q, projectId: string): Promise<{ merged: number; codes: string[]; countsMoved: number; sampleKeys: { item: string; sample: string }[] }> {
+  const rows = (await q(
+    `select i.id, i.code, i.name, i.category_id, i.created_at,
+            (select count(*) from detections d where d.item_type_id = i.id)::int as n
+       from item_types i where i.project_id = $1
+      order by upper(i.code), i.category_id, i.created_at, i.id`, [projectId])).rows as { id: string; code: string; name: string; category_id: string | null; n: number }[];
+  const groups = new Map<string, typeof rows>();
+  for (const r of rows) { const k = `${r.code.toUpperCase()}|${r.category_id ?? ''}`; (groups.get(k) ?? groups.set(k, []).get(k)!).push(r); }
+  const em = (name: string) => /\bEM\b|EMERGENCY|\/EM\b|BATTERY/i.test(name);
+  let merged = 0, countsMoved = 0; const codes: string[] = []; const sampleKeys: { item: string; sample: string }[] = [];
+  for (const g of groups.values()) {
+    if (g.length < 2 || (g.some((r) => em(r.name)) && g.some((r) => !em(r.name)))) continue;
+    const keep = [...g].sort((a, b) => b.n - a.n)[0];   // (stable: the oldest among equals)
+    for (const r of g) {
+      if (r.id === keep.id) continue;
+      const moved = await q(`update detections set item_type_id = $1 where item_type_id = $2`, [keep.id, r.id]);
+      countsMoved += (moved as unknown as { rowCount?: number }).rowCount ?? r.n;
+      for (const smp of (await q(`select id from item_samples where item_type_id = $1`, [r.id])).rows) sampleKeys.push({ item: r.id, sample: smp.id });
+      await q(`delete from item_samples where item_type_id = $1`, [r.id]);
+      await q(`delete from item_types where id = $1`, [r.id]);
+      merged++;
+    }
+    codes.push(keep.code);
+  }
+  return { merged, codes, countsMoved, sampleKeys };
+}

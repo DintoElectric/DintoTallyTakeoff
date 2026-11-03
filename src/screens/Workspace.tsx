@@ -1043,13 +1043,13 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
         <ItemDialog projectId={projectId} categories={categories} onClose={() => setShowItemDialog(false)} onCreated={(it) => { setShowItemDialog(false); setActiveItemId(it.id); void itemsQ.reload(); }} />
       )}
       {showAuto && sheet && (
-        <AutoCountDialog projectId={projectId} sheets={[sheet]} items={items} system={system !== 'all' ? system : null} onClose={() => setShowAuto(false)}
+        <AutoCountDialog projectId={projectId} onLibraryChanged={() => void itemsQ.reload()} sheets={[sheet]} items={items} system={system !== 'all' ? system : null} onClose={() => setShowAuto(false)}
           onDone={(msg) => { setShowAuto(false); toast(msg); void itemsQ.reload(); void countsQ.reload(); void sheetsQ.reload(); void getStore(sheetId).load(true); }} />
       )}
       {autoItem && (
         // one item across the counting sheets of its kind: a fixture on lighting plans, a device on power plans (a C on a
         // power plan can be another item); sheets whose title says neither are included
-        <AutoCountDialog projectId={projectId} items={items} onlyItem={autoItem}
+        <AutoCountDialog projectId={projectId} onLibraryChanged={() => void itemsQ.reload()} items={items} onlyItem={autoItem}
           sheets={sheets.filter((s) => s.count_enabled && autoCountSkips(s) === null && (planGroup(s) === null || planGroup(s) === countGroupOf(autoItem, categories)))}
           onClose={() => setAutoItem(null)}
           onDone={(msg) => { setAutoItem(null); toast(msg); void itemsQ.reload(); void countsQ.reload(); void sheetsQ.reload(); void getStore(sheetId).load(true); }} />

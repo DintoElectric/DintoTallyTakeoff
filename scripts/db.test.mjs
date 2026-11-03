@@ -185,6 +185,25 @@ console.log('db.test OK');
     assert.deepEqual(codes, ['D3', 'D9', 'D9'], JSON.stringify(r));
     assert.deepEqual(await copyLibrary(q, src, dst, 'u'), { copied: 0, skipped: 3 });   // and again: nothing added
   }
+  // merging copies of the same fixture: one item keeps every count; an emergency version under the same code is left
+  {
+    const { mergeDuplicates } = await import('../netlify/functions/_lib/library.ts');
+    const pid = (await t.d.query(`insert into projects (name, created_by) values ('Merge','u') returning id`)).rows[0].id;
+    const fid = (await t.d.query(`insert into drawing_files (project_id,file_name,size_bytes,chunk_count,uploaded_by,upload_status) values ($1,'e.pdf',1,1,'u','ready') returning id`, [pid])).rows[0].id;
+    const sid = (await t.d.query(`insert into sheets (project_id,file_id,page,number,page_width_pt,page_height_pt,count_enabled) values ($1,$2,1,'E1.02B',3024,2160,true) returning id`, [pid, fid])).rows[0].id;
+    const cid = (await t.d.query(`insert into item_categories (name, project_id) values ('Luminaire schedule', $1) returning id`, [pid])).rows[0].id;
+    const it = async (code, name) => (await t.d.query(`insert into item_types (code, name, created_by, project_id, category_id) values ($1,$2,'u',$3,$4) returning id`, [code, name, pid, cid])).rows[0].id;
+    const a = await it('D3', '4" RECESSED DOWNLIGHT FIXTURE'), b = await it('D3', '4" RECESSED DOWNLIGHT FIXTURE.');
+    await it('D9', "4' SURFACE/WET"); await it('D9', "4' SURFACE/WET, EMERGENCY");
+    const det = (item, k) => t.d.query(`insert into detections (id, sheet_id, item_type_id, x, y, source, status, created_by) values (gen_random_uuid(), $1,$2,$3,0.5,'auto','unreviewed','u')`, [sid, item, 0.1 + k / 100]);
+    for (let k = 0; k < 2; k++) await det(a, k);
+    for (let k = 0; k < 5; k++) await det(b, k + 10);
+    const r = await mergeDuplicates(q, pid);
+    assert.equal(r.merged, 1); assert.deepEqual(r.codes, ['D3']);
+    const left = (await t.d.query(`select i.code, (select count(*) from detections d where d.item_type_id = i.id)::int as n from item_types i where i.project_id = $1 order by i.code, n desc`, [pid])).rows;
+    assert.deepEqual(left.map((x) => `${x.code}:${x.n}`), ['D3:7', 'D9:0', 'D9:0']);   // the copy with more counts kept, with all 7
+    assert.equal((await mergeDuplicates(q, pid)).merged, 0);                           // nothing left to merge
+  }
 
   // one project: the whole library is its library
   const one = await seed(false);

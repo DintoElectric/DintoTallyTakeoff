@@ -316,3 +316,5 @@ th.right { text-align: right; }
 .job-row.none td { cursor: default; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
 .job-row .job-name { font-weight: 600; font-size: 14px; }
 tr.in-job td:first-child { padding-left: 34px; }
+/* the library check: copies of one fixture, offered to merge (Auto-count and the Library) */
+.ac-libcheck { font-size: 12.5px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--color-warning, #d9a400); background: color-mix(in srgb, var(--color-warning, #d9a400) 12%, transparent); margin-bottom: 6px; }

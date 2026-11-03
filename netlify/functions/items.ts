@@ -5,7 +5,7 @@ import { HttpError, handle, json, methodNotAllowed, notFound, readJson, segments
 import { num, oneOf, onlyKeys, reqStr, str, uuid } from './_lib/validate.ts';
 import { deleteKeys, keys } from './_lib/blobs.ts';
 import { transaction } from './_lib/db.ts';
-import { claimItems, clearItemCounts, copyLibrary } from './_lib/library.ts';
+import { claimItems, clearItemCounts, copyLibrary, mergeDuplicates } from './_lib/library.ts';
 
 const SHAPES = ['rect', 'circle', 'square', 'diamond'] as const;
 
@@ -108,6 +108,18 @@ export default handle(async (req: Request, _ctx: Context) => {
       deleted++; countsDeleted += n;
     }
     return json({ deleted, counts_deleted: countsDeleted, kept });
+  }
+
+  // POST /api/items/merge-duplicates { project_id }: copies of the same fixture (same code and category) become one item,
+  // with all their counts.
+  if (seg[1] === 'merge-duplicates' && req.method === 'POST') {
+    await requireRole('estimator');
+    const b = await readJson(req);
+    onlyKeys(b, ['project_id']);
+    const projectId = uuid(b.project_id, 'project id');
+    const r = await transaction((q) => mergeDuplicates(q, projectId));
+    if (r.sampleKeys.length) await deleteKeys([...new Set(r.sampleKeys.map((k) => k.item))].map((id) => keys.symbol(id)).concat(r.sampleKeys.map((k) => keys.sample(k.item, k.sample))));
+    return json({ merged: r.merged, codes: r.codes, counts_moved: r.countsMoved });
   }
 
   if (seg[1] === 'claim' && req.method === 'POST') {
