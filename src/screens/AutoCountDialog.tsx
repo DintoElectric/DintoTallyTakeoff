@@ -124,8 +124,13 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, sy
   // emergency split and measured lengths belong to it. Variants of one fixture are items in the same category (two D9
   // descriptions in the fixture schedule); a receptacle or a switch with the same code is not a variant.
   const fixtureOf = (code: string) => { const v = byCode.get(code.toUpperCase()) ?? []; return v.find((it) => countGroupOf(it, []) === 'fixture') ?? v[0]; };
-  const variants = (code: string) => { const f = fixtureOf(code); return (byCode.get(code.toUpperCase()) ?? []).filter((it) => it.category_id === f?.category_id).length; };
-  const splits = (code: string) => (sys === 'all' || sys === 'lighting') && (emByCode.get(code) ?? 0) > 0 && !splitOff.has(code) && variants(code) <= 1 && !/^XL/i.test(code);
+  // A library that keeps the emergency version under the same code (a D9 and a "D9 ... EM" description) counts it itself; the
+  // split is left to it then. Two copies of the same fixture (a schedule read again, a library imported) do not stop it.
+  // (an emergency version: its description says so where another of the same code's does not; a note in the specification
+  // about emergency fixtures, shared by both copies, is not one)
+  const emVersion = (it: ItemTypeRow) => /\bEM\b|EMERGENCY|\/EM\b|BATTERY/i.test(it.name);
+  const hasEmVersion = (code: string) => { const f = fixtureOf(code); const same = (byCode.get(code.toUpperCase()) ?? []).filter((it) => it.category_id === f?.category_id); return same.some(emVersion) && same.some((it) => !emVersion(it)); };
+  const splits = (code: string) => (sys === 'all' || sys === 'lighting') && (emByCode.get(code) ?? 0) > 0 && !splitOff.has(code) && !hasEmVersion(code) && !/^XL/i.test(code);
 
   useEffect(() => {
     let off = false;
@@ -385,9 +390,14 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, sy
   const lenMeasured = lengths.reduce((n, [, e]) => n + [...e.at.values()].reduce((a, b) => a + b, 0), 0);
   const lenCheck = lengths.reduce((n, [, e]) => n + e.check + e.none, 0);
   const lengthSplit = (code: string) => measure.measured.has(code.toUpperCase()) && !lengthOff.has(code);
+  // types with emergency marks that are not split, and why (never silently: a library can switch the split off)
+  const notSplit = [...emByCode.entries()].filter(([code, n]) => n > 0 && inc.has(code) && !splitOff.has(code) && !splits(code))
+    .map(([code]) => ({ code, why: hasEmVersion(code) ? 'your library has an emergency version under the same code' : sys !== 'all' && sys !== 'lighting' ? `this is a ${SYSTEM_LABEL[sys]} count` : 'not split' }));
+  // (only the types actually split: an emergency mark on a type that is not split is counted under the type itself)
+  const emSplit = [...emByCode.entries()].filter(([code]) => inc.has(code) && splits(code)).reduce((n, [, v]) => n + v, 0);
   const emSummary = candidates.length === 0 && markers.size === 0
     ? 'none found'
-    : `${emTotal > 0 ? `${emTotal} fixture${emTotal === 1 ? '' : 's'} counted separately` : 'nothing counted separately'} · ${markers.size} marker${markers.size === 1 ? '' : 's'} ticked`;
+    : `${emSplit > 0 ? `${emSplit} fixture${emSplit === 1 ? '' : 's'} counted separately` : 'nothing counted separately'} · ${markers.size} marker${markers.size === 1 ? '' : 's'} ticked${notSplit.length ? ` · ${notSplit.length} type${notSplit.length === 1 ? '' : 's'} not split` : ''}`;
   const failed = scans.filter((s) => s.error);
 
   return (
@@ -480,6 +490,11 @@ export default function AutoCountDialog({ projectId, sheets, items, onlyItem, sy
                 ? 'These labels beside fixtures look like emergency markings, each next to a normal version of the same label. Tick the ones that mean emergency; those fixtures are counted separately.'
                 : 'No emergency labels were found automatically. If your drawings mark emergency fixtures with a label, type it below.'}
             </div>
+            {notSplit.length > 0 && (
+              <div className="err-text" style={{ fontSize: 12 }} role="note">
+                Not split into emergency: {notSplit.slice(0, 8).map((x) => `${x.code} (${x.why})`).join('; ')}{notSplit.length > 8 ? `; and ${notSplit.length - 8} more` : ''}. Their emergency fixtures are counted under the type itself.
+              </div>
+            )}
             {candidates.map((c) => (
               <Check key={c.pattern} checked={markers.has(c.pattern)} disabled={phase === 'write'} onChange={(v) => setMarkers((cur) => { const n = new Set(cur); if (v) n.add(c.pattern); else n.delete(c.pattern); return n; })}>
                 <span><b>{c.pattern.startsWith('+') ? `“${c.pattern.slice(1)}” after the tag` : c.pattern}</b> <span className="dim">({c.count} fixtures, e.g. {c.examples.slice(0, 3).join(', ')}; {c.partner ? `normal: ${c.partner}` : c.likely ? 'the usual emergency mark, written after the tag' : c.pattern.startsWith('+') ? 'possible: a word written after the tag; tick it only if it means emergency (not, for example, night light)' : 'possible: starts with E, no normal version found'})</span></span>

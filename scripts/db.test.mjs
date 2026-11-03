@@ -169,6 +169,22 @@ console.log('db.test OK');
   assert.deepEqual(await copyLibrary(q, t.pB, t.pA, 'u'), { copied: 0, skipped: copied.copied + copied.skipped });  // copying twice adds nothing
   const dst = (await t.d.query(`select i.code, c.project_id as cat_project from item_types i left join item_categories c on c.id = i.category_id where i.project_id = $1 and i.code = 'C3'`, [t.pA])).rows[0];
   assert.equal(dst.cat_project, t.pA);
+  // A library imported into a project that read the same schedule: a code it already has in that category is the same
+  // fixture, worded a little differently, and is not added twice (two would be taken as variants and stop the emergency
+  // split); two variants within the imported library both come across.
+  {
+    const mk = async (name) => (await t.d.query(`insert into projects (name, created_by) values ($1,'u') returning id`, [name])).rows[0].id;
+    const src = await mk('Hillcrest - first'), dst = await mk('Hillcrest - Lighting');
+    const cat = async (pid) => (await t.d.query(`insert into item_categories (name, project_id) values ('Luminaire schedule', $1) returning id`, [pid])).rows[0].id;
+    const cs = await cat(src), cd = await cat(dst);
+    const item = (pid, cid, code, name) => t.d.query(`insert into item_types (code, name, created_by, project_id, category_id) values ($1,$2,'u',$3,$4)`, [code, name, pid, cid]);
+    await item(src, cs, 'D3', '4" RECESSED DOWNLIGHT FIXTURE'); await item(src, cs, 'D9', "4' SURFACE/WET"); await item(src, cs, 'D9', "4' SURFACE/WET/OPEN");
+    await item(dst, cd, 'D3', '4" RECESSED DOWNLIGHT FIXTURE.');
+    const r = await copyLibrary(q, src, dst, 'u');
+    const codes = (await t.d.query(`select code from item_types where project_id = $1 order by code, name`, [dst])).rows.map((x) => x.code);
+    assert.deepEqual(codes, ['D3', 'D9', 'D9'], JSON.stringify(r));
+    assert.deepEqual(await copyLibrary(q, src, dst, 'u'), { copied: 0, skipped: 3 });   // and again: nothing added
+  }
 
   // one project: the whole library is its library
   const one = await seed(false);

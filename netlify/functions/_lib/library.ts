@@ -40,13 +40,18 @@ export async function copyLibrary(q: Q, fromProject: string, toProject: string, 
        from item_types i left join item_categories c on c.id = i.category_id
       where i.project_id = $1 order by i.code, i.created_at, i.id`, [fromProject]);
   let copied = 0, skipped = 0;
+  const made = new Set<string>();   // the items this copy adds (so variants within the copied library still come across)
   for (const it of src.rows) {
     if ((await sameItem(q, toProject, it.code, it.name)).rows[0]) { skipped++; continue; }
     const cat = it.cat ? await categoryIn(q, toProject, it.cat) : null;
+    // The project already has this code in this category (read from the same schedule, worded a little differently): the
+    // same fixture, so it is not added twice. Two of them would be taken as variants of one fixture.
+    const there = (await q(`select id from item_types where project_id = $1 and upper(code) = upper($2) and category_id is not distinct from $3`, [toProject, it.code, cat])).rows;
+    if (there.some((r: { id: string }) => !made.has(r.id))) { skipped++; continue; }
     await q(
       `insert into item_types (code, name, spec, category_id, unit, marker_shape, marker_glyph, created_by, project_id, length_ft, count_group, system)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-      [it.code, it.name, it.spec, cat, it.unit, it.marker_shape, it.marker_glyph, actorId, toProject, it.length_ft, it.count_group ?? null, it.system ?? null]);
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning id`,
+      [it.code, it.name, it.spec, cat, it.unit, it.marker_shape, it.marker_glyph, actorId, toProject, it.length_ft, it.count_group ?? null, it.system ?? null]).then((r: { rows: { id: string }[] }) => { if (r.rows[0]) made.add(r.rows[0].id); });
     copied++;
   }
   return { copied, skipped };
