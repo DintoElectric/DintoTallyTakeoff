@@ -1,4 +1,5 @@
 // Auto-count: scan sheets for fixture/device tags, then write the matches as unreviewed detections.
+import type { SymbolItem } from './symbolShape.ts';
 import type { GridBubble } from './gridBubbles.ts';
 import type { Detection, DrawingFileRow, ItemTypeRow, SheetRow } from '../../shared/types.ts';
 import { BATCH_MAX_OPS } from '../../shared/limits.ts';
@@ -17,6 +18,7 @@ export interface SheetScan { sheet: SheetRow; hits: TagHit[]; zones: Zone[]; bub
 export async function scanSheets(
   sheets: SheetRow[], files: DrawingFileRow[], onProgress: (done: number, total: number, label: string) => void, signal?: AbortSignal, knownCodes?: Set<string>,
   measure?: { measured: Set<string>; known: Map<string, number> },   // fixtures to measure on the plans, and the stated lengths of the others
+  symbols?: SymbolItem[],   // the library's items with a symbol: found by their look
 ): Promise<SheetScan[]> {
   const fileById = new Map(files.map((f) => [f.id, f]));
   const out: SheetScan[] = [];
@@ -29,7 +31,7 @@ export async function scanSheets(
       if (!f) throw new Error('drawing file missing');
       const pdf = await loadFilePdf({ id: f.id, chunk_count: f.chunk_count });
       const page = await pdf.getPage(sheet.page);
-      const { hits, zones, bubbles, runs } = await scanPage(page, pdfjs.OPS, sheet.number, sheet.exclusion_zones ?? null, knownCodes);
+      const { hits, zones, bubbles, runs } = await scanPage(page, pdfjs.OPS, sheet.number, sheet.exclusion_zones ?? null, knownCodes, undefined, symbols);
       if (measure && measure.measured.size) {
         try { await measureSheet(page, pdfjs.OPS, runs, hits, zones, measure.measured, measure.known); }
         catch (e) { console.warn('Measuring fixtures failed for a sheet; they are counted without lengths', e); }

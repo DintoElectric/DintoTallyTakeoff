@@ -15,7 +15,7 @@ export interface AreaColumn { header: string; x0: number; x1: number; sample: st
 /** A row band between two of the table's horizontal lines; merged: no column line runs through it (a section heading). */
 export interface Band { y0: number; y1: number; merged: boolean }
 export interface AreaTable { columns: AreaColumn[]; lines: Word[][]; bands: Band[]; title?: string | null; rows?: AreaRow[] }   // title: the schedule's own, above its header; rows: already read (a legend with no header)
-export interface AreaRow { cells: string[]; section: string | null }
+export interface AreaRow { cells: string[]; section: string | null; symbolBox?: { x0: number; y0: number; x1: number; y1: number }; letters?: string[] }   // letters: beside or in its symbol, telling it from another drawn the same   // symbolBox: where its symbol is drawn (points), in a legend
 
 // The words schedule headers are made of (fixtures, receptacles and devices, equipment, panels). Only used to tell the
 // header block from a title above it and the rows below it; any header still names its column, known words or not.
@@ -396,11 +396,15 @@ export function readLegendBlock(runs: PageRun[], boxIn: Box | Box[], opts: { pag
     return ws.slice(0, 4).map((w) => w[0]).join('') || 'WD';
   };
   const out: AreaRow[] = [];
-  for (const r of rowsTxt) {
+  for (const [ri, r] of rowsTxt.entries()) {
+    // where the row's symbol is drawn: the symbol column beside it, halfway to the rows above and below
+    const up = ri > 0 ? (rowsTxt[ri - 1].y1 + r.y0) / 2 : r.y0 - step * 1.2, down = ri < rowsTxt.length - 1 ? (r.y1 + rowsTxt[ri + 1].y0) / 2 : r.y1 + step * 1.2;
+    const symbolBox = { x0: box.x0 + 1, y0: up, x1: divider - 1.5, y1: down };
     const quoted = [...r.text.matchAll(/"([A-Z0-9+#\-]{1,6})"\s+DENOTE/g)].map((m) => m[1]).filter((c) => !/^\d+$/.test(c));
     const letters = r.sym.filter((t) => /^[A-Z+][A-Z0-9+#\-]{0,5}$/.test(t) && !/^\d+$/.test(t));
     const codes = quoted.length ? quoted : letters.length ? [letters.join('/')] : [made(r.text)];
-    for (const c of [...new Set(codes)]) out.push({ cells: [unique(c), r.text], section: null });
+    // (the letters on the symbol that are this item's: a duplex with "GF" beside it is GF; a "2" is an example circuit number)
+    for (const c of [...new Set(codes)]) out.push({ cells: [unique(c), r.text], section: null, symbolBox, letters: letters.filter((t) => t === c || (codes.length === 1 && !quoted.length)).slice(0, 2) });
   }
   const cols: AreaColumn[] = [
     { header: 'TAG', x0: box.x0, x1: divider, sample: out[0]?.cells[0] ?? '' },   // (the code as read: taken as it is)

@@ -318,3 +318,7 @@ th.right { text-align: right; }
 tr.in-job td:first-child { padding-left: 34px; }
 /* the library check: copies of one fixture, offered to merge (Auto-count and the Library) */
 .ac-libcheck { font-size: 12.5px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--color-warning, #d9a400); background: color-mix(in srgb, var(--color-warning, #d9a400) 12%, transparent); margin-bottom: 6px; }
+/* an item's symbol (read from a legend), drawn from its points */
+.symbol-mark { display: inline-flex; align-items: center; gap: 3px; flex: none; vertical-align: middle; }
+.symbol-mark svg { fill: currentColor; overflow: visible; }
+.symbol-letters { font-size: 10px; font-weight: 600; opacity: .85; }

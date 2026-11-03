@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { SymbolMark } from '../app/SymbolMark.tsx';
 import { MagnifyingGlass, Plus } from '@phosphor-icons/react';
 import type { CategoryRow, ItemTypeRow, MarkerShape, ProjectRow } from '../../shared/types.ts';
 import { api, ApiError } from '../auth/api.ts';
@@ -288,7 +289,7 @@ export default function Library({ projectId }: { projectId: string }) {
                   <tr key={i.id} className={`tr-click${i.id === sel ? ' sel' : ''}`} onClick={() => setSel(i.id)}>
                     {canEdit && <td onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label={`Select ${i.code}`} checked={picked.has(i.id)} onChange={() => setPicked((p) => { const n = new Set(p); if (n.has(i.id)) n.delete(i.id); else n.add(i.id); return n; })} /></td>}
                     <td><Symbol shape={i.marker_shape} glyph={i.marker_glyph} /></td>
-                    <td style={{ fontWeight: 500 }}>{i.code}</td>
+                    <td style={{ fontWeight: 500 }}><span className="row" style={{ gap: 6 }}>{i.symbol?.pts?.length ? <SymbolMark s={i.symbol} size={22} /> : null}{i.code}</span></td>
                     <td><div>{i.name}</div>{i.spec && <div className="dim" style={{ fontSize: 12 }}>{i.spec}</div>}</td>
                     <td>{categories.find((c) => c.id === i.category_id)?.name ?? '—'}</td>
                     <td><span className={`tag ${i.detection_mode === 'auto' ? 'tag-accent' : 'tag-neutral'}`}>{i.detection_mode === 'auto' ? 'Auto-detect' : 'Manual only'}</span></td>

@@ -54,7 +54,7 @@ export function countRegion(prims: LinePrim[], W: number, H: number): Region {
   return { x0, y0, x1, y1 };
 }
 
-export type TagKind = 'tag' | 'short' | 'room' | 'note' | 'camera' | 'outlet' | 'switch';   // switch: a lighting control "$D2"
+export type TagKind = 'tag' | 'short' | 'room' | 'note' | 'camera' | 'outlet' | 'switch' | 'symbol';   // switch: a lighting control "$D2"; symbol: an item's own symbol, found by its look
 export interface TagHit {
   lengthFt?: number | null;   // measured on the plan (fixtures whose length is left to the drawings), nearest foot
   lengthSure?: boolean;       // the measurement is certain (else flagged for review)

@@ -10,6 +10,7 @@ import { countGroupOf, type CountGroup } from '../../shared/countGroup.ts';
 import { planGroup as sheetGroup } from '../../shared/sheetKinds.ts';
 import { SYSTEMS, SYSTEM_LABEL, systemOf, type SystemKey } from '../../shared/systems.ts';
 import { duplicateCopies, isEmergencyVersion } from '../../shared/duplicates.ts';
+import { SymbolMark } from '../app/SymbolMark.tsx';
 
 // A count of a fixture measured on the plan goes to the item for its length ("P 7'"): its key is the code, this, the feet.
 const LENGTH_KEY = '\u0002';
@@ -48,6 +49,7 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
   const [cats, setCats] = useState<CategoryRow[]>([]);
   useEffect(() => { void api<{ categories: CategoryRow[] }>(`/categories?project=${projectId}`).then((r) => setCats(r.categories)).catch(() => undefined); }, [projectId]);
   const sysOfItem = (it: ItemTypeRow) => systemOf(it, cats);
+  const symbolItem = (key: string) => (key.startsWith('SYM:') ? items.find((i) => i.id === key.slice(4)) : undefined);   // a symbol row's item
   const [phase, setPhase] = useState<'scan' | 'pick' | 'write'>('scan');
   const [progress, setProgress] = useState({ done: 0, total: sheets.length, label: '' });
   const [scans, setScans] = useState<SheetScan[]>([]);
@@ -70,9 +72,12 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
   const abort = useRef(new AbortController());
 
   // Several library items can share a code (variants), so each code maps to a list.
+  // The library by code, for the tags read as text. An item with a symbol (read from a legend) is counted by its symbol
+  // only: its letters ("G", "E", "WP" beside a duplex) are not counted again as text. (A fixture type "E" with no symbol is
+  // still found here, and its tags are counted as usual.)
   const byCode = useMemo(() => {
     const m = new Map<string, ItemTypeRow[]>();
-    for (const i of items) m.set(i.code.toUpperCase(), [...(m.get(i.code.toUpperCase()) ?? []), i]);
+    for (const i of items) { if (i.symbol?.pts?.length) continue; m.set(i.code.toUpperCase(), [...(m.get(i.code.toUpperCase()) ?? []), i]); }
     return m;
   }, [items]);
   // Fixtures whose length is left to the drawings are measured on the plans; the others' stated lengths tell the scale.
@@ -100,13 +105,13 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
     const rank = (r: CodeRow) => (r.kind === 'room' ? 4 : r.kind === 'switch' || byCode.has(r.code.toUpperCase()) ? 0 : r.kind === 'note' || r.kind === 'camera' || r.kind === 'outlet' ? 1 : r.kind === 'tag' ? 2 : 3);
     // Short letter-only marks (S, OS, CR, MM ...) are easily mixed up with other text, so they are counted only when this
     // project's library has them (a security device CR, a fire alarm module MM), or when you ask to see them.
-    return [...discover(effective)].filter((r) => (only ? r.code.toUpperCase() === only : r.kind !== 'short' || byCode.has(r.code.toUpperCase()) || showShort))
+    return [...discover(effective)].filter((r) => (only ? r.code.toUpperCase() === only || (!!onlyItem && r.code === `SYM:${onlyItem.id}`) : r.kind !== 'short' || byCode.has(r.code.toUpperCase()) || showShort))
       .sort((a, b) => rank(a) - rank(b) || b.total - a.total || a.code.localeCompare(b.code));
   }, [effective, byCode, showShort, only]);
   const shortRows = useMemo(() => discover(effective).filter((r) => r.kind === 'short' && !byCode.has(r.code.toUpperCase())), [effective, byCode]);
   // the systems a code belongs to: its library items' (a switch is lighting; a note other; a camera security; an outlet telecom)
   const codeSystems = (r: CodeRow): Set<SystemKey> =>
-    r.kind === 'switch' ? new Set(['lighting']) : r.kind === 'note' ? new Set(['other']) : r.kind === 'camera' ? new Set(['security']) : r.kind === 'outlet' ? new Set(['telecom'])
+    r.kind === 'symbol' ? new Set(symbolItem(r.code) ? [sysOfItem(symbolItem(r.code)!)] : []) : r.kind === 'switch' ? new Set(['lighting']) : r.kind === 'note' ? new Set(['other']) : r.kind === 'camera' ? new Set(['security']) : r.kind === 'outlet' ? new Set(['telecom'])
       : new Set((byCode.get(r.code.toUpperCase()) ?? []).map(sysOfItem));
   const inSys = (r: CodeRow) => sys === 'all' || codeSystems(r).has(sys);
   const sysRows = useMemo(() => (sys === 'all' ? rows : rows.filter(inSys)), [rows, sys, cats, byCode]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -160,7 +165,11 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
     (async () => {
       try {
         const files = await api<{ files: DrawingFileRow[] }>(`/files?project=${projectId}`);
-        const res = await scanSheets(sheets, files.files, (done, total, label) => { if (!off) setProgress({ done, total, label }); }, abort.current.signal, new Set(items.map((i) => i.code.toUpperCase())), measure);
+        // items with a symbol (read from a legend) are found by their look, not by text: their codes are not read as tags
+        const withSymbol = items.filter((i) => i.symbol && i.symbol.pts?.length);
+        const symbols = withSymbol.map((i) => ({ id: i.id, code: i.code, symbol: i.symbol! }));
+        const symbolCodes = new Set(withSymbol.map((i) => i.code.toUpperCase()));
+        const res = await scanSheets(sheets, files.files, (done, total, label) => { if (!off) setProgress({ done, total, label }); }, abort.current.signal, new Set(items.map((i) => i.code.toUpperCase()).filter((c) => !symbolCodes.has(c))), measure, symbols);
         if (off) return;
         setScans(res);
         const found = discover(res.map((sc) => ({ ...sc, hits: sc.hits.filter((h) => !h.past) })));
@@ -168,10 +177,10 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
         // With a library (for example from a fixture schedule) only tags that match it are pre-ticked, so grid
         // labels and other look-alikes stay out. With no matches yet, every tag is pre-ticked to get you started.
         // Room numbers are never pre-ticked.
-        const lib = found.filter((r) => r.kind !== 'room' && r.kind !== 'note' && r.kind !== 'camera' && r.kind !== 'outlet' && r.kind !== 'switch' && byCode.has(r.code.toUpperCase()));
+        const lib = found.filter((r) => r.kind !== 'room' && r.kind !== 'note' && r.kind !== 'camera' && r.kind !== 'outlet' && r.kind !== 'switch' && r.kind !== 'symbol' && byCode.has(r.code.toUpperCase()));
         setLibraryDriven(lib.length > 0);
-        const notes = found.filter((r) => r.kind === 'note' || r.kind === 'camera' || r.kind === 'outlet' || r.kind === 'switch'); // drawing notes, cameras, triangle outlets and switches are always counted
-        const first = new Set(only ? found.filter((r) => r.code.toUpperCase() === only).map((r) => r.code) : [...(lib.length > 0 ? lib : found.filter((r) => r.kind === 'tag')), ...notes].map((r) => r.code));
+        const notes = found.filter((r) => r.kind === 'note' || r.kind === 'camera' || r.kind === 'outlet' || r.kind === 'switch' || r.kind === 'symbol'); // drawing notes, cameras, triangle outlets, switches and the library's symbols are always counted
+        const first = new Set(only ? found.filter((r) => r.code.toUpperCase() === only || (!!onlyItem && r.code === `SYM:${onlyItem.id}`)).map((r) => r.code) : [...(lib.length > 0 || found.some((r) => r.kind === 'symbol') ? lib : found.filter((r) => r.kind === 'tag')), ...notes]   /* (the library's own symbols found: the library is in use, and unknown tags stay unticked) */.map((r) => r.code));
         defaults.current = first;
         setInc(new Set(sys === 'all' || only ? first : [...first].filter((c) => { const r = found.find((x) => x.code === c); return !r || inSys(r); })));
         if (only) { setResetAuto(false); setResetManual(false); }   // one item: never a fresh start of the whole sheet
@@ -218,6 +227,7 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
       const ambiguous = new Set<string>();
       for (const r of rows.filter((x) => inc.has(x.code))) {
         if (only && onlyItem && r.code.toUpperCase() === only) { resolved.set(r.code, onlyItem); continue; }   // counted as this item, whatever else shares its code
+        if (r.kind === 'symbol') { const it = only && onlyItem && r.code === `SYM:${onlyItem.id}` ? onlyItem : symbolItem(r.code); if (it) resolved.set(r.code, it); continue; }   // the item whose symbol it is
         if (sys !== 'all' && r.kind !== 'switch') {
           // counting one system: a shared code (a fixture P and a receptacle P) counts as that system's item
           const mine = (byCode.get(r.code.toUpperCase()) ?? []).filter((it) => sysOfItem(it) === sys);
@@ -478,11 +488,12 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
               <thead><tr><th /><th>Tag</th><th>Library item</th><th>Emergency</th><th className="right">Found</th></tr></thead>
               <tbody>
                 {sysRows.map((r) => {
-                  const lib = byCode.get(r.code.toUpperCase());
+                  const symIt = r.kind === 'symbol' ? symbolItem(r.code) : undefined;
+                  const lib = symIt ? [symIt] : byCode.get(r.code.toUpperCase());
                   return (
                     <tr key={r.code}>
                       <td><Check checked={inc.has(r.code)} disabled={phase === 'write'} onChange={(v) => setInc((cur) => { const n = new Set(cur); if (v) n.add(r.code); else n.delete(r.code); return n; })}><span className="sr-only">Count {r.code}</span></Check></td>
-                      <td style={{ fontWeight: 500 }}>{r.code}{r.kind === 'short' && <span className="tag tag-outline" style={{ marginLeft: 8 }} title="Short letter-only codes can match ordinary text. They are flagged for review.">Short code</span>}{r.kind === 'note' && <span className="tag tag-accent" style={{ marginLeft: 8 }} title="A number or letters inside a hexagon on the plan.">Drawing note</span>}{r.kind === 'outlet' && <span className="tag tag-accent" style={{ marginLeft: 8 }} title="A triangle with its label beside it. A circle around it is the ceiling version; a hollow triangle is a different device.">Outlet</span>}{r.kind === 'camera' && <span className="tag tag-accent" style={{ marginLeft: 8 }} title="Found from the label printed beside the camera (its type over its ID). Its mounting is read from the word beside it (PM) and the mounting lines off its ring.">Camera</span>}{r.kind === 'room' && <span className="tag tag-neutral" style={{ marginLeft: 8 }} title="A room name sits just above it and it appears once. Tick it only if it is really a device.">Looks like a room number</span>}</td>
+                      <td style={{ fontWeight: 500 }}>{symIt ? <span className="row" style={{ gap: 6 }}>{symIt.symbol && <SymbolMark s={symIt.symbol} />}{symIt.code}</span> : r.code}{r.kind === 'short' && <span className="tag tag-outline" style={{ marginLeft: 8 }} title="Short letter-only codes can match ordinary text. They are flagged for review.">Short code</span>}{r.kind === 'note' && <span className="tag tag-accent" style={{ marginLeft: 8 }} title="A number or letters inside a hexagon on the plan.">Drawing note</span>}{r.kind === 'outlet' && <span className="tag tag-accent" style={{ marginLeft: 8 }} title="A triangle with its label beside it. A circle around it is the ceiling version; a hollow triangle is a different device.">Outlet</span>}{r.kind === 'camera' && <span className="tag tag-accent" style={{ marginLeft: 8 }} title="Found from the label printed beside the camera (its type over its ID). Its mounting is read from the word beside it (PM) and the mounting lines off its ring.">Camera</span>}{r.kind === 'room' && <span className="tag tag-neutral" style={{ marginLeft: 8 }} title="A room name sits just above it and it appears once. Tick it only if it is really a device.">Looks like a room number</span>}</td>
                       <td>{lib ? <span className="muted">{lib[0].name.length > 50 ? `${lib[0].name.slice(0, 50)}…` : lib[0].name}{lib.length > 1 ? ` (+${lib.length - 1} variant${lib.length === 2 ? '' : 's'}: flagged for review)` : ''}</span> : <input className="input" style={{ minHeight: 30, padding: '3px 8px', width: '100%', minWidth: 230 }} placeholder={r.kind === 'note' ? `Drawing note ${r.code}` : 'Description (optional)'} aria-label={`Description for ${r.code}`} value={names[r.code] ?? (r.kind === 'camera' || r.kind === 'outlet' ? r.name ?? '' : '')} disabled={phase === 'write'} onChange={(e) => setNames({ ...names, [r.code]: e.target.value })} />}</td>
                       <td>{(r.kind === 'tag' || r.kind === 'short') && (emByCode.get(r.code) ?? 0) > 0 && !/^XL/i.test(r.code) && (byCode.get(r.code.toUpperCase())?.length ?? 0) <= 1 ? (
                         <Check checked={!splitOff.has(r.code)} disabled={phase === 'write'} onChange={(v) => setSplitOff((cur) => { const n = new Set(cur); if (v) n.delete(r.code); else n.add(r.code); return n; })}>{emByCode.get(r.code)} as {emergencyCode(r.code, activeMarkers)}</Check>

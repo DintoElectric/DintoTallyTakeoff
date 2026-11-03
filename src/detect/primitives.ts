@@ -7,6 +7,8 @@ export interface Prim {
   fill: boolean;
   lum: number;     // luminance 0 (black) .. 1 (white) of the paint that is visible (fill if filled, else stroke)
   pts?: number[];  // the path's points as x,y pairs (curves: their end points), only kept for small shapes when asked for
+  /** The path followed along its curves too (a circle drawn as four arcs is round here, not a diamond): for matching by look. */
+  path?: number[];
 }
 
 export interface OpsLike {
@@ -56,13 +58,21 @@ export async function extractPrims(page: PageLike, OPS: OpsLike, opts: { keepPoi
       const d = (a[1] as ArrayLike<number>[])[0];
       if (!d) continue;
       const pts: number[] = [];
-      let k = 0;
+      // (with keepPoints, the curves followed too: points along each one, so a symbol keeps its true look)
+      const flat: number[] | null = opts.keepPoints ? [] : null;
+      let k = 0, cx = 0, cy = 0, sx = 0, sy = 0;
       while (k < d.length) {
         const op = d[k++];
-        if (op === 0 || op === 1) { pts.push(d[k], d[k + 1]); k += 2; }
-        else if (op === 2) { pts.push(d[k + 4], d[k + 5]); k += 6; }
-        else if (op === 3) { pts.push(d[k + 2], d[k + 3]); k += 4; }
-        else if (op === 4) { /* close */ }
+        if (op === 0 || op === 1) { pts.push(d[k], d[k + 1]); flat?.push(d[k], d[k + 1]); cx = d[k]; cy = d[k + 1]; if (op === 0) { sx = cx; sy = cy; } k += 2; }
+        else if (op === 2) {
+          if (flat) for (let i = 1; i <= 6; i++) { const t = i / 6, u = 1 - t; flat.push(u * u * u * cx + 3 * u * u * t * d[k] + 3 * u * t * t * d[k + 2] + t * t * t * d[k + 4], u * u * u * cy + 3 * u * u * t * d[k + 1] + 3 * u * t * t * d[k + 3] + t * t * t * d[k + 5]); }
+          pts.push(d[k + 4], d[k + 5]); cx = d[k + 4]; cy = d[k + 5]; k += 6;
+        }
+        else if (op === 3) {
+          if (flat) for (let i = 1; i <= 5; i++) { const t = i / 5, u = 1 - t; flat.push(u * u * cx + 2 * u * t * d[k] + t * t * d[k + 2], u * u * cy + 2 * u * t * d[k + 1] + t * t * d[k + 3]); }
+          pts.push(d[k + 2], d[k + 3]); cx = d[k + 2]; cy = d[k + 3]; k += 4;
+        }
+        else if (op === 4) { flat?.push(sx, sy); cx = sx; cy = sy; }
         else break;
       }
       if (pts.length < 4) continue;
@@ -83,6 +93,11 @@ export async function extractPrims(page: PageLike, OPS: OpsLike, opts: { keepPoi
           out[j + 1] = ctm[1] * pts[j] + ctm[3] * pts[j + 1] + ctm[5];
         }
         prim.pts = out;
+        if (flat && flat.length <= 600) {
+          const f: number[] = new Array(flat.length);
+          for (let j = 0; j < flat.length; j += 2) { f[j] = ctm[0] * flat[j] + ctm[2] * flat[j + 1] + ctm[4]; f[j + 1] = ctm[1] * flat[j] + ctm[3] * flat[j + 1] + ctm[5]; }
+          prim.path = f;
+        }
       }
       prims.push(prim);
     }

@@ -1,6 +1,9 @@
-import { Fragment, useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import type { PDFPageProxy } from 'pdfjs-dist';
-import type { CategoryRow, ItemTypeRow } from '../../shared/types.ts';
+import type { CategoryRow, ItemSymbol, ItemTypeRow } from '../../shared/types.ts';
+import type { Prim } from '../detect/primitives.ts';
+import { shapeIn } from '../detect/symbolShape.ts';
+import { SymbolMark } from '../app/SymbolMark.tsx';
 import { inZones, type Zone } from '../../shared/zones.ts';
 import { api, ApiError } from '../auth/api.ts';
 import { pdfjs } from '../viewer/pdf.ts';
@@ -34,13 +37,15 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
   // fixture C stay two items. 'new': a category of that name (the schedule's title); 'sections': the section headings; else
   // an existing category's id.
   const [catMode, setCatMode] = useState<string>('new');
+  const primsRef = useRef<Prim[]>([]);   // the page's linework, for each legend row's symbol
   const [newCat, setNewCat] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
 
   useEffect(() => {
     let gone = false;
     (async () => {
-      const [runs, { prims }] = await Promise.all([extractRuns(page), extractPrims(page, pdfjs.OPS)]);
+      const [runs, { prims }] = await Promise.all([extractRuns(page), extractPrims(page, pdfjs.OPS, { keepPoints: true })]);
+      primsRef.current = prims;
       const vp = page.getViewport({ scale: 1 });
       const vlines = prims.filter((p) => p.n === 2 && p.x1 - p.x0 < 0.6 && p.y1 - p.y0 > 4).map((p) => ({ x: (p.x0 + p.x1) / 2, y0: p.y0, y1: p.y1 }));
       const hlines = prims.filter((p) => p.n === 2 && p.y1 - p.y0 < 0.6 && p.x1 - p.x0 > 20).map((p) => ({ y: (p.y0 + p.y1) / 2, x0: p.x0, x1: p.x1 }));
@@ -79,9 +84,13 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
     if (!table) return [];
     // A code read twice: the same type again is left out; a different item with the same code (two "MS" from initials) gets "-2".
     const seen = new Map<string, string>();
-    const out: NonNullable<ReturnType<typeof rowToItem>>[] = [];
-    for (const r of areaRows(table, choice.type).map((x) => rowToItem(x, choice, table.columns))) {
-      if (!r) continue;
+    const out: (NonNullable<ReturnType<typeof rowToItem>> & { symbol: ItemSymbol | null })[] = [];
+    for (const x of areaRows(table, choice.type)) {
+      const base = rowToItem(x, choice, table.columns);
+      if (!base) continue;
+      // a legend row's symbol, as drawn beside it: kept with the item, so Auto-count finds it on the plans by its look
+      const shape = x.symbolBox ? shapeIn(primsRef.current, x.symbolBox) : null;
+      const r = { ...base, symbol: shape ? { ...shape, letters: x.letters ?? [] } : null };
       if (seen.has(r.code)) {
         if (choice.type !== null || seen.get(r.code) === r.name) continue;
         let n = 2; while (seen.has(`${r.code}-${n}`)) n++;
@@ -120,8 +129,8 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
         const category_id = categoryOf(r.section);
         // the item of this code in this category only: the same code in another category is another item
         const cur = items.find((it) => it.code.toUpperCase() === r.code && it.category_id === category_id);
-        if (cur) { await api(`/items/${cur.id}`, { method: 'PATCH', body: { name: r.name, spec: r.spec, count_group: group } }); updated++; continue; }
-        try { await api('/items', { body: { project_id: projectId, code: r.code, name: r.name, spec: r.spec, unit: 'EA', count_group: group, category_id, length_ft: group === 'fixture' ? lengthFeetFromText(r.name, r.spec ?? '') : null } }); added++; }
+        if (cur) { await api(`/items/${cur.id}`, { method: 'PATCH', body: { name: r.name, spec: r.spec, count_group: group, ...(r.symbol ? { symbol: r.symbol } : {}) } }); updated++; continue; }
+        try { await api('/items', { body: { project_id: projectId, code: r.code, name: r.name, spec: r.spec, ...(r.symbol ? { symbol: r.symbol } : {}), unit: 'EA', count_group: group, category_id, length_ft: group === 'fixture' ? lengthFeetFromText(r.name, r.spec ?? '') : null } }); added++; }
         catch (e) { if (e instanceof ApiError && e.status === 409) clashes++; else throw e; }   // the same code and description is already in the library
       }
       toast([added && `Added ${plural(added, 'type')}`, updated && `updated ${plural(updated, 'type')}`, clashes && `${plural(clashes, 'type')} left out: the same code and description is already in another category`].filter(Boolean).join(', ') + '.');
@@ -195,7 +204,7 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
                       )}
                       <tr key={r.code} className={off.has(r.code) || (inLibrary && !update) ? 'dim' : ''}>
                         <td><input type="checkbox" checked={!off.has(r.code)} onChange={() => setOff((s) => { const n = new Set(s); if (n.has(r.code)) n.delete(r.code); else n.add(r.code); return n; })} aria-label={`Read ${r.code}`} /></td>
-                        <td><b>{r.code}</b></td>
+                        <td><span className="row" style={{ gap: 6 }}>{r.symbol && <SymbolMark s={r.symbol} />}<b>{r.code}</b></span></td>
                         <td><div className="clamp3">{r.name}</div></td>
                         <td title={r.spec ?? ''}><div className="clamp3">{r.spec}</div></td>
                         {sections.length > 0 && <td className="dim">{r.section ? sectionName(r.section) : ''}</td>}

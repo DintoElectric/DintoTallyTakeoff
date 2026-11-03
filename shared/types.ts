@@ -89,6 +89,7 @@ export interface ItemTypeRow {
   /** Fixture (lighting) or device: the counting tab it is in. Empty means decided from its category and name. */
   count_group?: 'fixture' | 'device' | 'fire_alarm' | null;
   system?: 'lighting' | 'power' | 'fire_alarm' | 'hvac' | 'telecom' | 'security' | 'other' | null;   // null: worked out (shared/systems.ts)
+  symbol?: ItemSymbol | null;   // its symbol, read from a legend: Auto-count finds it on the plans by its look
 }
 
 export interface CategoryRow { id: string; name: string; sort: number }
@@ -129,3 +130,7 @@ export interface ExportData {
 
 /** A job: a folder on the home page grouping its workspaces (projects). */
 export interface JobRow { id: string; name: string; created_by_name: string | null; created_at: string; project_count: number }
+
+/** An item's symbol: how it looks (points along its linework in its own w x h box, in points; how much is filled), and the
+ * letters that tell it from another item with the same symbol (a duplex with "GF" beside it). */
+export interface ItemSymbol { w: number; h: number; pts: [number, number][]; fill: number; letters?: string[] }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { SymbolMark } from '../app/SymbolMark.tsx';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import {
   ArrowCounterClockwise, ArrowClockwise, Buildings, CaretLeft, CaretRight, Cursor, Eraser, FilePdf, Table, Eye, EyeSlash, Polygon, Shapes, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus, PlusCircle, Plus, Selection, Stack, WarningCircle, Crosshair, MagnifyingGlass, Hand,
@@ -973,7 +974,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                   return (
                     <button key={it.id} id={`item-row-${it.id}`} className={`item-row${it.id === activeItemId ? ' sel' : ''}`} onClick={() => openItem(it.id)} aria-pressed={it.id === activeItemId}>
                       <Symbol shape={it.marker_shape} glyph={it.marker_glyph} active={it.id === activeItemId} />
-                      <span style={{ minWidth: 0 }}><div className="n1" title={it.name}>{it.name}</div><div className="n2" title={[it.code, it.spec].filter(Boolean).join(' · ')}>{[it.code, it.spec].filter(Boolean).join(' · ')}</div></span>
+                      {it.symbol?.pts?.length ? <SymbolMark s={it.symbol} size={22} /> : null}<span style={{ minWidth: 0 }}><div className="n1" title={it.name}>{it.name}</div><div className="n2" title={[it.code, it.spec].filter(Boolean).join(' · ')}>{[it.code, it.spec].filter(Boolean).join(' · ')}</div></span>
                       {c.flagged > 0 ? <span className="tag tag-outline">{c.flagged} to review</span> : <span />}
                       <span className="cnt num">{c.n}</span>
                     </button>

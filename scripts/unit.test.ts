@@ -1588,3 +1588,45 @@ test('headerless legend: title, rows by spacing, codes quoted or on the symbol o
   assert.deepEqual(rows.map((r) => r.split(':')[0]), ['DR', 'DRMA', 'AV', 'GF', 'CP', 'PJ', 'PS']);   // the notes and the revision mark are not items
   assert.ok(t.rows![3].cells[1].includes('FAULT CIRCUIT BREAKER'));                                     // a row's second line stays with it
 });
+
+// ---- symbols matched by their look (a legend's symbol on the plans), and letters deciding between same-symbol items ----
+import { findBestShapes, findSymbolItems, shapeIn, shapesAlike } from '../src/detect/symbolShape.ts';
+{
+  const seg = (x0: number, y0: number, x1: number, y1: number) => ({ x0: Math.min(x0, x1), y0: Math.min(y0, y1), x1: Math.max(x0, x1), y1: Math.max(y0, y1), n: 2, fill: false, lum: 0, pts: [x0, y0, x1, y1] });
+  // a circle drawn as one curve (the legend) or as ten straight pieces (the plan); a duplex is the circle and two lines through it
+  const curve = (cx: number, cy: number, r: number) => { const path: number[] = []; for (let k = 0; k <= 48; k++) { const a = (k / 48) * 2 * Math.PI; path.push(cx + r * Math.cos(a), cy + r * Math.sin(a)); } return { x0: cx - r, y0: cy - r, x1: cx + r, y1: cy + r, n: 13, fill: false, lum: 0, pts: path.filter((_, i) => i % 8 < 2), path }; };
+  const pieces = (cx: number, cy: number, r: number) => Array.from({ length: 10 }, (_, k) => { const a = (k / 10) * 2 * Math.PI, b = ((k + 1) / 10) * 2 * Math.PI; return seg(cx + r * Math.cos(a), cy + r * Math.sin(a), cx + r * Math.cos(b), cy + r * Math.sin(b)); });
+  const duplex = (cx: number, cy: number, r: number, circle: (x: number, y: number, r: number) => unknown, turn = false) => {
+    const lines = turn ? [seg(cx - 1.4 * r / 4, cy - r, cx - 1.4 * r / 4, cy + 1.6 * r), seg(cx + 1.4 * r / 4, cy - r, cx + 1.4 * r / 4, cy + 1.6 * r)]
+      : [seg(cx - r, cy - 1.4 * r / 4, cx + 1.6 * r, cy - 1.4 * r / 4), seg(cx - r, cy + 1.4 * r / 4, cx + 1.6 * r, cy + 1.4 * r / 4)];
+    const c = circle(cx, cy, r); return [...(Array.isArray(c) ? c : [c]), ...lines];
+  };
+  const square = (cx: number, cy: number, s: number) => [seg(cx - s, cy - s, cx + s, cy - s), seg(cx + s, cy - s, cx + s, cy + s), seg(cx + s, cy + s, cx - s, cy + s), seg(cx - s, cy + s, cx - s, cy - s)];
+  const diamond = (cx: number, cy: number, r: number) => [seg(cx, cy - r, cx + r, cy), seg(cx + r, cy, cx, cy + r), seg(cx, cy + r, cx - r, cy), seg(cx - r, cy, cx, cy - r)];
+  const legendDuplex = shapeIn(duplex(100, 100, 4, curve) as never, { x0: 90, y0: 90, x1: 112, y1: 110 })!;
+  test('symbols by look: a duplex drawn as one curve matches it drawn as ten pieces, turned and a little smaller; a diamond does not', () => {
+    const plan = [...duplex(500, 500, 3.8, pieces, true), ...duplex(600, 500, 3.8, diamond as never)];
+    const m = findBestShapes(plan as never, [{ key: 'DR', shape: legendDuplex }]);
+    assert.deepEqual(m.map((q) => Math.round(q.x)), [500]);
+    assert.ok(m[0].score > 0.85);
+  });
+  test('symbols by look: a band drawn as close hatching reads as the same filled band', () => {
+    const solid = { x0: 96, y0: 98.6, x1: 104, y1: 101.4, n: 4, fill: true, lum: 0, pts: [96, 98.6, 104, 98.6, 104, 101.4, 96, 101.4] };
+    const filled = shapeIn([...duplex(100, 100, 4, curve), solid] as never, { x0: 90, y0: 90, x1: 112, y1: 110 })!;
+    const hatch = Array.from({ length: 5 }, (_, k) => seg(196, 198.6 + k * 0.7, 204, 198.6 + k * 0.7));
+    const hatched = shapeIn([...duplex(200, 200, 4, pieces), ...hatch] as never, { x0: 190, y0: 190, x1: 212, y1: 210 })!;
+    assert.ok(Math.abs(filled.fill - hatched.fill) < 0.08 && filled.fill > legendDuplex.fill + 0.05);
+  });
+  test('symbol items: the letters beside a duplex decide (G), a bare one is the plain item, a letter inside a square rules it out', () => {
+    const items = [
+      { id: 'DR', code: 'DR', symbol: { ...legendDuplex, letters: [] } },
+      { id: 'G', code: 'G', symbol: { ...legendDuplex, letters: ['G'] } },
+      { id: 'SPRF', code: 'SPRF', symbol: { ...shapeIn(square(100, 100, 4) as never, { x0: 90, y0: 90, x1: 110, y1: 110 })!, letters: [] } },
+    ];
+    assert.ok(shapesAlike(items[0].symbol, items[1].symbol) >= 0.98);
+    const plan = [...duplex(500, 500, 4, pieces), ...duplex(560, 500, 4, pieces), ...square(700, 500, 4), ...square(800, 500, 4)];
+    const texts = [{ s: 'G', x: 512, y: 489 }, { s: '2', x: 566, y: 490 }, { s: 'J', x: 700, y: 500 }];
+    const hits = findSymbolItems(plan as never, texts, items as never);
+    assert.deepEqual(hits.map((h) => `${Math.round(h.x / 10) * 10}:${h.code}`).sort(), ['500:G', '560:DR', '800:SPRF']);   // the square with J in it is something else
+  });
+}

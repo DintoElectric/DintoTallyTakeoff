@@ -36,7 +36,7 @@ export async function claimItems(q: Q, projectId: string, itemIds: string[] | nu
 /** Copies one project's library into another (items and categories), leaving out what the target already has. */
 export async function copyLibrary(q: Q, fromProject: string, toProject: string, actorId: string): Promise<{ copied: number; skipped: number }> {
   const src = await q(
-    `select i.code, i.name, i.spec, i.unit, i.marker_shape, i.marker_glyph, i.length_ft, i.count_group, i.system, c.name as cat
+    `select i.code, i.name, i.spec, i.unit, i.marker_shape, i.marker_glyph, i.length_ft, i.count_group, i.system, i.symbol, c.name as cat
        from item_types i left join item_categories c on c.id = i.category_id
       where i.project_id = $1 order by i.code, i.created_at, i.id`, [fromProject]);
   let copied = 0, skipped = 0;
@@ -49,9 +49,9 @@ export async function copyLibrary(q: Q, fromProject: string, toProject: string, 
     const there = (await q(`select id from item_types where project_id = $1 and upper(code) = upper($2) and category_id is not distinct from $3`, [toProject, it.code, cat])).rows;
     if (there.some((r: { id: string }) => !made.has(r.id))) { skipped++; continue; }
     await q(
-      `insert into item_types (code, name, spec, category_id, unit, marker_shape, marker_glyph, created_by, project_id, length_ft, count_group, system)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning id`,
-      [it.code, it.name, it.spec, cat, it.unit, it.marker_shape, it.marker_glyph, actorId, toProject, it.length_ft, it.count_group ?? null, it.system ?? null]).then((r: { rows: { id: string }[] }) => { if (r.rows[0]) made.add(r.rows[0].id); });
+      `insert into item_types (code, name, spec, category_id, unit, marker_shape, marker_glyph, created_by, project_id, length_ft, count_group, system, symbol)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb) returning id`,
+      [it.code, it.name, it.spec, cat, it.unit, it.marker_shape, it.marker_glyph, actorId, toProject, it.length_ft, it.count_group ?? null, it.system ?? null, it.symbol ? JSON.stringify(it.symbol) : null]).then((r: { rows: { id: string }[] }) => { if (r.rows[0]) made.add(r.rows[0].id); });
     copied++;
   }
   return { copied, skipped };

@@ -1,4 +1,5 @@
 import { SYSTEMS, SYSTEM_LABEL, systemOf, type SystemKey } from '../../shared/systems.ts';
+import { SymbolMark } from '../app/SymbolMark.tsx';
 import { useMemo, useState } from 'react';
 import type { CategoryRow, ItemTypeRow } from '../../shared/types.ts';
 import { countGroupOf, GROUP_LABEL, GROUPS, type CountGroup } from '../../shared/countGroup.ts';
@@ -44,7 +45,7 @@ export function ItemPicker({ items, categories, onPick, onNew, currentId, autoFo
         {shown.slice(0, 300).map((i) => (
           <button key={i.id} type="button" role="option" aria-selected={i.id === currentId} className={`picker-row${i.id === currentId ? ' on' : ''}`} onClick={() => onPick(i)}>
             <Symbol shape={i.marker_shape} glyph={i.marker_glyph} />
-            <b>{i.code}</b>
+            {i.symbol?.pts?.length ? <SymbolMark s={i.symbol} size={20} /> : null}<b>{i.code}</b>
             <span className="dim picker-name" title={i.name}>{i.name}</span>
             {i.category_id && catName.get(i.category_id) && <span className="picker-cat">{catName.get(i.category_id)}</span>}
           </button>

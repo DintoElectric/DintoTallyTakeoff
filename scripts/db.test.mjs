@@ -328,5 +328,17 @@ console.log('db.test OK');
     const after = (await J.query(`select job_id, system from projects where id = $1`, [pr.id])).rows[0];
     assert.equal(after.job_id, null); assert.equal(after.system, 'lighting');
   }
+  // an item's symbol (read from a legend) is kept, and goes with the item when a library is copied
+  {
+    const { copyLibrary } = await import('../netlify/functions/_lib/library.ts');
+    for (const f of files.filter((x) => x >= '20261104')) await t.d.exec(readFileSync(`${dir}/${f}`, 'utf8'));   // safe to run twice
+    const mk = async (name) => (await t.d.query(`insert into projects (name, created_by) values ($1,'u') returning id`, [name])).rows[0].id;
+    const a = await mk('Legend A'), b = await mk('Legend B');
+    const sym = { w: 12.5, h: 7.9, pts: [[0, 0], [12.5, 3.9]], fill: 0, letters: ['GF'] };
+    await t.d.query(`insert into item_types (code, name, created_by, project_id, symbol) values ('GF','"GF" DENOTED RECEPTACLE','u',$1,$2::jsonb)`, [a, JSON.stringify(sym)]);
+    await copyLibrary(q, a, b, 'u');
+    const got = (await t.d.query(`select symbol from item_types where project_id = $1 and code = 'GF'`, [b])).rows[0].symbol;
+    assert.deepEqual(got, sym);
+  }
   console.log('project libraries OK');
 }

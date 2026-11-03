@@ -11,6 +11,7 @@ import { findMatchlines, zonesFromMatchlines, type Matchline } from './matchline
 import { inZones, type Zone } from '../../shared/zones.ts';
 import { detailZones, findDetailViews } from './detailViews.ts';
 import { findSwitches } from './switches.ts';
+import { findSymbolItems, type SymbolItem } from './symbolShape.ts';
 import { countRegion, DEFAULT_COUNT_REGION, scanTags, type Region, type TagHit } from './tagScan.ts';
 import { attachLabels } from './emergency.ts';
 
@@ -27,7 +28,9 @@ const pageSize = async (page: { getViewport(o: { scale: number }): { width: numb
  */
 export async function scanPage(page: PageForRuns & PageForPrims, OPS: OpsLike, sheetNumber: string | null, handZones: Zone[] | null = null, knownCodes?: Set<string>,
   /** for comparing with earlier behaviour in tests: the old margins, and no details left out */
-  legacy?: { margins?: boolean; details?: boolean }): Promise<PageScan> {
+  legacy?: { margins?: boolean; details?: boolean },
+  /** the library's items that have a symbol (read from a legend): found on the plan by their look, each a count of its item */
+  symbols?: SymbolItem[]): Promise<PageScan> {
   const runs = await extractRuns(page);
   // The linework first: it shows where the title block starts, and so how far across the sheet to count.
   let drawn: Awaited<ReturnType<typeof extractPrims>> | null = null;
@@ -44,6 +47,17 @@ export async function scanPage(page: PageForRuns & PageForPrims, OPS: OpsLike, s
       const covered = (h: TagHit) => letters.some((r) => Math.abs(h.x - r.cx) <= r.w / 2 + 1e-4 && Math.abs(h.y - r.cy) <= r.h / 2 + 1e-4);
       hits = hits.filter((h) => !covered(h));
       for (const s of sw) hits.push({ code: s.code, x: s.x, y: s.y, kind: 'switch', h: s.h });
+    }
+  }
+  // The library's own symbols (a duplex, a double duplex, a special purpose receptacle), found by how they look; the letters
+  // beside each one decide between items drawn with the same symbol (a duplex with "GF" is GF). Counted under the item itself
+  // (the key "SYM:<item>"), so a receptacle "E" and a fixture type "E" stay apart.
+  if (drawn && symbols?.length) {
+    const texts = runs.filter((r) => r.str.trim()).map((r) => ({ s: r.str.trim(), x: r.cx * drawn!.width, y: r.cy * drawn!.height }));
+    for (const s of findSymbolItems(drawn.prims, texts, symbols)) {
+      const x = s.x / drawn.width, y = s.y / drawn.height;
+      if (x < R.x0 || x > R.x1 || y < R.y0 || y > R.y1) continue;
+      hits.push({ code: `SYM:${s.itemId}`, x, y, kind: 'symbol', h: 0.004, conf: Math.min(0.98, s.score) } as TagHit);
     }
   }
   let bubbles: GridBubble[] = [];
