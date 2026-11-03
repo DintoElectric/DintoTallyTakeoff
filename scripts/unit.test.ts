@@ -1563,3 +1563,28 @@ test('counts as: emergency and measured-length items are fixtures; a luminaire s
     assert.deepEqual(sw.map((s) => s.code), ['$', '$', '$VS']);   // the circled VS stays a sensor; the plain VS goes to the nearer switch only
   });
 }
+
+// ---- a legend with no header row and no rules between rows (a "WIRING DEVICES LEGEND"), read by the spacing of its lines ----
+import { readLegendBlock } from '../src/detect/areaSchedule.ts';
+test('headerless legend: title, rows by spacing, codes quoted or on the symbol or made, two codes in one row, notes left out', () => {
+  const W = 3456, H = 2592;
+  const run = (str: string, x0: number, y: number, h = 9.6) => ({ str, cx: (x0 + str.length * h * 0.27) / W, cy: y / H, w: (str.length * h * 0.54) / W, h: h / H, rotated: false });
+  const runs = [
+    run('WIRING DEVICES LEGEND', 1547, 67, 12.7),
+    run('125 VOLT, 2 POLE, 3 WIRE, 20 AMP., DUPLEX RECEPTACLE.', 1522, 100), run('"2" DENOTES CIRCUIT NUMBER.', 1522, 111), run('2', 1460, 112),
+    run('125 VOLT, 2 POLE, 3 WIRE, 20 AMP., DUPLEX RECEPTACLE.', 1522, 138), run('MOUNTED ABOVE COUNTER.', 1522, 149),
+    run('AV', 1451, 177), run('"AV" DENOTES RECEPTACLE FOR AV USE.', 1522, 177),
+    run('GF', 1451, 205), run('"GF" DENOTED RECEPTACLE CONNECTED TO GROUND', 1522, 205), run('FAULT CIRCUIT BREAKER.', 1522, 216),
+    run('CEILING MOUNTED RECEPTACLE "CP" DENOTES TO', 1522, 244), run('CONNECT TO CONDENSATE PUMP. "PJ" DENOTES PROJECTOR', 1522, 255), run('CP', 1452, 244), run('PJ', 1452, 255),
+    run('PS', 1452, 283), run('PROJECTOR SCREEN SWITCH.', 1522, 283),
+    run('NOTES:', 1440, 320), run('ALL RECEPTACLES SHALL BE SIDE WIRED.', 1460, 334),
+    run('A', 1875, 134),                                                                  // a revision mark outside the frame
+  ];
+  const t = readLegendBlock(runs as never, [{ x0: 1420 / W, y0: 45 / H, x1: 1900 / W, y1: 360 / H }], {
+    pageW: W, pageH: H, vlines: [{ x: 1513, y0: 87, y1: 310 }], hlines: [{ y: 87, x0: 1428, x1: 1827 }, { y: 310, x0: 1428, x1: 1827 }],
+    frames: [{ x0: 1428, y0: 51, x1: 1827, y1: 350 }] })!;
+  assert.equal(t.title, 'WIRING DEVICES LEGEND');
+  const rows = t.rows!.map((r) => `${r.cells[0]}: ${r.cells[1].slice(0, 26)}`);
+  assert.deepEqual(rows.map((r) => r.split(':')[0]), ['DR', 'DRMA', 'AV', 'GF', 'CP', 'PJ', 'PS']);   // the notes and the revision mark are not items
+  assert.ok(t.rows![3].cells[1].includes('FAULT CIRCUIT BREAKER'));                                     // a row's second line stays with it
+});

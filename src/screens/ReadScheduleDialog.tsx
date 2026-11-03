@@ -7,7 +7,7 @@ import { pdfjs } from '../viewer/pdf.ts';
 import { extractRuns } from '../detect/pageRuns.ts';
 import { extractPrims } from '../detect/primitives.ts';
 import { lengthFeetFromText } from '../detect/lengthText.ts';
-import { areaRows, headerLabel, readAreaTable, rowToItem, scheduleCategory, sectionName, suggestColumns, type AreaTable, type Box, type ColumnChoice } from '../detect/areaSchedule.ts';
+import { areaRows, headerLabel, readAreaTable, readLegendBlock, rowToItem, scheduleCategory, sectionName, suggestColumns, type AreaTable, type Box, type ColumnChoice } from '../detect/areaSchedule.ts';
 import { Check, Dialog, plural, useToast } from '../app/ui.tsx';
 
 // What was picked last time (by header name), so the next sheet of the same schedule is set up already.
@@ -44,7 +44,14 @@ export default function ReadScheduleDialog({ page, projectId, boxes, zones, item
       const vp = page.getViewport({ scale: 1 });
       const vlines = prims.filter((p) => p.n === 2 && p.x1 - p.x0 < 0.6 && p.y1 - p.y0 > 4).map((p) => ({ x: (p.x0 + p.x1) / 2, y0: p.y0, y1: p.y1 }));
       const hlines = prims.filter((p) => p.n === 2 && p.y1 - p.y0 < 0.6 && p.x1 - p.x0 > 20).map((p) => ({ y: (p.y0 + p.y1) / 2, x0: p.x0, x1: p.x1 }));
-      const t = readAreaTable(runs, boxes, { pageW: vp.width, pageH: vp.height, skip: (x, y) => inZones(x, y, zones), vlines, hlines });
+      // a table with a header row; else a legend with none (a title, symbols, descriptions, notes at the foot), trimmed to
+      // the frame drawn around it
+      const frames = prims.filter((p) => (p.n ?? 0) >= 4 && p.x1 - p.x0 > 100 && p.y1 - p.y0 > 100).map((p) => ({ x0: p.x0, y0: p.y0, x1: p.x1, y1: p.y1 }));
+      // (something can pass for a header in a legend that has none, and give a row or two: then the reading with more wins)
+      const itemsIn = (x: ReturnType<typeof readAreaTable>) => { if (!x) return 0; const ch = suggestColumns(x.columns); return areaRows(x, ch.type).map((r) => rowToItem(r, ch, x.columns)).filter(Boolean).length; };
+      const headed = readAreaTable(runs, boxes, { pageW: vp.width, pageH: vp.height, skip: (x, y) => inZones(x, y, zones), vlines, hlines });
+      const headerless = !headed || itemsIn(headed) < 2 ? readLegendBlock(runs, boxes, { pageW: vp.width, pageH: vp.height, skip: (x, y) => inZones(x, y, zones), vlines, hlines, frames }) : null;
+      const t = headerless && itemsIn(headerless) > itemsIn(headed) ? headerless : headed ?? headerless;
       if (gone) return;
       setTable(t);
       if (t) {

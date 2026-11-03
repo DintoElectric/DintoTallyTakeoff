@@ -14,7 +14,7 @@ interface Word { s: string; x0: number; x1: number; y: number; h: number }  // p
 export interface AreaColumn { header: string; x0: number; x1: number; sample: string }
 /** A row band between two of the table's horizontal lines; merged: no column line runs through it (a section heading). */
 export interface Band { y0: number; y1: number; merged: boolean }
-export interface AreaTable { columns: AreaColumn[]; lines: Word[][]; bands: Band[]; title?: string | null }   // title: the schedule's own, above its header
+export interface AreaTable { columns: AreaColumn[]; lines: Word[][]; bands: Band[]; title?: string | null; rows?: AreaRow[] }   // title: the schedule's own, above its header; rows: already read (a legend with no header)
 export interface AreaRow { cells: string[]; section: string | null }
 
 // The words schedule headers are made of (fixtures, receptacles and devices, equipment, panels). Only used to tell the
@@ -222,6 +222,7 @@ function colOf(t: AreaTable, w: Word): number {
  * other text in the key column ("NON-TWIST LOCK TYPE W/ GROUND") is a section heading: the rows after it carry it.
  */
 export function areaRows(t: AreaTable, keyCol: number | null): AreaRow[] {
+  if (t.rows) return t.rows;
   if (keyCol === null) return bandRows(t);
   const rows: { words: Word[][]; section: string | null }[] = [];
   let section: string | null = null, inSection = false;
@@ -328,4 +329,82 @@ export function scheduleCategory(title: string | null | undefined): string | nul
   if (!t) return null;
   const s = t.toLowerCase();
   return (s.charAt(0).toUpperCase() + s.slice(1)).slice(0, 60);
+}
+
+/**
+ * A legend with no header row and no rules between its rows (a "WIRING DEVICES LEGEND": a title, a symbol column, a
+ * description column, notes at the foot). The rows come from the spacing of the description lines (lines within a row are
+ * close; rows are further apart); the symbol column's letters go with the row they sit level with; reading stops at the
+ * notes. Each row's code: a quoted code its description defines ('"AV" DENOTES ...'; two of them, two items), else the
+ * letters on its symbol, else one made from its description ("DUPLEX RECEPTACLE" -> "DR"), kept unique in the legend.
+ * Returned in the shape of a read table (a Symbol and a Description column, the rows already read). Null if it is not one.
+ */
+export function readLegendBlock(runs: PageRun[], boxIn: Box | Box[], opts: { pageW: number; pageH: number; skip?: (x: number, y: number) => boolean; vlines?: VLine[]; hlines?: HLine[]; frames?: { x0: number; y0: number; x1: number; y1: number }[] }): AreaTable | null {
+  const { pageW: W, pageH: H } = opts;
+  const bs = (Array.isArray(boxIn) ? boxIn : [boxIn]).map((b) => ({ x0: Math.min(b.x0, b.x1) * W, x1: Math.max(b.x0, b.x1) * W, y0: Math.min(b.y0, b.y1) * H, y1: Math.max(b.y0, b.y1) * H }));
+  if (!bs.length) return null;
+  let box = { x0: Math.min(...bs.map((b) => b.x0)), x1: Math.max(...bs.map((b) => b.x1)), y0: Math.min(...bs.map((b) => b.y0)), y1: Math.max(...bs.map((b) => b.y1)) };
+  // the legend's own frame, when the box was drawn around it loosely (a revision mark beside it is not part of it)
+  const frame = (opts.frames ?? []).filter((f) => f.x1 - f.x0 > 100 && f.y1 - f.y0 > 100 && f.x0 >= box.x0 - 40 && f.x1 <= box.x1 + 40 && f.y0 >= box.y0 - 40 && f.y1 <= box.y1 + 40)
+    .sort((a, b) => (b.x1 - b.x0) * (b.y1 - b.y0) - (a.x1 - a.x0) * (a.y1 - a.y0))[0];
+  if (frame) box = { x0: Math.max(box.x0, frame.x0), x1: Math.min(box.x1, frame.x1), y0: Math.max(box.y0, frame.y0), y1: Math.min(box.y1, frame.y1) };
+  const words: Word[] = runs
+    .filter((r) => !r.rotated && r.str.trim() && !opts.skip?.(r.cx, r.cy))
+    .map((r) => ({ s: r.str.replace(/\s+/g, ' ').trim(), x0: (r.cx - r.w / 2) * W, x1: (r.cx + r.w / 2) * W, y: r.cy * H, h: Math.max(1, r.h * H) }))
+    .filter((w) => (w.x0 + w.x1) / 2 >= box.x0 && (w.x0 + w.x1) / 2 <= box.x1 && w.y >= box.y0 && w.y <= box.y1);
+  if (words.length < 4) return null;
+  const width = box.x1 - box.x0;
+  const rules = (opts.hlines ?? []).filter((l) => l.y > box.y0 && l.y < box.y1 && Math.min(l.x1, box.x1) - Math.max(l.x0, box.x0) > 0.8 * width).map((l) => l.y).sort((a, b) => a - b);
+  const all = lines(words);
+  // the title: the lines above the first rule near the top (or the first line, when it names a legend or schedule)
+  const top = rules.find((y) => y < box.y0 + 0.15 * (box.y1 - box.y0));
+  let body = all, title: string | null = null;
+  if (top !== undefined) { title = all.filter((l) => l[0].y < top).map((l) => l.map((w) => w.s).join(' ')).join(' ').trim() || null; body = all.filter((l) => l[0].y > top); }
+  else if (/LEGEND|SCHEDULE/i.test(all[0].map((w) => w.s).join(' '))) { title = all[0].map((w) => w.s).join(' '); body = all.slice(1); }
+  // the end: the notes (a line starting NOTES, or a rule across with notes below it)
+  const notesAt = body.findIndex((l) => /^NOTES?\b/i.test(l[0].s));
+  const endY = Math.min(notesAt >= 0 ? body[notesAt][0].y - 1 : Infinity, ...rules.filter((y) => top === undefined || y > top + 5).filter((y) => body.some((l) => l[0].y > y && /^NOTES?\b/i.test(l[0].s))));
+  body = body.filter((l) => l[0].y < endY);
+  const bw = body.flat();
+  if (bw.length < 4) return null;
+  // the columns: a vertical rule down the body, else the widest gap in the text across the box
+  const by0 = Math.min(...bw.map((w) => w.y)), by1 = Math.max(...bw.map((w) => w.y));
+  const divider = (opts.vlines ?? []).filter((l) => l.x > box.x0 + 8 && l.x < box.x1 - 8 && Math.min(l.y1, by1) - Math.max(l.y0, by0) > 0.5 * (by1 - by0)).map((l) => l.x).sort((a, b) => a - b)[0]
+    ?? (() => { const xs = bw.map((w) => w.x0).sort((a, b) => a - b); let best = box.x0 + 0.25 * width, g = 0; for (let i = 1; i < xs.length; i++) if (xs[i] - xs[i - 1] > g && xs[i] < box.x0 + 0.5 * width) { g = xs[i] - xs[i - 1]; best = (xs[i] + xs[i - 1]) / 2; } return best; })();
+  const desc = bw.filter((w) => w.x0 >= divider - 2).sort((a, b) => a.y - b.y || a.x0 - b.x0);
+  const sym = bw.filter((w) => w.x0 < divider - 2);
+  if (desc.length < 2) return null;
+  // the rows: description lines close together are one row; a wider gap starts the next
+  const dl = lines(desc);
+  const steps = dl.slice(1).map((l, i) => l[0].y - dl[i][0].y).sort((a, b) => a - b);
+  const step = steps[Math.floor(steps.length * 0.25)] || 11;
+  const groups: Word[][][] = [];
+  for (const l of dl) { const g = groups[groups.length - 1]; if (g && l[0].y - g[g.length - 1][0].y <= step * 1.5) g.push(l); else groups.push([l]); }
+  const rowsTxt = groups.map((g) => ({ y0: g[0][0].y, y1: g[g.length - 1][0].y, text: g.map((l) => l.map((w) => w.s).join(' ')).join(' ').replace(/\s+/g, ' ').trim(), sym: [] as string[] }));
+  for (const w of sym) {
+    let best = -1, d = Infinity;
+    rowsTxt.forEach((r, i) => { const dd = w.y < r.y0 ? r.y0 - w.y : w.y > r.y1 ? w.y - r.y1 : 0; if (dd < d) { d = dd; best = i; } });
+    if (best >= 0 && d <= step * 1.6) rowsTxt[best].sym.push(...tokens(w.s));
+  }
+  // the codes: quoted ones the description defines, else the symbol's letters, else made from the description; unique
+  const used = new Map<string, number>();
+  const unique = (c: string) => { const k = c.toUpperCase(); const n = (used.get(k) ?? 0) + 1; used.set(k, n); return n === 1 ? k : `${k}${n}`; };
+  const made = (t: string) => {
+    const core = t.toUpperCase().replace(/"[^"]*"\s+DENOTE[SD]?[^.]*\.?/g, ' ').replace(/\(.*?\)/g, ' ')
+      .replace(/\b\d+(\.\d+)?\s*(VOLTS?|V|POLES?|P|WIRES?|W|AMPS?|A|PHASE|PH)\b\.?/g, ' ').replace(/\bNEMA\s+\S+/g, ' ');
+    const ws = core.split(/[^A-Z0-9]+/).filter((w) => w.length > 2 && !/^(THE|AND|WITH|FOR|OR|OF|TO|IN|ON|REFER|SEE|EACH|ALL|SHALL|BE|ARE|TYPE)$/.test(w));
+    return ws.slice(0, 4).map((w) => w[0]).join('') || 'WD';
+  };
+  const out: AreaRow[] = [];
+  for (const r of rowsTxt) {
+    const quoted = [...r.text.matchAll(/"([A-Z0-9+#\-]{1,6})"\s+DENOTE/g)].map((m) => m[1]).filter((c) => !/^\d+$/.test(c));
+    const letters = r.sym.filter((t) => /^[A-Z+][A-Z0-9+#\-]{0,5}$/.test(t) && !/^\d+$/.test(t));
+    const codes = quoted.length ? quoted : letters.length ? [letters.join('/')] : [made(r.text)];
+    for (const c of [...new Set(codes)]) out.push({ cells: [unique(c), r.text], section: null });
+  }
+  const cols: AreaColumn[] = [
+    { header: 'TAG', x0: box.x0, x1: divider, sample: out[0]?.cells[0] ?? '' },   // (the code as read: taken as it is)
+    { header: 'DESCRIPTION', x0: divider, x1: box.x1, sample: out[0]?.cells[1] ?? '' },
+  ];
+  return { columns: cols, lines: body, bands: [], title, rows: out };
 }
