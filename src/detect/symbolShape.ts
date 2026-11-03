@@ -5,7 +5,7 @@
 import type { Prim } from './primitives.ts';
 
 export interface Shape { w: number; h: number; pts: [number, number][]; fill: number }   // points: within the box, in points; fill: the share of its box it covers
-export interface ShapeMatch { x: number; y: number; score: number; turn: number; w?: number; h?: number }   // centre and size, points; turn: quarter turns
+export interface ShapeMatch { x: number; y: number; score: number; turn: number; w?: number; h?: number; ranked?: { key: string; score: number }[] }   // centre and size, points; turn: quarter turns; ranked: every shape it passes for, best first
 
 const DARK = 0.35;     // linework that carries a symbol (gray hatching and ceiling grid do not)
 const PIECE_MAX = 22;  // points: a symbol's pieces are short; walls and grid lines are not part of one
@@ -46,7 +46,9 @@ function clusters(prims: Prim[]): { prims: Prim[]; x0: number; y0: number; x1: n
     while (stack.length) {
       const j = stack.pop()!; const p = ps[j]; c.prims.push(p);
       c.x0 = Math.min(c.x0, p.x0); c.y0 = Math.min(c.y0, p.y0); c.x1 = Math.max(c.x1, p.x1); c.y1 = Math.max(c.y1, p.y1);
-      if (c.x1 - c.x0 > 3 * PIECE_MAX || c.y1 - c.y0 > 3 * PIECE_MAX) continue;   // (a long chain of pieces is drawing, not a symbol)
+      // (grown to its full size, so a row of receptacles along a wall is not cut through one of them; a chain bigger than
+      // a room is drawing, not symbols, and stops)
+      if (c.prims.length > 6000 || c.x1 - c.x0 > 400 || c.y1 - c.y0 > 400) continue;
       for (let gx = Math.floor((p.x0 - JOIN) / C); gx <= Math.floor((p.x1 + JOIN) / C); gx++) for (let gy = Math.floor((p.y0 - JOIN) / C); gy <= Math.floor((p.y1 + JOIN) / C); gy++)
         for (const k of grid.get(`${gx}:${gy}`) ?? []) {
           if (seen[k] >= 0) continue;
@@ -166,10 +168,10 @@ export function findBestShapes(prims: Prim[], shapes: { key: string; shape: Shap
   const out: (ShapeMatch & { key: string; second: number })[] = [];
   const sizeMax = Math.max(...shapes.map((sh) => Math.hypot(sh.shape.w, sh.shape.h))) * (1 + slack);
   const unmatched: ReturnType<typeof clusters> = [];
-  const scales: number[] = [];   // how big this sheet draws the symbols, against the legend
+  const scales = new Map<string, number[]>();   // how big this sheet draws each symbol, against the legend
   for (const c of clusters(prims)) {
     // (a symbol turned at an angle, along an angled wall, is straightened by its own lines first)
-    if (Math.hypot(c.x1 - c.x0, c.y1 - c.y0) > sizeMax * 1.05) { if (Math.hypot(c.x1 - c.x0, c.y1 - c.y0) < sizeMax * 3.2) unmatched.push(c); continue; }
+    if (Math.hypot(c.x1 - c.x0, c.y1 - c.y0) > sizeMax * 1.05) { if (c.prims.length <= 6000) unmatched.push(c); continue; }   // (too big to be one symbol: looked inside)
     const tilt = tiltOf(c);
     const straight = shapeTurned(c, tilt);
     const w = straight.w, h = straight.h;
@@ -178,15 +180,26 @@ export function findBestShapes(prims: Prim[], shapes: { key: string; shape: Shap
     const cand = ready(straight);
     const scores = vars.map((x) => { let best = 0, turn = 0; for (const v of x.v) { if (!fits(v.r)) continue; const sc = alikeR(v.r, cand); if (sc > best) { best = sc; turn = v.turn; } } return { key: x.key, best, turn }; }).sort((a, b) => b.best - a.best);
     if (scores[0].best >= min) {
-      out.push({ x: (c.x0 + c.x1) / 2, y: (c.y0 + c.y1) / 2, w, h, score: scores[0].best, turn: scores[0].turn, key: scores[0].key, second: scores[1]?.best ?? 0 });
+      out.push({ x: (c.x0 + c.x1) / 2, y: (c.y0 + c.y1) / 2, w, h, score: scores[0].best, turn: scores[0].turn, key: scores[0].key, second: scores[1]?.best ?? 0, ranked: scores.filter((q) => q.best >= min).map((q) => ({ key: q.key, score: q.best })) });
       const sh = shapes.find((q) => q.key === scores[0].key)!.shape;
-      scales.push(Math.hypot(w, h) / Math.max(0.5, Math.hypot(sh.w, sh.h)));
+      (scales.get(scores[0].key) ?? scales.set(scores[0].key, []).get(scores[0].key)!).push(Math.hypot(w, h) / Math.max(0.5, Math.hypot(sh.w, sh.h)));
     } else unmatched.push(c);
   }
   // Symbols touching one another, or touching other linework, read as one shape that matches nothing: look inside it.
   if (opts.inside !== false && unmatched.length) {
-    const scale = scales.length ? scales.sort((a, b) => a - b)[Math.floor(scales.length / 2)] : 0.95;
-    for (const c of unmatched) out.push(...findInside(c, shapes, scale));
+    // the sheet's middle size (and, inside a shape, the size the line a symbol is lined up on says)
+    const mid = (v: number[]) => [...v].sort((a, b) => a - b)[Math.floor(v.length / 2)];
+    const every = [...scales.values()].flat();
+    const overall = every.length ? mid(every) : 0.95;
+    const scale = new Map(shapes.map((sh) => [sh.key, overall]));
+    // (a long line stuck to a symbol can pull the shape's direction off: square to the sheet is tried too, and whichever finds
+    // more is kept)
+    for (const c of unmatched) {
+      const tilt = tiltOf(c);
+      const a = findInside(c, shapes, scale, tilt);
+      const b = Math.abs(tilt) > 0.05 ? findInside(c, shapes, scale, 0) : [];
+      out.push(...(b.length > a.length ? b : a));
+    }
   }
   return out;
 }
@@ -197,10 +210,10 @@ export function findBestShapes(prims: Prim[], shapes: { key: string; shape: Shap
  * close to the shape's) and it is most of what is there (seven tenths of the shape's points in that spot are its own).
  * What is found is set aside and the search goes on, for a second symbol stuck to the first.
  */
-function findInside(c: ReturnType<typeof clusters>[number], shapes: { key: string; shape: Shape }[], scale: number): (ShapeMatch & { key: string; second: number })[] {
+function findInside(c: ReturnType<typeof clusters>[number], shapes: { key: string; shape: Shape }[], scales: Map<string, number>, tilt: number): (ShapeMatch & { key: string; second: number })[] {
   // the shape's straight pieces, straightened with it: only where a legend symbol's longest line lines up with one of these
   // can the symbol be (a few places to try, not every place)
-  const tilt = tiltOf(c), mx = (c.x0 + c.x1) / 2, my = (c.y0 + c.y1) / 2, co = Math.cos(-tilt), si = Math.sin(-tilt);
+  const mx = (c.x0 + c.x1) / 2, my = (c.y0 + c.y1) / 2, co = Math.cos(-tilt), si = Math.sin(-tilt);
   const turn1 = ([x, y]: [number, number]) => [mx + (x - mx) * co - (y - my) * si, my + (x - mx) * si + (y - my) * co] as [number, number];
   const lines: Run[] = [];
   for (const p of c.prims) {
@@ -223,7 +236,7 @@ function findInside(c: ReturnType<typeof clusters>[number], shapes: { key: strin
   // each legend symbol, in its eight positions, at this sheet's size, with its longest straight line
   const variants: { key: string; t: [number, number][]; few: [number, number][]; w: number; h: number; turn: number; run: Run }[] = [];
   for (const sh of shapes) {
-    const seen = new Set<string>();
+    const seen = new Set<string>(), scale = scales.get(sh.key) ?? 0.95;
     for (let turn = 0; turn < 4; turn++) for (const mirror of [false, true]) {
       const v = turned(sh.shape, turn, mirror);
       const t = v.pts.map(([x, y]) => [x * scale, y * scale] as [number, number]);
@@ -240,28 +253,37 @@ function findInside(c: ReturnType<typeof clusters>[number], shapes: { key: strin
     for (const v of variants) {
       for (const l of lines) {
         if (l.dir !== v.run.dir || Math.abs(l.len - v.run.len) > 0.25 * v.run.len) continue;
+        // at the sheet's size, and at the size this line says (a double duplex is not always drawn at the duplex's ratio
+        // to the legend): the line the symbol is lined up on is the symbol's own
+        const k = l.len / v.run.len;
+        for (const f of Math.abs(k - 1) > 0.02 && Math.abs(k - 1) <= 0.15 ? [1, k] : [1]) {
+        const vt = f === 1 ? v.t : v.t.map(([x, y]) => [x * f, y * f] as [number, number]);
+        const vfew = f === 1 ? v.few : v.few.map(([x, y]) => [x * f, y * f] as [number, number]);
+        const vw = v.w * f, vh = v.h * f, rx = v.run.x * f, ry = v.run.y * f, rl = v.run.len * f;
         // line the symbol's longest line up with this one (by either end), then settle it within half a point
-        for (const [sx, sy] of v.run.dir === 'h' ? [[l.x - v.run.x, l.y - v.run.y], [l.x + l.len - (v.run.x + v.run.len), l.y - v.run.y]] : [[l.x - v.run.x, l.y - v.run.y], [l.x - v.run.x, l.y + l.len - (v.run.y + v.run.len)]]) {
+        for (const [sx, sy] of v.run.dir === 'h' ? [[l.x - rx, l.y - ry], [l.x + l.len - (rx + rl), l.y - ry]] : [[l.x - rx, l.y - ry], [l.x - rx, l.y + l.len - (ry + rl)]]) {
           // (a sample of its points first, at a few spots; all of them only where the sample fits)
           let qb = { cov: 0, ox: sx, oy: sy };
           for (let dx = -0.5; dx <= 0.5; dx += 0.5) for (let dy = -0.5; dy <= 0.5; dy += 0.5) {
-            let n = 0; for (const [x, y] of v.few) if (hit(g, x + sx + dx, y + sy + dy)) n++;
-            const cov = n / v.few.length; if (cov > qb.cov) qb = { cov, ox: sx + dx, oy: sy + dy };
+            let n = 0; for (const [x, y] of vfew) if (hit(g, x + sx + dx, y + sy + dy)) n++;
+            const cov = n / vfew.length; if (cov > qb.cov) qb = { cov, ox: sx + dx, oy: sy + dy };
           }
           if (qb.cov < 0.8) continue;
           let fb = { cov: 0, ox: qb.ox, oy: qb.oy };
           for (let dx = -0.25; dx <= 0.25; dx += 0.125) for (let dy = -0.25; dy <= 0.25; dy += 0.125) {
-            let n = 0; for (const [x, y] of v.t) if (hit(g, x + qb.ox + dx, y + qb.oy + dy)) n++;
-            const cov = n / v.t.length; if (cov > fb.cov) fb = { cov, ox: qb.ox + dx, oy: qb.oy + dy };
+            let n = 0; for (const [x, y] of vt) if (hit(g, x + qb.ox + dx, y + qb.oy + dy)) n++;
+            const cov = n / vt.length; if (cov > fb.cov) fb = { cov, ox: qb.ox + dx, oy: qb.oy + dy };
           }
           if (fb.cov < 0.9) continue;
           // and it is most of what is there in that spot (a busy patch of casework is not a receptacle)
-          const own = index(v.t.map(([x, y]) => [x + fb.ox, y + fb.oy] as [number, number]));
-          const inWin = pts.filter(([x, y]) => x >= fb.ox - 0.3 && x <= fb.ox + v.w + 0.3 && y >= fb.oy - 0.3 && y <= fb.oy + v.h + 0.3);
+          const own = index(vt.map(([x, y]) => [x + fb.ox, y + fb.oy] as [number, number]));
+          const inWin = pts.filter(([x, y]) => x >= fb.ox - 0.3 && x <= fb.ox + vw + 0.3 && y >= fb.oy - 0.3 && y <= fb.oy + vh + 0.3);
           const pur = inWin.length ? inWin.filter(([x, y]) => hit(own, x, y)).length / inWin.length : 0;
-          if (pur < 0.7) continue;
+          // (receptacles drawn overlapping share a spot: one that is there almost whole may share it with its neighbour)
+          if (pur < (fb.cov >= 0.95 ? 0.45 : 0.7)) continue;
           const score = Math.min(fb.cov, 0.5 + pur / 2);
-          if (!best || score > best.score) best = { key: v.key, score, ox: fb.ox, oy: fb.oy, v };
+          if (!best || score > best.score) best = { key: v.key, score, ox: fb.ox, oy: fb.oy, v: { ...v, t: vt, w: vw, h: vh } };
+        }
         }
       }
     }
@@ -305,7 +327,7 @@ export interface SymbolHit { itemId: string; code: string; x: number; y: number;
  * "GF", "WP" beside the same duplex) are one symbol here: each match goes to the symbol it looks most like, then the letters
  * beside it decide the item (each letter to its nearest symbol only), and a bare symbol is the item with no letters.
  */
-export function findSymbolItems(prims: Prim[], texts: { s: string; x: number; y: number }[], items: SymbolItem[], opts: { minScore?: number } = {}): SymbolHit[] {
+export function findSymbolItems(prims: Prim[], texts: { s: string; x: number; y: number; w?: number; h?: number }[], items: SymbolItem[], opts: { minScore?: number } = {}): SymbolHit[] {
   const groups: { rep: SymbolItem; members: SymbolItem[] }[] = [];
   for (const it of [...items].sort((a, b) => (a.symbol.letters?.length ?? 0) - (b.symbol.letters?.length ?? 0))) {
     // (the same symbol drawn again scores 1.00; a double duplex and one above counter, close as they are, about 0.95)
@@ -328,17 +350,24 @@ export function findSymbolItems(prims: Prim[], texts: { s: string; x: number; y:
   for (const [ti, mi] of owner) (lettersOf.get(mi) ?? lettersOf.set(mi, []).get(mi)!).push(texts[ti].s.trim().toUpperCase());
   const out: SymbolHit[] = [];
   matches.forEach((m, mi) => {
-    const g = groups[Number(m.key)], have = lettersOf.get(mi) ?? [];
+    const have = lettersOf.get(mi) ?? [];
+    // the best-looking symbol that can take it: one whose item's letters are beside it, or a plain one (a double duplex that
+    // looks as much like a symbol drawn only with "G" is still a double duplex when no "G" is there)
+    for (const r of m.ranked ?? [{ key: m.key, score: m.score }]) {
+      const g = groups[Number(r.key)];
+      if (!g) continue;
     const hasAll = (it: SymbolItem) => (it.symbol.letters ?? []).length > 0 && (it.symbol.letters ?? []).every((l) => have.includes(l.toUpperCase()));
     // this symbol's own lettered row (USB beside a double duplex: its own row), else a modifier written beside any symbol
     // (G, GF, WP, E: the legend shows them on the duplex, the plans put them beside others too), else the plain one
     const lettered = g.members.find(hasAll) ?? modifiers.find(hasAll);
     // (letters inside the symbol say what it is: a square with "J" in it is a junction box, not a plain square's item;
     // a number inside, as in a special purpose receptacle's, is only a reference)
-    const inside = texts.filter((t) => { const v = t.s.trim(); return v && !/^\d+$/.test(v) && v.length <= 4 && Math.abs(t.x - m.x) <= (m.w ?? 0) / 2 && Math.abs(t.y - m.y) <= (m.h ?? 0) / 2; });
+    // (text that fits inside it: a room number the symbol is drawn over is bigger than the symbol, and is not its letters)
+    const inside = texts.filter((t) => { const v = t.s.trim(); return v && !/^\d+$/.test(v) && v.length <= 4 && Math.abs(t.x - m.x) <= (m.w ?? 0) / 2 && Math.abs(t.y - m.y) <= (m.h ?? 0) / 2 && (t.w ?? 0) <= (m.w ?? 0) * 1.1 + 0.5 && (t.h ?? 0) <= (m.h ?? 0) * 1.1 + 0.5; });
     const plain = inside.length ? undefined : g.members.find((it) => !(it.symbol.letters ?? []).length);
-    const it = lettered ?? plain;
-    if (it) out.push({ itemId: it.id, code: it.code, x: m.x, y: m.y, score: m.score });
+      const it = lettered ?? plain;
+      if (it) { out.push({ itemId: it.id, code: it.code, x: m.x, y: m.y, score: r.score }); break; }
+    }
   });
   return out;
 }

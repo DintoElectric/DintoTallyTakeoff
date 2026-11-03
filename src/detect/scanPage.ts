@@ -53,7 +53,7 @@ export async function scanPage(page: PageForRuns & PageForPrims, OPS: OpsLike, s
   // beside each one decide between items drawn with the same symbol (a duplex with "GF" is GF). Counted under the item itself
   // (the key "SYM:<item>"), so a receptacle "E" and a fixture type "E" stay apart.
   if (drawn && symbols?.length) {
-    const texts = runs.filter((r) => r.str.trim()).map((r) => ({ s: r.str.trim(), x: r.cx * drawn!.width, y: r.cy * drawn!.height }));
+    const texts = runs.filter((r) => r.str.trim()).map((r) => ({ s: r.str.trim(), x: r.cx * drawn!.width, y: r.cy * drawn!.height, w: (r.rotated ? r.h : r.w) * drawn!.width, h: (r.rotated ? r.w : r.h) * drawn!.height }));
     for (const s of findSymbolItems(drawn.prims, texts, symbols)) {
       const x = s.x / drawn.width, y = s.y / drawn.height;
       if (x < R.x0 || x > R.x1 || y < R.y0 || y > R.y1) continue;
