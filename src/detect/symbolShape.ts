@@ -81,6 +81,39 @@ function shapeOf(c: { prims: Prim[]; x0: number; y0: number; x1: number; y1: num
   return { w: Math.round((c.x1 - c.x0) * 100) / 100, h: Math.round((c.y1 - c.y0) * 100) / 100, pts, fill };
 }
 
+/**
+ * The angle a symbol is turned by, within a quarter turn (-45 to 45 degrees): the direction its straight pieces agree on,
+ * weighted by length. A duplex's two lines set it; the many short pieces of its circle point every way and cancel out.
+ * Square to the sheet, it is 0.
+ */
+function tiltOf(c: { prims: Prim[] }): number {
+  let sx = 0, sy = 0;
+  for (const p of c.prims) {
+    const q = ptsOf(p as P);
+    for (let i = 0; i + 1 < q.length; i++) {
+      const dx = q[i + 1][0] - q[i][0], dy = q[i + 1][1] - q[i][1], len = Math.hypot(dx, dy);
+      if (len < 2) continue;
+      const a = 4 * Math.atan2(dy, dx);   // (four times the angle: directions a quarter turn apart agree)
+      sx += len * len * Math.cos(a); sy += len * len * Math.sin(a);
+    }
+  }
+  return Math.hypot(sx, sy) < 1e-6 ? 0 : Math.atan2(sy, sx) / 4;
+}
+/** A group of pieces as a shape, straightened by an angle (radians) about its middle first. */
+function shapeTurned(c: { prims: Prim[]; x0: number; y0: number; x1: number; y1: number }, angle: number): Shape {
+  if (Math.abs(angle) < 0.05) return shapeOf(c);   // (within 3 degrees: as it is)
+  const raw: [number, number][] = [];
+  for (const p of c.prims) sample(p as P, raw);
+  const mx = (c.x0 + c.x1) / 2, my = (c.y0 + c.y1) / 2, co = Math.cos(-angle), si = Math.sin(-angle);
+  const rot = raw.map(([x, y]) => [mx + (x - mx) * co - (y - my) * si, my + (x - mx) * si + (y - my) * co] as [number, number]);
+  const x0 = Math.min(...rot.map((p) => p[0])), y0 = Math.min(...rot.map((p) => p[1])), x1 = Math.max(...rot.map((p) => p[0])), y1 = Math.max(...rot.map((p) => p[1]));
+  const seen = new Set<string>(); const pts: [number, number][] = [];
+  for (const [x, y] of rot) { const k = `${Math.round((x - x0) / STEP)}:${Math.round((y - y0) / STEP)}`; if (!seen.has(k)) { seen.add(k); pts.push([Math.round((x - x0) * 100) / 100, Math.round((y - y0) * 100) / 100]); } }
+  const Cc = 0.7, cells = new Set(pts.map(([x, y]) => `${Math.floor(x / Cc)}:${Math.floor(y / Cc)}`));
+  const fill = Math.round((cells.size / ((Math.floor((x1 - x0) / Cc) + 1) * (Math.floor((y1 - y0) / Cc) + 1))) * 1000) / 1000;
+  return { w: Math.round((x1 - x0) * 100) / 100, h: Math.round((y1 - y0) * 100) / 100, pts, fill };
+}
+
 /** The shape turned by quarter turns (0-3), mirrored or not, in its new box. */
 function turned(s: Shape, turn: number, mirror: boolean): Shape {
   let pts = s.pts.map(([x, y]) => [mirror ? s.w - x : x, y] as [number, number]);
@@ -128,14 +161,19 @@ export function findShapes(prims: Prim[], shape: Shape, opts: { minScore?: numbe
  * not also counted as a double duplex), at any quarter turn, mirrored, within about a fifth of its size.
  */
 export function findBestShapes(prims: Prim[], shapes: { key: string; shape: Shape }[], opts: { minScore?: number } = {}): (ShapeMatch & { key: string; second: number })[] {
-  const min = opts.minScore ?? 0.8, slack = 0.22;
+  const min = opts.minScore ?? 0.76, slack = 0.22;
   const vars = shapes.map((sh) => { const v: { r: Ready; turn: number }[] = []; for (let t = 0; t < 4; t++) for (const m of [false, true]) v.push({ r: ready(turned(sh.shape, t, m)), turn: t }); return { key: sh.key, v }; });
   const out: (ShapeMatch & { key: string; second: number })[] = [];
+  const sizeMax = Math.max(...shapes.map((sh) => Math.hypot(sh.shape.w, sh.shape.h))) * (1 + slack);
   for (const c of clusters(prims)) {
-    const w = c.x1 - c.x0, h = c.y1 - c.y0;
+    // (a symbol turned at an angle, along an angled wall, is straightened by its own lines first)
+    if (Math.hypot(c.x1 - c.x0, c.y1 - c.y0) > sizeMax * 1.05) continue;
+    const tilt = tiltOf(c);
+    const straight = shapeTurned(c, tilt);
+    const w = straight.w, h = straight.h;
     const fits = (r: Ready) => Math.abs(w - r.w) <= slack * Math.max(r.w, 2) && Math.abs(h - r.h) <= slack * Math.max(r.h, 2);
     if (!vars.some((x) => x.v.some((v) => fits(v.r)))) continue;
-    const cand = ready(shapeOf(c));
+    const cand = ready(straight);
     const scores = vars.map((x) => { let best = 0, turn = 0; for (const v of x.v) { if (!fits(v.r)) continue; const sc = alikeR(v.r, cand); if (sc > best) { best = sc; turn = v.turn; } } return { key: x.key, best, turn }; }).sort((a, b) => b.best - a.best);
     if (scores[0].best >= min) out.push({ x: (c.x0 + c.x1) / 2, y: (c.y0 + c.y1) / 2, w, h, score: scores[0].best, turn: scores[0].turn, key: scores[0].key, second: scores[1]?.best ?? 0 });
   }

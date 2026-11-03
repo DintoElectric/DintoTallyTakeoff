@@ -1630,3 +1630,17 @@ import { findBestShapes, findSymbolItems, shapeIn, shapesAlike } from '../src/de
     assert.deepEqual(hits.map((h) => `${Math.round(h.x / 10) * 10}:${h.code}`).sort(), ['500:G', '560:DR', '800:SPRF']);   // the square with J in it is something else
   });
 }
+test('symbols by look: a duplex turned at an angle (along an angled wall) is straightened by its own lines and matched', () => {
+  const seg = (x0: number, y0: number, x1: number, y1: number) => ({ x0: Math.min(x0, x1), y0: Math.min(y0, y1), x1: Math.max(x0, x1), y1: Math.max(y0, y1), n: 2, fill: false, lum: 0, pts: [x0, y0, x1, y1] });
+  // a duplex (a circle of ten pieces, two lines through it), turned by an angle about its centre
+  const duplexAt = (cx: number, cy: number, r: number, deg: number) => {
+    const a = (deg * Math.PI) / 180, rot = (x: number, y: number): [number, number] => [cx + x * Math.cos(a) - y * Math.sin(a), cy + x * Math.sin(a) + y * Math.cos(a)];
+    const out = Array.from({ length: 10 }, (_, k) => { const p = rot(r * Math.cos((k / 10) * 2 * Math.PI), r * Math.sin((k / 10) * 2 * Math.PI)), q = rot(r * Math.cos(((k + 1) / 10) * 2 * Math.PI), r * Math.sin(((k + 1) / 10) * 2 * Math.PI)); return seg(p[0], p[1], q[0], q[1]); });
+    for (const o of [-1.4 * r / 4, 1.4 * r / 4]) { const p = rot(-r, o), q = rot(1.6 * r, o); out.push(seg(p[0], p[1], q[0], q[1])); }
+    return out;
+  };
+  const legend = shapeIn(duplexAt(100, 100, 4, 0) as never, { x0: 90, y0: 90, x1: 112, y1: 110 })!;
+  const plan = [...duplexAt(500, 500, 4, 45), ...duplexAt(600, 500, 4, 30), ...duplexAt(700, 500, 4, -60)];
+  const m = findBestShapes(plan as never, [{ key: 'DR', shape: legend }]);
+  assert.deepEqual(m.map((q) => Math.round(q.x / 100) * 100), [500, 600, 700]);
+});
