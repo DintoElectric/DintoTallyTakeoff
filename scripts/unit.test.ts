@@ -1524,3 +1524,16 @@ test('counting one system: only its items\' earlier counts are erased or removed
     clearItemIds: new Set(['FIX-P', 'REC-P']), reset: 'auto', ignorePast: true, scopeItemIds: new Set(['FIX-P']), newId: () => 'n' });
   assert.deepEqual(plan.ops.filter((o) => o.op === 'delete').map((o) => (o as { id: string }).id), ['a']);   // the receptacle's counts stay, even past the matchline
 });
+
+// ---- emergency and length items are fixtures (Lighting), whatever their category; luminaire schedules are fixtures ----
+test('counts as: emergency and measured-length items are fixtures; a luminaire schedule category is fixtures, lighting controls are not', () => {
+  const cats = [{ id: 'LUM', name: 'Luminaire schedule' }, { id: 'LFS', name: 'Light fixture schedule' }, { id: 'CTL', name: 'Lighting controls' }, { id: 'SPR', name: 'Special purpose receptacle schedule' }];
+  const g = (code: string, name: string, category_id: string | null) => countGroupOf({ code, name, spec: null, category_id, count_group: null } as never, cats);
+  assert.equal(g('A1-16/EM', "16' LED SUSPENDED DIRECT/INDIRECT LINEAR FIXTURE, emergency", 'LUM'), 'fixture');   // was a device: hidden under Lighting
+  assert.equal(g('D3/EM', 'D3, emergency', null), 'fixture');
+  assert.equal(g("P 7'", 'LED RECESSED PERIMETER SLOT, 7 ft', null), 'fixture');
+  assert.equal(g('C2', "2' X 2' TROFFER", 'LUM'), 'fixture');
+  assert.equal(g('X9', 'ANY', 'LFS'), 'fixture');
+  assert.equal(g('D2', 'LOW VOLTAGE DIMMER SWITCH', 'CTL'), 'device');
+  assert.equal(g('P', '125/250V, 3P, 4W W/ GROUND - 50A', 'SPR'), 'device');
+});

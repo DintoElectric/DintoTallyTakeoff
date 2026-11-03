@@ -142,7 +142,10 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
   // emergency split and measured lengths belong to it. Variants of one fixture are items in the same category (two D9
   // descriptions in the fixture schedule); a receptacle or a switch with the same code is not a variant.
   // Of several items with one code, the one that already has counts (copies of one item keep their counts together).
-  const mainOf = (code: string): ItemTypeRow | undefined => [...(byCode.get(code.toUpperCase()) ?? [])].sort((a, b) => b.detection_count - a.detection_count)[0];
+  const mainOf = (code: string): ItemTypeRow | undefined => [...(described(byCode.get(code.toUpperCase())) ?? [])].sort((a, b) => b.detection_count - a.detection_count)[0];
+  // An item named only by its code ("D3", made for a tag that was not in the library yet) never takes counts from an item of
+  // the same code with a description (from the schedule): the described ones, if there are any.
+  const described = (v: ItemTypeRow[] | undefined) => { if (!v || v.length < 2) return v; const real = v.filter((it) => it.name.trim().toUpperCase() !== it.code.trim().toUpperCase() && it.name.trim().toUpperCase() !== `${it.code.trim().toUpperCase()}, EMERGENCY`); return real.length ? real : v; };
   const fixtureOf = (code: string) => { const v = byCode.get(code.toUpperCase()) ?? []; return v.find((it) => countGroupOf(it, []) === 'fixture') ?? v[0]; };
   // A library that keeps the emergency version under the same code (a D9 and a "D9 ... EM" description) counts it itself; the
   // split is left to it then. Two copies of the same fixture (a schedule read again, a library imported) do not stop it.
@@ -205,6 +208,11 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
       // 1. Resolve each chosen tag to a library item, creating items for new tags.
       let noteCat: string | undefined;
       const devCats = new Map<string, string>(); // Cameras, Outlets
+      // what a new tag counts as, from the plans it is on: only lighting plans, a fixture; only power and systems plans, a device
+      const kindFrom = (code: string): 'fixture' | 'device' | 'fire_alarm' | null => {
+        const kinds = new Set(scans.filter((sc) => sc.hits.some((h) => h.code === code && !h.past)).map((sc) => sheetGroup(sc.sheet)));
+        return kinds.size === 1 && !kinds.has(null) ? [...kinds][0] : null;
+      };
       let controlCats: CategoryRow[] | null = null;   // the categories, when a switch needs its lighting control item
       const resolved = new Map<string, ItemTypeRow>();
       const ambiguous = new Set<string>();
@@ -232,7 +240,7 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
           resolved.set(r.code, item);
           continue;
         }
-        const lib = byCode.get(r.code.toUpperCase());
+        const lib = described(byCode.get(r.code.toUpperCase()));
         if (lib?.length) {
           // Copies of one fixture (the same code in the same category, neither an emergency version: a schedule read again,
           // a library imported) are one item: the copy that already has counts takes them, else the oldest. Items that really
@@ -258,6 +266,7 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
         const { item } = await api<{ item: ItemTypeRow }>('/items', {
           body: {
             project_id: projectId, code: r.code, name: (names[r.code] ?? '').trim() || (isCamera ? r.name ?? r.code : isNote ? `Drawing note ${r.code}` : r.code),
+            count_group: isCamera || isNote ? null : kindFrom(r.code),
             category_id: isCamera ? devCats.get(catName) ?? null : isNote ? noteCat : null, marker_shape: isCamera ? r.shape ?? 'circle' : isNote ? 'diamond' : r.kind === 'short' ? 'square' : 'circle', marker_glyph: isNote ? null : isCamera ? r.glyph ?? r.code.slice(0, 2) : r.code.slice(0, 2),
           },
         });
@@ -380,7 +389,7 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
         if (g && ambiguous.size) {
           sheetResolved = new Map(resolved); sheetAmbiguous = new Set(ambiguous);
           for (const code of ambiguous) {
-            const fits = (byCode.get(code.toUpperCase()) ?? []).filter((it) => countGroupOf(it, []) === g);
+            const fits = (described(byCode.get(code.toUpperCase())) ?? []).filter((it) => countGroupOf(it, cats) === g);
             // (copies of one fixture count as one: the copy with counts takes them)
             const copies = fits.length > 1 && fits.every((it) => it.category_id === fits[0].category_id) && !(fits.some(emVersion) && fits.some((it) => !emVersion(it)));
             const pick = fits.length === 1 ? fits[0] : copies ? [...fits].sort((x, y) => y.detection_count - x.detection_count)[0] : null;

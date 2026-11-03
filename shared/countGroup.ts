@@ -15,8 +15,12 @@ const LIGHT_WORDS = /\b(led|lamp|lumens?|luminaire|fixture|troffer|downlight|dow
 /** The item's group: what it was set to, or else from its category, else from its name and spec. */
 export function countGroupOf(item: Pick<ItemTypeRow, 'count_group' | 'category_id' | 'name' | 'spec'>, categories: Pick<CategoryRow, 'id' | 'name'>[]): CountGroup {
   if (item.count_group) return item.count_group;
+  // An emergency or measured-length item is made from a fixture ("A1-16/EM", "P 7'", "..., emergency"): a fixture.
+  const code = (item as { code?: string }).code ?? '';
+  if (/\/EM$/i.test(code) || /\s\d+(\.\d+)?'$/.test(code) || /, emergency$/i.test(item.name)) return 'fixture';
   const cat = categories.find((c) => c.id === item.category_id)?.name ?? '';
-  if (FIXTURE_CATEGORIES.test(cat.trim())) return 'fixture';
+  // a fixture category by name ("Lighting", "Fixtures"), or a schedule of them ("Luminaire schedule", "Light fixture schedule")
+  if (FIXTURE_CATEGORIES.test(cat.trim()) || (/\b(luminaires?|light(ing)? fixtures?|fixture schedule|lighting schedule)\b/i.test(cat) && !/control/i.test(cat))) return 'fixture';
   if (FA_CATEGORIES.test(cat) || FA_WORDS.test(`${item.name} ${item.spec ?? ''}`)) return 'fire_alarm';
   if (cat && cat.toLowerCase() !== 'other') return 'device';
   return LIGHT_WORDS.test(`${item.name} ${item.spec ?? ''}`) ? 'fixture' : 'device';
