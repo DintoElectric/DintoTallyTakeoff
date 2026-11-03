@@ -1537,3 +1537,29 @@ test('counts as: emergency and measured-length items are fixtures; a luminaire s
   assert.equal(g('D2', 'LOW VOLTAGE DIMMER SWITCH', 'CTL'), 'device');
   assert.equal(g('P', '125/250V, 3P, 4W W/ GROUND - 50A', 'SPR'), 'device');
 });
+
+// ---- switches at any rotation (along walls running up the sheet); circled sensors keep their letters; one label each ----
+{
+  const W = 3024, H = 2160;
+  const run = (str: string, x: number, y: number, hPt = 8.1) => ({ str, cx: x / W, cy: y / H, w: (str.length * hPt * 0.6) / W, h: hPt / H, rotated: false });
+  const px = (x: number, y: number) => ({ x0: x - 0.2, y0: y - 0.2, x1: x + 0.2, y1: y + 0.2, n: 2, lum: 0 });
+  // a "$" turned by an angle: the stroke and the S of tiny pieces, rotated together about its centre
+  const dollarAt = (x: number, y: number, deg: number) => {
+    const a = (deg * Math.PI) / 180, rot = (u: number, v: number): [number, number] => [x + v * Math.cos(a) - u * Math.sin(a), y + v * Math.sin(a) + u * Math.cos(a)];
+    const [ax, ay] = rot(-4.15, 0), [bx, by] = rot(4.15, 0);
+    const out = [{ x0: Math.min(ax, bx), y0: Math.min(ay, by), x1: Math.max(ax, bx), y1: Math.max(ay, by), n: 2, lum: 0 }];
+    for (let k = 0; k < 28; k++) { const t = k / 27; out.push(px(...rot(-3.1 + 6.2 * t, -2 * Math.sin(Math.PI * 2 * t)))); }
+    return out;
+  };
+  const ring = (x: number, y: number, r: number) => Array.from({ length: 32 }, (_, k) => px(x + r * Math.cos((k / 32) * 2 * Math.PI), y + r * Math.sin((k / 32) * 2 * Math.PI)));
+  const region = { x0: 0.05, y0: 0.03, x1: 0.9, y1: 0.97 };
+  test('switches: found upright, on their side and at an angle; a circle with a line through it is not one', () => {
+    const prims = [...dollarAt(1000, 500, 0), ...dollarAt(1200, 500, 90), ...dollarAt(1400, 500, 45), { x0: 1600, y0: 495.85, x1: 1600, y1: 504.15, n: 2, lum: 0 }, ...ring(1600, 500, 5)];
+    assert.deepEqual(findSwitches(prims as never, [] as never, W, H, region).map((s) => Math.round(s.x * W)), [1000, 1200, 1400]);
+  });
+  test('switches: a circled VS beside one is a sensor, not its letters; two switches side by side do not share one label', () => {
+    const prims = [...dollarAt(1000, 500, 0), ...ring(1014, 502, 7), ...dollarAt(1200, 500, 0), ...dollarAt(1212, 500, 0)];
+    const sw = findSwitches(prims as never, [run('VS', 1014, 502), run('VS', 1224, 506)] as never, W, H, region);
+    assert.deepEqual(sw.map((s) => s.code), ['$', '$', '$VS']);   // the circled VS stays a sensor; the plain VS goes to the nearer switch only
+  });
+}
