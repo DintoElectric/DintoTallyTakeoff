@@ -1644,3 +1644,17 @@ test('symbols by look: a duplex turned at an angle (along an angled wall) is str
   const m = findBestShapes(plan as never, [{ key: 'DR', shape: legend }]);
   assert.deepEqual(m.map((q) => Math.round(q.x / 100) * 100), [500, 600, 700]);
 });
+test('symbols by look: receptacles drawn touching each other, or against other linework, are found inside the merged shape', () => {
+  const seg = (x0: number, y0: number, x1: number, y1: number) => ({ x0: Math.min(x0, x1), y0: Math.min(y0, y1), x1: Math.max(x0, x1), y1: Math.max(y0, y1), n: 2, fill: false, lum: 0, pts: [x0, y0, x1, y1] });
+  const duplex = (cx: number, cy: number, r = 4) => [
+    ...Array.from({ length: 10 }, (_, k) => seg(cx + r * Math.cos((k / 10) * 2 * Math.PI), cy + r * Math.sin((k / 10) * 2 * Math.PI), cx + r * Math.cos(((k + 1) / 10) * 2 * Math.PI), cy + r * Math.sin(((k + 1) / 10) * 2 * Math.PI))),
+    seg(cx - r, cy - 1.4, cx + 1.6 * r, cy - 1.4), seg(cx - r, cy + 1.4, cx + 1.6 * r, cy + 1.4)];
+  const legend = shapeIn(duplex(100, 100) as never, { x0: 90, y0: 90, x1: 112, y1: 110 })!;
+  const plan = [
+    ...duplex(500, 500), ...duplex(500, 508),                                    // two drawn touching (one shape on the sheet)
+    ...duplex(600, 500), seg(612.4, 490, 612.4, 510), seg(612.4, 510, 630, 510),   // one against a counter's edge
+    ...Array.from({ length: 14 }, (_, k) => seg(700 + k, 490, 701 + k * 0.7, 510)), // a tangle of lines: not a receptacle
+  ];
+  const m = findBestShapes(plan as never, [{ key: 'DR', shape: legend }]);
+  assert.deepEqual(m.map((q) => `${Math.round(q.x / 10) * 10},${Math.round(q.y / 4) * 4}`).sort(), ['500,500', '500,508', '600,500']);
+});
