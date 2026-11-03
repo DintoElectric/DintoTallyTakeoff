@@ -252,7 +252,8 @@ function findInside(c: ReturnType<typeof clusters>[number], shapes: { key: strin
     let best: { key: string; score: number; ox: number; oy: number; v: (typeof variants)[number] } | null = null;
     for (const v of variants) {
       for (const l of lines) {
-        if (l.dir !== v.run.dir || Math.abs(l.len - v.run.len) > 0.25 * v.run.len) continue;
+        // (a receptacle's stems can run on past its circle, a quarter to nearly a half longer than the legend's: lined up by either end)
+        if (l.dir !== v.run.dir || l.len < 0.75 * v.run.len || l.len > 1.45 * v.run.len) continue;
         // at the sheet's size, and at the size this line says (a double duplex is not always drawn at the duplex's ratio
         // to the legend): the line the symbol is lined up on is the symbol's own
         const k = l.len / v.run.len;
@@ -371,3 +372,4 @@ export function findSymbolItems(prims: Prim[], texts: { s: string; x: number; y:
   });
   return out;
 }
+
