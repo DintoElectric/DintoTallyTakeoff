@@ -1674,3 +1674,15 @@ test('read schedule: a SYMBOL column is never the type, remembered or picked; a 
   assert.equal(asType.code, asLegend.code);
   assert.ok(asType.code.length > 0);
 });
+
+// ---- the highlighter: a freehand stroke keeps its shape with few of its points ----
+import { simplifyStroke } from '../src/viewer/strokes.ts';
+test('highlighter: a freehand stroke is thinned to the points its shape needs (ends and corners kept)', () => {
+  const pts: [number, number][] = [];
+  for (let i = 0; i <= 100; i++) pts.push([0.1 + i * 0.002, 0.2]);           // a straight run...
+  for (let i = 1; i <= 100; i++) pts.push([0.3, 0.2 + i * 0.002]);           // ...a corner, and another
+  const out = simplifyStroke(pts);
+  assert.ok(out.length <= 4, `kept ${out.length}`);
+  assert.deepEqual(out[0], pts[0]); assert.deepEqual(out[out.length - 1], pts[pts.length - 1]);
+  assert.ok(out.some(([x, y]) => Math.abs(x - 0.3) < 1e-9 && Math.abs(y - 0.2) < 1e-9));   // the corner
+});

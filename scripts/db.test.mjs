@@ -340,5 +340,16 @@ console.log('db.test OK');
     const got = (await t.d.query(`select symbol from item_types where project_id = $1 and code = 'GF'`, [b])).rows[0].symbol;
     assert.deepEqual(got, sym);
   }
+  // highlights: one row each, of a known kind and colour; removed with their sheet; the migration is safe to run twice
+  {
+    for (const f of files.filter((x) => x >= '20261105')) await t.d.exec(readFileSync(`${dir}/${f}`, 'utf8'));
+    const pid = (await t.d.query(`insert into projects (name, created_by) values ('HL','u') returning id`)).rows[0].id;
+    const fid = (await t.d.query(`insert into drawing_files (project_id,file_name,size_bytes,chunk_count,uploaded_by,upload_status) values ($1,'e.pdf',1,1,'u','ready') returning id`, [pid])).rows[0].id;
+    const sid = (await t.d.query(`insert into sheets (project_id,file_id,page,number,page_width_pt,page_height_pt,count_enabled) values ($1,$2,1,'E2.02B',3024,2160,true) returning id`, [pid, fid])).rows[0].id;
+    await t.d.query(`insert into highlights (sheet_id, kind, color, width, points, created_by) values ($1,'free','yellow',12,'[[0.1,0.1],[0.2,0.2]]'::jsonb,'u')`, [sid]);
+    await assert.rejects(t.d.query(`insert into highlights (sheet_id, kind, color, width, points, created_by) values ($1,'free','purple',12,'[]'::jsonb,'u')`, [sid]));
+    await t.d.query(`delete from sheets where id = $1`, [sid]);
+    assert.equal((await t.d.query(`select count(*)::int as n from highlights`)).rows[0].n, 0);
+  }
   console.log('project libraries OK');
 }

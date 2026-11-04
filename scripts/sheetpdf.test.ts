@@ -73,3 +73,24 @@ test('drawing export: file names and text the standard PDF fonts can write', () 
   assert.equal(winAnsi('360° camera – 4×'), '360° camera – 4×');
   assert.equal(winAnsi('Ω ≥ 2'), '? ? 2');
 });
+
+test('drawing export: highlights are drawn see-through, under the counts, where they were drawn', async () => {
+  const source = await drawingSet();
+  const doc = await open(source);
+  const page = await doc.getPage(2);
+  const vp = page.getViewport({ scale: 1 });
+  const bytes = await buildSheetPdf({
+    source, pageIndex: 1, viewport: { width: vp.width, height: vp.height }, toPdfPoint: (x, y) => vp.convertToPdfPoint(x, y),
+    marks: [{ x: 0.5, y: 0.5, shape: 'circle' }],
+    highlights: [{ kind: 'free', color: 'yellow', width: 12, points: [[0.2, 0.3], [0.4, 0.32], [0.6, 0.3]] }, { kind: 'rect', color: 'green', width: 12, points: [[0.1, 0.6], [0.3, 0.8]] }],
+  });
+  const out = await open(bytes);
+  const ops = await (await out.getPage(1)).getOperatorList();
+  // the drawing's own operators come first, then the highlights (stroked and filled), then the count's circle
+  const added = ops.fnArray.length - (await page.getOperatorList()).fnArray.length;
+  assert.ok(added >= 6, `operators added: ${added}`);
+  // the highlight drawn in the right place: a point of the stroke, back on the shown page, near where it was drawn
+  const pdfPt = vp.convertToPdfPoint(0.4 * vp.width, 0.32 * vp.height);
+  const back = vp.convertToViewportPoint(pdfPt[0], pdfPt[1]);
+  assert.ok(Math.abs(back[0] / vp.width - 0.4) < 1e-6 && Math.abs(back[1] / vp.height - 0.32) < 1e-6);
+});

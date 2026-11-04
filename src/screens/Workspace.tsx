@@ -2,15 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SymbolMark } from '../app/SymbolMark.tsx';
 import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist';
 import {
-  ArrowCounterClockwise, ArrowClockwise, Buildings, CaretLeft, CaretRight, Cursor, Eraser, FilePdf, Table, Eye, EyeSlash, Polygon, Shapes, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus, PlusCircle, Plus, Selection, Stack, WarningCircle, Crosshair, MagnifyingGlass, Hand,
+  ArrowCounterClockwise, ArrowClockwise, Highlighter, Buildings, CaretLeft, CaretRight, Cursor, Eraser, FilePdf, Table, Eye, EyeSlash, Polygon, Shapes, Export, MagicWand, MagnifyingGlassMinus, MagnifyingGlassPlus, PlusCircle, Plus, Selection, Stack, WarningCircle, Crosshair, MagnifyingGlass, Hand,
 } from '@phosphor-icons/react';
-import type { CategoryRow, CountRow, DrawingFileRow, ItemTypeRow, ProjectRow, SheetRow } from '../../shared/types.ts';
+import type { HighlightRow, CategoryRow, CountRow, DrawingFileRow, ItemTypeRow, ProjectRow, SheetRow } from '../../shared/types.ts';
 import { api, ApiError } from '../auth/api.ts';
 import { useAuth } from '../auth/AuthProvider.tsx';
 import { Check, Dialog, Seg, Symbol, TopBar, plural, useToast } from '../app/ui.tsx';
 import { navigate, paths } from '../app/router.ts';
 import { useFetch } from '../app/useFetch.ts';
-import { DrawingView, type DrawingViewHandle, type ItemStyle, type MarkerData, type Tool } from '../viewer/DrawingView.tsx';
+import { DrawingView, HIGHLIGHT_COLORS, type DrawingViewHandle, type ItemStyle, type MarkerData, type Tool } from '../viewer/DrawingView.tsx';
 import { loadFilePdf, pdfjs } from '../viewer/pdf.ts';
 import { extractPrims } from '../detect/primitives.ts';
 import { countGroupOf, GROUP_LABEL, GROUPS, type CountGroup } from '../../shared/countGroup.ts';
@@ -61,6 +61,40 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
   const sheet = sheets.find((s) => s.id === sheetId) ?? null;
   // the drawings before and after this one, in the drawing set's order
   const sheetIdx = sheets.findIndex((s) => s.id === sheetId);
+  // this sheet's highlights, loaded as it opens
+  useEffect(() => {
+    let off = false;
+    setHighlights([]);
+    if (!sheetId) return;
+    api<{ highlights: HighlightRow[] }>(`/highlights?sheet=${sheetId}`).then((r) => { if (!off) setHighlights(Array.isArray(r?.highlights) ? r.highlights : []); }).catch(() => { /* none shown; the sheet still opens */ });
+    return () => { off = true; };
+  }, [sheetId]);
+  const addHighlight = async (h: { kind: HighlightRow['kind']; points: [number, number][] }) => {
+    if (!sheetId) return;
+    const temp: HighlightRow = { id: `new-${Date.now()}`, sheet_id: sheetId, kind: h.kind, color: hlSet.color, width: hlSet.width, points: h.points, created_by_name: null, created_at: new Date().toISOString() };
+    setHighlights((l) => [...l, temp]);   // shown at once, then saved
+    try {
+      const { highlight } = await api<{ highlight: HighlightRow }>('/highlights', { body: { sheet_id: sheetId, kind: h.kind, color: hlSet.color, width: hlSet.width, points: h.points } });
+      setHighlights((l) => l.map((x) => (x.id === temp.id ? highlight : x)));
+    } catch (e) { setHighlights((l) => l.filter((x) => x.id !== temp.id)); toast(e instanceof ApiError ? e.message : 'The highlight could not be saved.'); }
+  };
+  const eraseHighlight = async (p: { x: number; y: number }) => {
+    // the topmost highlight under the click: inside a box, or within a stroke's width of its line
+    if (!pageDims) return;
+    const W = pageDims.w, H = pageDims.h, px = p.x * W, py = p.y * H;
+    const onSeg = (a: [number, number], b: [number, number]) => { const ax = a[0] * W, ay = a[1] * H, bx = b[0] * W, by = b[1] * H, l2 = (bx - ax) ** 2 + (by - ay) ** 2; const t = l2 ? Math.max(0, Math.min(1, ((px - ax) * (bx - ax) + (py - ay) * (by - ay)) / l2)) : 0; return Math.hypot(px - (ax + t * (bx - ax)), py - (ay + t * (by - ay))); };
+    const hit = [...highlights].reverse().find((h) => h.kind === 'rect'
+      ? px >= Math.min(h.points[0][0], h.points[1][0]) * W - 2 && px <= Math.max(h.points[0][0], h.points[1][0]) * W + 2 && py >= Math.min(h.points[0][1], h.points[1][1]) * H - 2 && py <= Math.max(h.points[0][1], h.points[1][1]) * H + 2
+      : h.points.some((q, i) => i > 0 && onSeg(h.points[i - 1], q) <= h.width / 2 + 3));
+    if (!hit) return;
+    setHighlights((l) => l.filter((x) => x.id !== hit.id));
+    if (!hit.id.startsWith('new-')) try { await api(`/highlights/${hit.id}`, { method: 'DELETE' }); } catch { setHighlights((l) => [...l, hit]); toast('The highlight could not be removed.'); }
+  };
+  const clearHighlights = async () => {
+    if (!sheetId || !highlights.length || !window.confirm(`Remove all ${highlights.length} highlights on this sheet?`)) return;
+    const before = highlights; setHighlights([]);
+    try { await api(`/highlights?sheet=${sheetId}`, { method: 'DELETE' }); } catch { setHighlights(before); toast('The highlights could not be removed.'); }
+  };
   const prevSheet = sheetIdx > 0 ? sheets[sheetIdx - 1] : null;
   const nextSheet = sheetIdx >= 0 && sheetIdx < sheets.length - 1 ? sheets[sheetIdx + 1] : null;
   const goSheet = (s: SheetRow | null) => { if (s) navigate(paths.sheet(projectId, s.id)); };
@@ -71,6 +105,14 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
 
   const { store, snap } = useSheetStore(sheetId);
   const [tool, setTool] = useState<Tool>('select');
+  // the highlighter: its colour, width and mode (remembered), this sheet's highlights, and whether they are shown
+  const [hlSet, setHlSet] = useState<{ color: HighlightRow['color']; width: number; mode: 'free' | 'rect' | 'erase' }>(() => {
+    try { const v = JSON.parse(localStorage.getItem('tally.highlighter') ?? 'null'); if (v && HIGHLIGHT_COLORS[v.color as HighlightRow['color']] && v.width > 0) return { color: v.color, width: v.width, mode: v.mode === 'rect' ? 'rect' : 'free' }; } catch { /* the default */ }
+    return { color: 'yellow', width: 12, mode: 'free' };
+  });
+  useEffect(() => { try { localStorage.setItem('tally.highlighter', JSON.stringify(hlSet)); } catch { /* kept for this visit */ } }, [hlSet]);
+  const [highlights, setHighlights] = useState<HighlightRow[]>([]);
+  const [showHL, setShowHL] = useState(true);
   const [activeItemId, setActiveItemId] = useState<string | null>(null);
   const [scope, setScope] = useState<'sheet' | 'all'>('sheet');
   const [onlyActive, setOnlyActive] = useState(false);
@@ -542,6 +584,7 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
       else if (k === 'i' && !readOnly) { setTool('zone'); setDraft([]); }
       else if (k === 'a' && !readOnly) { setTool('area'); setDraft([]); }
       else if (k === 'e' && !readOnly) setTool('erase');
+      else if (k === 'm' && !readOnly) setTool('highlight');
       else if (k === 'h') setHideMarkers((v) => !v);
       else if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelected(); }
       else if (e.key === 'Escape') setSelected(new Set());
@@ -679,6 +722,28 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
             <button className={`tool${tool === 'zone' ? ' on' : ''}`} onClick={() => { setTool('zone'); setDraft([]); }} disabled={readOnly} aria-label="Ignore area (I)" title="Ignore area (I): outline an area whose counts are left out"><Polygon size={18} /></button>
             <button className={`tool${tool === 'area' ? ' on' : ''}`} onClick={() => { setTool('area'); setDraft([]); }} disabled={readOnly} aria-label="Count area (A)" title="Count area (A): outline a named area to count separately"><Shapes size={18} /></button>
             <button className={`tool${tool === 'erase' ? ' on' : ''}`} onClick={() => setTool('erase')} disabled={readOnly} aria-label="Erase (E)" title="Erase (E)"><Eraser size={18} /></button>
+            <button className={`tool${tool === 'highlight' ? ' on' : ''}`} onClick={() => { setTool('highlight'); setShowHL(true); }} disabled={readOnly} aria-label="Highlighter (M)" title="Highlighter (M): drag to highlight part of the drawing; hold Shift for a straight stroke"><Highlighter size={18} /></button>
+            {tool === 'highlight' && (
+              <span className="hl-bar" role="group" aria-label="Highlighter">
+                {(Object.keys(HIGHLIGHT_COLORS) as HighlightRow['color'][]).map((c) => (
+                  <button key={c} className={`hl-color${hlSet.color === c && hlSet.mode !== 'erase' ? ' on' : ''}`} style={{ background: HIGHLIGHT_COLORS[c] }} onClick={() => setHlSet((v) => ({ ...v, color: c, mode: v.mode === 'erase' ? 'free' : v.mode }))} aria-label={`Highlight ${c}`} title={c[0].toUpperCase() + c.slice(1)} />
+                ))}
+                <select className="input" style={{ height: 28, padding: '0 6px', width: 'auto' }} value={hlSet.width} onChange={(e) => setHlSet((v) => ({ ...v, width: Number(e.target.value) }))} aria-label="Highlight width">
+                  <option value={6}>Thin</option><option value={12}>Medium</option><option value={24}>Thick</option>
+                </select>
+                <span className="seg">
+                  <button className={hlSet.mode === 'free' ? 'on' : ''} onClick={() => setHlSet((v) => ({ ...v, mode: 'free' }))} title="Drag to highlight as you draw (Shift: a straight stroke)">Pen</button>
+                  <button className={hlSet.mode === 'rect' ? 'on' : ''} onClick={() => setHlSet((v) => ({ ...v, mode: 'rect' }))} title="Drag a box to highlight an area">Box</button>
+                  <button className={hlSet.mode === 'erase' ? 'on' : ''} onClick={() => setHlSet((v) => ({ ...v, mode: 'erase' }))} title="Click a highlight to remove it">Eraser</button>
+                </span>
+                <button className="btn btn-ghost" style={{ minHeight: 28, padding: '0 8px' }} onClick={() => void clearHighlights()} disabled={!highlights.length}>Clear sheet</button>
+              </span>
+            )}
+            {highlights.length > 0 && (
+              <button className="tool" onClick={() => setShowHL((v) => !v)} aria-pressed={showHL} aria-label={showHL ? 'Hide highlights' : 'Show highlights'} title={`${showHL ? 'Hide' : 'Show'} the ${highlights.length} highlight${highlights.length === 1 ? '' : 's'} on this sheet`}>
+                {showHL ? <Eye size={18} /> : <EyeSlash size={18} />}
+              </button>
+            )}
             <span className="sep" />
             <button className="tool" onClick={() => store?.undo()} disabled={readOnly || !snap.canUndo} aria-label="Undo (Ctrl+Z)" title="Undo (Ctrl+Z)"><ArrowCounterClockwise size={18} /></button>
             <button className="tool" onClick={() => store?.redo()} disabled={readOnly || !snap.canRedo} aria-label="Redo (Shift+Ctrl+Z)" title="Redo (Shift+Ctrl+Z)"><ArrowClockwise size={18} /></button>
@@ -746,6 +811,10 @@ export default function Workspace({ projectId, sheetId }: { projectId: string; s
                 draft={draft}
                 onZonePoint={(x, y) => setDraft((d) => [...d, { x, y }])}
                 onZoneFinish={finishZone}
+                highlights={showHL ? highlights : []}
+                highlighter={tool === 'highlight' ? hlSet : null}
+                onHighlight={(h) => void addHighlight(h)}
+                onHighlightErase={(p) => void eraseHighlight(p)}
                 onReadBox={(a, b) => {
                   if (Math.abs(a.x - b.x) < 0.003 || Math.abs(a.y - b.y) < 0.003) return toast('Drag a box around a column header (and a row or two).');
                   setReadBoxes((list) => [...list, { x0: a.x, y0: a.y, x1: b.x, y1: b.y }]);
@@ -1139,6 +1208,8 @@ function SheetPdfDialog({ page, file, sheet, dets, items, categories, projectNam
         source, pageIndex: sheet.page - 1, viewport: { width: vp.width, height: vp.height }, toPdfPoint: (x, y) => vp.convertToPdfPoint(x, y),
         marks: withCounts ? live.map((d) => ({ x: d.x, y: d.y, shape: byId.get(d.item_type_id)?.marker_shape ?? 'circle' })) : null,
         list,
+        // the sheet's highlights, as saved (drawn under the counts)
+        highlights: (await api<{ highlights: HighlightRow[] }>(`/highlights?sheet=${sheet.id}`).catch(() => ({ highlights: [] as HighlightRow[] }))).highlights,
       });
       const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'application/pdf' }));
       const a = document.createElement('a');

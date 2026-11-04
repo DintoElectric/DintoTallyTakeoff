@@ -17,6 +17,7 @@ export interface SheetPdfInput {
   toPdfPoint: (vx: number, vy: number) => number[];    // a shown point to the PDF page's own coordinates (pdf.js convertToPdfPoint)
   marks?: SheetMark[] | null;                          // the counts to draw; none: a clean copy of the drawing
   list?: CountList | null;                             // a page listing the counts
+  highlights?: { kind: 'free' | 'line' | 'rect'; color: 'yellow' | 'green' | 'pink' | 'blue'; width: number; points: [number, number][] }[] | null;   // drawn under the counts, see-through
 }
 
 // The app's accent, as on screen: a clear outline with a light tint, so the tag or symbol underneath stays readable.
@@ -45,6 +46,25 @@ export async function buildSheetPdf(input: SheetPdfInput): Promise<Uint8Array> {
   const { PDFName } = await import('pdf-lib');
   page.node.delete(PDFName.of('Annots'));
   out.addPage(page);
+
+  // The highlights first, see-through as on screen, so the counts are drawn over them.
+  if (input.highlights?.length) {
+    const HL = { yellow: [1, 0.882, 0.302], green: [0.369, 0.886, 0.478], pink: [1, 0.435, 0.71], blue: [0.361, 0.722, 1] } as const;
+    const { LineCapStyle } = await import('pdf-lib');
+    for (const h of input.highlights) {
+      const [r, g, b] = HL[h.color] ?? HL.yellow;
+      const pts = h.points.map(([x, y]) => input.toPdfPoint(x * input.viewport.width, y * input.viewport.height));
+      if (pts.length < 2) continue;
+      if (h.kind === 'rect') {
+        const [a, c] = [pts[0], pts[1]];
+        page.drawRectangle({ x: Math.min(a[0], c[0]), y: Math.min(a[1], c[1]), width: Math.abs(c[0] - a[0]), height: Math.abs(c[1] - a[1]), color: rgb(r, g, b), opacity: 0.38 });
+        continue;
+      }
+      // a stroke as one path (no darker spots where its pieces meet); an SVG path at (0, 0) has its y flipped
+      const d = pts.map(([X, Y], i) => `${i ? 'L' : 'M'} ${X.toFixed(2)} ${(-Y).toFixed(2)}`).join(' ');
+      page.drawSvgPath(d, { x: 0, y: 0, borderColor: rgb(r, g, b), borderWidth: h.width, borderOpacity: 0.38, borderLineCap: LineCapStyle.Round });
+    }
+  }
 
   if (input.marks?.length) {
     const ink = rgb(INK.r, INK.g, INK.b);

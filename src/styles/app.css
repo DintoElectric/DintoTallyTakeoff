@@ -322,3 +322,12 @@ tr.in-job td:first-child { padding-left: 34px; }
 .symbol-mark { display: inline-flex; align-items: center; gap: 3px; flex: none; vertical-align: middle; }
 .symbol-mark svg { fill: currentColor; overflow: visible; }
 .symbol-letters { font-size: 10px; font-weight: 600; opacity: .85; }
+/* the highlighter's settings, beside its tool while it is on (kept on one line) */
+.hl-bar { display: inline-flex; align-items: center; gap: 6px; margin-left: 4px; padding: 2px 6px; border-radius: 8px; background: var(--color-surface-2, rgba(127,127,127,.08)); white-space: nowrap; flex: none; }
+.hl-bar .btn, .hl-bar select { white-space: nowrap; font-size: 12px; }
+.hl-color { width: 18px; height: 18px; border-radius: 50%; border: 0; padding: 0; cursor: pointer; opacity: .8; flex: none; }
+.hl-color.on { opacity: 1; box-shadow: 0 0 0 2px var(--color-bg, #fff), 0 0 0 4px var(--color-accent, #5b5bd6); }
+.hl-bar .seg { display: inline-flex; flex: none; border: 1px solid var(--color-border, rgba(127,127,127,.35)); border-radius: 6px; overflow: hidden; }
+.hl-bar .seg button { border: 0; background: transparent; padding: 3px 7px; font-size: 12px; cursor: pointer; color: inherit; white-space: nowrap; }
+.hl-bar .seg button.on { background: var(--color-accent, #5b5bd6); color: #fff; }
+.viewport.tool-highlight { cursor: crosshair; }

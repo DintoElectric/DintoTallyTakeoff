@@ -5,9 +5,14 @@ import { BASE_MAX_PX, DETAIL_MAX_PX } from '../../shared/limits.ts';
 import { overlayLooksRight, tintOverlay } from './overlayTint.ts';
 import { GridIndex } from '../detect/grid.ts';
 import type { Zone, ZonePoint } from '../../shared/zones.ts';
+import type { HighlightRow } from '../../shared/types.ts';
+import { simplifyStroke } from './strokes.ts';
 import { appPalette, drawMarker, type Palette } from './markerDraw.ts';
 
-export type Tool = 'select' | 'add' | 'box' | 'erase' | 'zone' | 'area' | 'similar' | 'read' | 'align';
+export type Tool = 'select' | 'add' | 'box' | 'erase' | 'zone' | 'area' | 'similar' | 'read' | 'align' | 'highlight';
+
+/** The highlighter's colours, see-through over the drawing. */
+export const HIGHLIGHT_COLORS: Record<HighlightRow['color'], string> = { yellow: '#ffe14d', green: '#5ee27a', pink: '#ff6fb5', blue: '#5cb8ff' };
 export interface MarkerData { id: string; x: number; y: number; itemId: string; flagged: boolean }
 export interface ItemStyle { shape: MarkerShape; glyph: string | null }
 export interface DrawingViewHandle { zoomBy(factor: number): void; fit(): void; centerOn(x: number, y: number, zoomFactor?: number): void }
@@ -29,6 +34,12 @@ interface Props {
   /** The rectangle drawn with the similar-symbol tool, in normalized page coordinates. */
   onSimilarBox?(a: { x: number; y: number }, b: { x: number; y: number }): void;
   onReadBox?(a: { x: number; y: number }, b: { x: number; y: number }): void; // Read schedule: the area to read
+  /** Highlights on this sheet, drawn under everything else. */
+  highlights?: HighlightRow[];
+  /** The highlighter: its colour, width (page points) and what a drag does (free: as drawn; rect: a box; erase: a click removes one). */
+  highlighter?: { color: HighlightRow['color']; width: number; mode: 'free' | 'rect' | 'erase' } | null;
+  onHighlight?(h: { kind: HighlightRow['kind']; points: [number, number][] }): void;
+  onHighlightErase?(p: { x: number; y: number }): void;
   onZoom(pct: number): void;
   onError(message: string): void;
   /** Exclusion zones drawn dimmed: the part of a sheet that lies past a matchline, or that the estimator outlined. */
@@ -60,6 +71,7 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
   const detailRef = useRef<HTMLCanvasElement | null>(null);
 
   const view = useRef({ z: 1, tx: 0, ty: 0 });
+  const hlDraft = useRef<{ kind: HighlightRow['kind']; points: [number, number][]; lx: number; ly: number } | null>(null);   // the highlight being drawn
   const fitZ = useRef(1);
   const size = useRef({ w: 1, h: 1 });
   const baseScale = useRef(1);
@@ -99,6 +111,27 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
     const { markers, styles, activeItemId, selected, zones } = P.current;
     const sx = (x: number) => tx + x * pageW * z;
     const sy = (y: number) => ty + y * pageH * z;
+    // the highlights, see-through like a highlighter on paper, under everything else; then the one being drawn
+    const drawHL = (h: { kind: HighlightRow['kind']; color: HighlightRow['color']; width: number; points: [number, number][] }) => {
+      if (h.points.length < 2) return;
+      ctx.save();
+      ctx.globalAlpha = 0.38;
+      ctx.fillStyle = ctx.strokeStyle = HIGHLIGHT_COLORS[h.color] ?? HIGHLIGHT_COLORS.yellow;
+      if (h.kind === 'rect') {
+        const [a, b] = h.points;
+        ctx.fillRect(Math.min(sx(a[0]), sx(b[0])), Math.min(sy(a[1]), sy(b[1])), Math.abs(sx(b[0]) - sx(a[0])), Math.abs(sy(b[1]) - sy(a[1])));
+      } else {
+        ctx.lineWidth = Math.max(2, h.width * z);
+        ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        ctx.beginPath();
+        h.points.forEach((p, i) => (i === 0 ? ctx.moveTo(sx(p[0]), sy(p[1])) : ctx.lineTo(sx(p[0]), sy(p[1]))));
+        ctx.stroke();
+      }
+      ctx.restore();
+    };
+    for (const h of P.current.highlights ?? []) drawHL(h);
+    const hd = hlDraft.current, hlr = P.current.highlighter;
+    if (hd && hlr) drawHL({ kind: hd.kind, color: hlr.color, width: hlr.width, points: hd.kind === 'free' ? hd.points : [hd.points[0], hd.points[hd.points.length - 1]] });
     if (zones?.length) {
       ctx.save();
       ctx.fillStyle = 'rgba(22,24,38,0.30)';
@@ -174,7 +207,7 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
     if (!raf.current) raf.current = requestAnimationFrame(drawMarkers);
   }, [drawMarkers]);
 
-  useEffect(() => { scheduleMarkers(); }, [props.markers, props.styles, props.activeItemId, props.selected, props.zones, props.areas, props.draft, scheduleMarkers]);
+  useEffect(() => { scheduleMarkers(); }, [props.markers, props.styles, props.activeItemId, props.selected, props.zones, props.areas, props.draft, props.highlights, props.highlighter, scheduleMarkers]);
 
   /* ---------- detail layer: sharp re-render of the visible region after zooming stops ---------- */
   const renderDetail = useCallback(async () => {
@@ -407,7 +440,7 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
   /* ---------- pointer gestures: tap, drag-pan, box, pinch ---------- */
   const g = useRef({
     pointers: new Map<number, { x: number; y: number }>(),
-    mode: 'none' as 'none' | 'pending' | 'pan' | 'box' | 'pinch',
+    mode: 'none' as 'none' | 'pending' | 'pan' | 'box' | 'pinch' | 'stroke',
     sx: 0, sy: 0, stx: 0, sty: 0, type: 'mouse',
     pd: 1, pz: 1, pcx: 0, pcy: 0, ptx: 0, pty: 0,
     lastTap: 0, lastTapX: 0, lastTapY: 0, shift: false, button: 0,
@@ -466,7 +499,14 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
     if (s.mode === 'pending') {
       const thr = s.type === 'touch' ? 8 : 4;
       if (Math.hypot(dx, dy) < thr) return;
-      s.mode = (P.current.tool === 'box' || P.current.tool === 'similar' || P.current.tool === 'read') && s.button === 0 ? 'box' : 'pan';
+      const hl = P.current.tool === 'highlight' && s.button === 0 && !P.current.readOnly && P.current.highlighter && P.current.highlighter.mode !== 'erase';
+      s.mode = hl ? 'stroke' : (P.current.tool === 'box' || P.current.tool === 'similar' || P.current.tool === 'read') && s.button === 0 ? 'box' : 'pan';
+      if (hl) { const a = toNorm(s.sx, s.sy); hlDraft.current = { kind: P.current.highlighter!.mode === 'rect' ? 'rect' : s.shift ? 'line' : 'free', points: [[a.x, a.y]], lx: s.sx, ly: s.sy }; }
+    }
+    if (s.mode === 'stroke') {
+      const d = hlDraft.current;
+      if (d && Math.hypot(p.x - d.lx, p.y - d.ly) >= 1.5) { const n = toNorm(p.x, p.y); if (d.kind === 'free') d.points.push([n.x, n.y]); else d.points[1] = [n.x, n.y]; d.lx = p.x; d.ly = p.y; scheduleMarkers(); }
+      return;
     }
     if (s.mode === 'pan') {
       view.current = { ...view.current, tx: s.stx + dx, ty: s.sty + dy };
@@ -491,8 +531,18 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
     }
     const mode = s.mode;
     s.mode = 'none';
-    if (cancelled) { setBox(null); return; }
+    if (cancelled) { setBox(null); hlDraft.current = null; scheduleMarkers(); return; }
     const pr = P.current;
+    if (mode === 'stroke') {
+      const d = hlDraft.current; hlDraft.current = null;
+      if (d) {
+        const n = toNorm(p.x, p.y);
+        const pts = d.kind === 'free' ? simplifyStroke([...d.points, [n.x, n.y]]) : [d.points[0], [n.x, n.y] as [number, number]];
+        if (pts.length >= 2 && Math.hypot(pts[pts.length - 1][0] - pts[0][0], pts[pts.length - 1][1] - pts[0][1]) + (d.kind === 'free' ? pts.length * 1e-4 : 0) > 1e-4) pr.onHighlight?.({ kind: d.kind, points: pts });
+      }
+      scheduleMarkers();
+      return;
+    }
     if (mode === 'box') {
       setBox(null);
       const a = toNorm(s.sx, s.sy), b = toNorm(p.x, p.y);
@@ -502,6 +552,7 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
     } else if (mode === 'pending') {
       const n = toNorm(p.x, p.y);
       if (s.button === 1) return;
+      if (pr.tool === 'highlight') { if (pr.highlighter?.mode === 'erase' && !pr.readOnly) pr.onHighlightErase?.(n); return; }   // (a click with the highlighter: removes one in erase mode)
       // Double-tap (touch/pen) toggles fit and a closer zoom, in the non-placing tools.
       const now = e.timeStamp;
       if (s.type !== 'mouse' && (pr.tool === 'select' || pr.tool === 'box') && now - s.lastTap < 320 && Math.hypot(p.x - s.lastTapX, p.y - s.lastTapY) < 30) {
@@ -553,3 +604,4 @@ export const DrawingView = forwardRef<DrawingViewHandle, Props>(function Drawing
     </div>
   );
 });
+

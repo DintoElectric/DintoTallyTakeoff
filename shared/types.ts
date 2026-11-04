@@ -134,3 +134,6 @@ export interface JobRow { id: string; name: string; created_by_name: string | nu
 /** An item's symbol: how it looks (points along its linework in its own w x h box, in points; how much is filled), and the
  * letters that tell it from another item with the same symbol (a duplex with "GF" beside it). */
 export interface ItemSymbol { w: number; h: number; pts: [number, number][]; fill: number; letters?: string[] }
+
+/** A highlight on a sheet: a translucent mark drawn over the drawing. points: [x, y] on the page (0..1); width: page points. */
+export interface HighlightRow { id: string; sheet_id: string; kind: 'free' | 'line' | 'rect'; color: 'yellow' | 'green' | 'pink' | 'blue'; width: number; points: [number, number][]; created_by_name: string | null; created_at: string }
