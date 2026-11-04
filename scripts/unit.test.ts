@@ -1686,3 +1686,18 @@ test('highlighter: a freehand stroke is thinned to the points its shape needs (e
   assert.deepEqual(out[0], pts[0]); assert.deepEqual(out[out.length - 1], pts[pts.length - 1]);
   assert.ok(out.some(([x, y]) => Math.abs(x - 0.3) < 1e-9 && Math.abs(y - 0.2) < 1e-9));   // the corner
 });
+test('symbols by look: a receptacle with an arrow touching it (a filled arrowhead, its outline, and its leader) is counted', () => {
+  const seg = (x0: number, y0: number, x1: number, y1: number) => ({ x0: Math.min(x0, x1), y0: Math.min(y0, y1), x1: Math.max(x0, x1), y1: Math.max(y0, y1), n: 2, fill: false, lum: 0, pts: [x0, y0, x1, y1] });
+  const duplex = (cx: number, cy: number, r = 4) => [
+    ...Array.from({ length: 10 }, (_, k) => seg(cx + r * Math.cos((k / 10) * 2 * Math.PI), cy + r * Math.sin((k / 10) * 2 * Math.PI), cx + r * Math.cos(((k + 1) / 10) * 2 * Math.PI), cy + r * Math.sin(((k + 1) / 10) * 2 * Math.PI))),
+    seg(cx - r, cy - 1.4, cx + 1.6 * r, cy - 1.4), seg(cx - r, cy + 1.4, cx + 1.6 * r, cy + 1.4)];
+  const legend = shapeIn(duplex(100, 100) as never, { x0: 90, y0: 90, x1: 112, y1: 110 })!;
+  // the arrow: its tip on the circle at the left, drawn filled and as its outline, with a leader running off to the left
+  const tri = [492, 500, 485, 497, 485, 503, 492, 500];
+  const head = { x0: 485, y0: 497, x1: 492, y1: 503, n: 4, fill: true, lum: 0, pts: tri };
+  const outline = { ...head, fill: false };
+  const plan = [...duplex(496, 500), head, outline, seg(485, 500, 470, 500)];
+  const m = findBestShapes(plan as never, [{ key: 'DR', shape: legend }]);
+  assert.equal(m.length, 1);
+  assert.ok(Math.abs(m[0].x - 498) < 3 && Math.abs(m[0].y - 500) < 3);
+});
