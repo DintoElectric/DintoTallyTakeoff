@@ -63,10 +63,13 @@ export function readAreaTable(runs: PageRun[], boxIn: Box | Box[], opts: { pageW
   // a header holds a word that only names columns: GROUND / NEUTRAL / PHASE beside a symbol is not a header)
   const hs = words.map((w) => w.h).sort((a, b) => a - b);
   const h0 = hs[Math.floor(hs.length / 2)] || 6;
-  const bestGroup = (ls: Word[][], from: number, to: number) => {
+  // (strict, inside a box: a header line is two or more header words, or nothing else; a description wrapping onto a
+  // line of its own, "RECEPTACLE TYPE)", is not one, and the table's header is then looked for above the box)
+  const headerLike = (l: Word[]) => { const ts = l.flatMap((w) => tokens(w.s)); const n = ts.filter((t) => HEADER_WORD.test(t)).length; return n >= 2 || (n >= 1 && n === ts.length); };
+  const bestGroup = (ls: Word[][], from: number, to: number, strict = false) => {
     let gi = -1, gl = -1, top = 0;
     for (let i = from; i < to; i++) {
-      if (headerShare(ls[i]) < 0.5) continue;
+      if (headerShare(ls[i]) < 0.5 || (strict && !headerLike(ls[i]))) continue;
       let j = i;
       while (ls[j + 1] && ls[j + 1][0].y - ls[j][0].y < 4 * h0 && headerShare(ls[j + 1]) >= 0.5) j++;
       const ws = ls.slice(i, j + 1).flat().flatMap((w) => tokens(w.s));
@@ -78,7 +81,7 @@ export function readAreaTable(runs: PageRun[], boxIn: Box | Box[], opts: { pageW
   };
   let headLines: Word[][];
   let dataTop: number | null = null;   // set when the header is above the boxes: the read starts at the boxes, not below the header
-  const inside = bestGroup(boxed, 0, Math.min(12, boxed.length));
+  const inside = bestGroup(boxed, 0, Math.min(12, boxed.length), true);
   if (inside.gi >= 0) headLines = boxed.slice(inside.gi, inside.gl + 1);
   else {
     // No header in the boxes (a section further down a long legend): the table's header is the nearest one above, in the same columns.
@@ -260,13 +263,20 @@ function bandRows(t: AreaTable): AreaRow[] {
     return out;
   }
   const all = t.lines.flat();
+  // the symbol column, when there is one: each row's symbol is drawn there, within its band (kept with the item, so
+  // Auto-count finds it on the plans by its look), with the letters written in it
+  const symCol = t.columns.findIndex((c) => /\bSYMBOL/i.test(c.header));
   for (const b of t.bands) {
     const ws = all.filter((w) => w.y > b.y0 && w.y < b.y1);
     if (!ws.length) continue;
     const cells = cellsOf(ws);
     // a section heading: the merged band's text in the first column (a symbol's labels beside it are not part of it)
     if (b.merged) { if (cells[0]) section = cells[0]; continue; }
-    if (cells[0] || cells.slice(1).some(Boolean)) out.push({ cells, section });
+    if (cells[0] || cells.slice(1).some(Boolean)) {
+      const sym = symCol >= 0 ? t.columns[symCol] : null;
+      const letters = sym ? cells[symCol].split(/\s+/).filter((x) => /^[A-Z+][A-Z0-9+#\-]{0,5}$/.test(x) && !/^\d+$/.test(x)).slice(0, 2) : [];
+      out.push({ cells, section, ...(sym ? { symbolBox: { x0: sym.x0, y0: b.y0, x1: sym.x1, y1: b.y1 }, letters } : {}) });
+    }
   }
   return out;
 }

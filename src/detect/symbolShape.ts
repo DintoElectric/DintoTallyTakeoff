@@ -171,7 +171,8 @@ export function findBestShapes(prims: Prim[], shapes: { key: string; shape: Shap
   const scales = new Map<string, number[]>();   // how big this sheet draws each symbol, against the legend
   for (const c of clusters(prims)) {
     // (a symbol turned at an angle, along an angled wall, is straightened by its own lines first)
-    if (Math.hypot(c.x1 - c.x0, c.y1 - c.y0) > sizeMax * 1.05) { if (c.prims.length <= 6000) unmatched.push(c); continue; }   // (too big to be one symbol: looked inside)
+    // (too big to be one symbol: looked inside, up to about six symbols across; a network of walls is not)
+    if (Math.hypot(c.x1 - c.x0, c.y1 - c.y0) > sizeMax * 1.05) { if (c.prims.length <= 6000 && Math.hypot(c.x1 - c.x0, c.y1 - c.y0) <= sizeMax * 6) unmatched.push(c); continue; }
     const tilt = tiltOf(c);
     const straight = shapeTurned(c, tilt);
     const w = straight.w, h = straight.h;
@@ -328,7 +329,9 @@ export interface SymbolHit { itemId: string; code: string; x: number; y: number;
  * "GF", "WP" beside the same duplex) are one symbol here: each match goes to the symbol it looks most like, then the letters
  * beside it decide the item (each letter to its nearest symbol only), and a bare symbol is the item with no letters.
  */
-export function findSymbolItems(prims: Prim[], texts: { s: string; x: number; y: number; w?: number; h?: number }[], items: SymbolItem[], opts: { minScore?: number } = {}): SymbolHit[] {
+export function findSymbolItems(prims: Prim[], texts: { s: string; x: number; y: number; w?: number; h?: number }[], itemsIn: SymbolItem[], opts: { minScore?: number } = {}): SymbolHit[] {
+  // (a legend symbol too plain to tell from other linework, a bare line or a thin stroke, is not searched for)
+  const items = itemsIn.filter((it) => distinct(it.symbol));
   const groups: { rep: SymbolItem; members: SymbolItem[] }[] = [];
   for (const it of [...items].sort((a, b) => (a.symbol.letters?.length ?? 0) - (b.symbol.letters?.length ?? 0))) {
     // (the same symbol drawn again scores 1.00; a double duplex and one above counter, close as they are, about 0.95)
@@ -373,3 +376,6 @@ export function findSymbolItems(prims: Prim[], texts: { s: string; x: number; y:
   return out;
 }
 
+
+/** Whether a symbol has enough shape to be told from other linework: not a bare line or a thin stroke. */
+export const distinct = (s: Shape) => Math.min(s.w, s.h) >= 3 && s.w * s.h >= 30 && s.pts.length >= 40;
