@@ -1658,3 +1658,19 @@ test('symbols by look: receptacles drawn touching each other, or against other l
   const m = findBestShapes(plan as never, [{ key: 'DR', shape: legend }]);
   assert.deepEqual(m.map((q) => `${Math.round(q.x / 10) * 10},${Math.round(q.y / 4) * 4}`).sort(), ['500,500', '500,508', '600,500']);
 });
+test('read schedule: a SYMBOL column is never the Type column, even when it was picked before', () => {
+  const cols = [{ header: 'DESCRIPTION', x0: 0, x1: 100, sample: '' }, { header: 'MOUNTING HEIGHT', x0: 100, x1: 150, sample: '' }, { header: 'SYMBOL', x0: 150, x1: 200, sample: '' }];
+  assert.equal(suggestColumns(cols as never, { type: 'SYMBOL' }).type, null);
+  assert.equal(suggestColumns(cols as never).description, 0);
+});
+test('read schedule: a SYMBOL column is never the type, remembered or picked; a legend with one reads an item per row', () => {
+  const cols = [{ header: 'DESCRIPTION', x0: 480, x1: 690, sample: '' }, { header: 'MOUNTING HEIGHT', x0: 690, x1: 790, sample: '' }, { header: 'SYMBOL', x0: 790, x1: 890, sample: '' }] as never;
+  assert.equal(suggestColumns(cols, { type: 'SYMBOL', description: 'DESCRIPTION' }).type, null);   // remembered from an earlier read
+  assert.equal(suggestColumns(cols).type, null);
+  // picked by hand: the code is the legend's (the letters on the symbol, else made from the description)
+  const row = { cells: ['DUPLEX RECEPTACLE', "1'-6\"", ''], section: null };
+  const asType = rowToItem(row as never, { type: 2, description: 0, extra: [1] }, cols)!;
+  const asLegend = rowToItem(row as never, { type: null, description: 0, extra: [1] }, cols)!;
+  assert.equal(asType.code, asLegend.code);
+  assert.ok(asType.code.length > 0);
+});

@@ -226,7 +226,8 @@ function colOf(t: AreaTable, w: Word): number {
  */
 export function areaRows(t: AreaTable, keyCol: number | null): AreaRow[] {
   if (t.rows) return t.rows;
-  if (keyCol === null) return bandRows(t);
+  // (the SYMBOL column picked as the Type column by hand: still one item per row, each with its symbol)
+  if (keyCol === null || (/\bSYMBOL/i.test(t.columns[keyCol]?.header ?? '') && t.bands.length)) return bandRows(t);
   const rows: { words: Word[][]; section: string | null }[] = [];
   let section: string | null = null, inSection = false;
   for (const l of t.lines) {
@@ -246,7 +247,17 @@ export function areaRows(t: AreaTable, keyCol: number | null): AreaRow[] {
     if (!row) continue;   // text above the first type is not a row
     for (const w of l) { const c = colOf(t, w); if (c >= 0) row.words[c].push(w); }
   }
-  return rows.map((r) => ({ cells: r.words.map((cell) => cell.sort((a, b) => a.y - b.y || a.x0 - b.x0).map((w) => w.s).join(' ').replace(/\s+/g, ' ').trim()), section: r.section }));
+  const symCol = t.columns.findIndex((c) => /\bSYMBOL/i.test(c.header));
+  return rows.map((r, i) => {
+    const cells = r.words.map((cell) => cell.sort((a, b) => a.y - b.y || a.x0 - b.x0).map((w) => w.s).join(' ').replace(/\s+/g, ' ').trim());
+    if (symCol < 0) return { cells, section: r.section };
+    // its symbol: in the SYMBOL column, from this row's first line to just above the next row's
+    const ys = r.words.flat().map((w) => w.y), next = rows[i + 1]?.words.flat().map((w) => w.y) ?? [];
+    if (!ys.length) return { cells, section: r.section };
+    const y0 = Math.min(...ys) - 6, y1 = next.length ? Math.min(...next) - 2 : Math.max(...ys) + 8;
+    const letters = cells[symCol].split(/\s+/).filter((x) => /^[A-Z+][A-Z0-9+#\-]{0,5}$/.test(x) && !/^\d+$/.test(x)).slice(0, 2);
+    return { cells, section: r.section, symbolBox: { x0: t.columns[symCol].x0, y0, x1: t.columns[symCol].x1, y1 }, letters };
+  });
 }
 
 /**
@@ -300,7 +311,10 @@ export function suggestColumns(cols: AreaColumn[], remembered: { type?: string; 
     if (i < 0) i = cols.findIndex((c, k) => !not.includes(k) && re.test(c.header));
     return i >= 0 ? i : null;
   };
-  const type = remembered.type === '' ? null : find(remembered.type, /^(fixture\s+)?(type|mark|tag|label|id|designation|item)\b/i);
+  // (a legend's SYMBOL column is where each row's symbol is drawn, never its Type column, even when picked before: its
+  // letters, G or MM, are part of the symbol, and rows without letters would run into the one above)
+  const typeAt = remembered.type === '' ? null : find(remembered.type, /^(fixture\s+)?(type|mark|tag|label|id|designation|item)\b/i);
+  const type = typeAt !== null && /\bSYMBOL/i.test(cols[typeAt].header) ? null : typeAt;
   const description = find(remembered.description, /descr/i, type === null ? [] : [type]);
   const skip = new Set((remembered.skip ?? []).map((s) => s.toUpperCase()));
   const extra = cols.map((_, i) => i).filter((i) => i !== type && i !== description && !skip.has(cols[i].header.toUpperCase()));
@@ -310,7 +324,9 @@ export function suggestColumns(cols: AreaColumn[], remembered: { type?: string; 
 /** The item a row becomes: its code, its description, and a details line with every other column read, under its header. */
 export function rowToItem(row: AreaRow, choice: ColumnChoice, cols: AreaColumn[]): { code: string; name: string; spec: string | null; section: string | null } | null {
   const cell = (i: number | null) => (i === null ? '' : (row.cells[i] ?? '').trim());
-  const code = (choice.type !== null ? cell(choice.type) : legendCode(row, choice, cols)).toUpperCase();
+  // (a SYMBOL column picked as the type gives the code the legend way: its letters, else made from the description)
+  const symType = choice.type !== null && /\bSYMBOL/i.test(cols[choice.type]?.header ?? '');
+  const code = (choice.type !== null && !symType ? cell(choice.type) : legendCode(row, symType ? { ...choice, type: null } : choice, cols)).toUpperCase();
   if (!code) return null;
   const name = cell(choice.description) || code;
   const spec = choice.extra.map((i) => (cell(i) ? `${headerLabel(cols[i].header)}: ${cell(i)}` : '')).filter(Boolean).join(' · ');
