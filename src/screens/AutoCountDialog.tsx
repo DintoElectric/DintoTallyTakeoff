@@ -50,6 +50,9 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
   useEffect(() => { void api<{ categories: CategoryRow[] }>(`/categories?project=${projectId}`).then((r) => setCats(r.categories)).catch(() => undefined); }, [projectId]);
   const sysOfItem = (it: ItemTypeRow) => systemOf(it, cats);
   const symbolItem = (key: string) => (key.startsWith('SYM:') ? items.find((i) => i.id === key.slice(4)) : undefined);   // a symbol row's item
+  // Only what is in the library when the count starts is counted: a row is countable when its code (or its symbol) is an
+  // item there. Auto-count never adds items; what it finds that is not in the library is listed, and not counted.
+  const inLib = (r: { code: string; kind: string }) => r.kind === 'symbol' ? !!symbolItem(r.code) : byCode.has(r.code.toUpperCase()) || (r.kind === 'switch' && r.code.length > 1 && byCode.has(r.code.slice(1).toUpperCase()));
   const [phase, setPhase] = useState<'scan' | 'pick' | 'write'>('scan');
   const [progress, setProgress] = useState({ done: 0, total: sheets.length, label: '' });
   const [scans, setScans] = useState<SheetScan[]>([]);
@@ -180,7 +183,7 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
         const lib = found.filter((r) => r.kind !== 'room' && r.kind !== 'note' && r.kind !== 'camera' && r.kind !== 'outlet' && r.kind !== 'switch' && r.kind !== 'symbol' && byCode.has(r.code.toUpperCase()));
         setLibraryDriven(lib.length > 0);
         const notes = found.filter((r) => r.kind === 'note' || r.kind === 'camera' || r.kind === 'outlet' || r.kind === 'switch' || r.kind === 'symbol'); // drawing notes, cameras, triangle outlets, switches and the library's symbols are always counted
-        const first = new Set(only ? found.filter((r) => r.code.toUpperCase() === only || (!!onlyItem && r.code === `SYM:${onlyItem.id}`)).map((r) => r.code) : [...(lib.length > 0 || found.some((r) => r.kind === 'symbol') ? lib : found.filter((r) => r.kind === 'tag')), ...notes]   /* (the library's own symbols found: the library is in use, and unknown tags stay unticked) */.map((r) => r.code));
+        const first = new Set(only ? found.filter((r) => r.code.toUpperCase() === only || (!!onlyItem && r.code === `SYM:${onlyItem.id}`)).map((r) => r.code) : [...lib, ...notes.filter((r) => inLib(r))]   /* (only the library's own items: nothing else is counted) */.map((r) => r.code));
         defaults.current = first;
         setInc(new Set(sys === 'all' || only ? first : [...first].filter((c) => { const r = found.find((x) => x.code === c); return !r || inSys(r); })));
         if (only) { setResetAuto(false); setResetManual(false); }   // one item: never a fresh start of the whole sheet
@@ -227,6 +230,7 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
       const ambiguous = new Set<string>();
       for (const r of rows.filter((x) => inc.has(x.code))) {
         if (only && onlyItem && r.code.toUpperCase() === only) { resolved.set(r.code, onlyItem); continue; }   // counted as this item, whatever else shares its code
+        if (!inLib(r)) continue;   // (not in the library: not counted)
         if (r.kind === 'symbol') { const it = only && onlyItem && r.code === `SYM:${onlyItem.id}` ? onlyItem : symbolItem(r.code); if (it) resolved.set(r.code, it); continue; }   // the item whose symbol it is
         if (sys !== 'all' && r.kind !== 'switch') {
           // counting one system: a shared code (a fixture P and a receptacle P) counts as that system's item
@@ -242,12 +246,7 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
           if (!controlCats) controlCats = (await api<{ categories: CategoryRow[] }>(`/categories?project=${projectId}`)).categories;
           const isControl = (it: ItemTypeRow) => { const c = controlCats!.find((k) => k.id === it.category_id); return !!c && /CONTROL|SWITCH/i.test(c.name); };
           const hit = byCode.get(r.code.toUpperCase())?.[0] ?? (letters ? items.find((it) => it.code.toUpperCase() === letters && isControl(it)) : undefined);
-          if (hit) { resolved.set(r.code, hit); continue; }
-          let cat = controlCats.find((c) => /^lighting controls?$/i.test(c.name.trim()));
-          if (!cat) { setStatus('Adding the Lighting controls category…'); cat = (await api<{ category: CategoryRow }>('/categories', { body: { project_id: projectId, name: 'Lighting controls' } })).category; controlCats.push(cat); }
-          setStatus(`Adding ${r.code} to the library…`);
-          const { item } = await api<{ item: ItemTypeRow }>('/items', { body: { project_id: projectId, code: r.code, name: (names[r.code] ?? '').trim() || (letters ? `Switch, ${letters}` : 'Switch'), category_id: cat.id, marker_shape: 'square', unit: 'EA', count_group: 'device' } });
-          resolved.set(r.code, item);
+          if (hit) resolved.set(r.code, hit);   // (no switch item in the library: not counted)
           continue;
         }
         const lib = described(byCode.get(r.code.toUpperCase()));
@@ -261,26 +260,7 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
           if (lib.length > 1 && !copies) ambiguous.add(r.code);
           continue;
         }
-        setStatus(`Adding ${r.code} to the library…`);
-        const isNote = r.kind === 'note';
-        const isCamera = r.kind === 'camera' || r.kind === 'outlet'; // found from a symbol and its label: named, with their own category
-        const catName = r.kind === 'outlet' ? 'Outlets' : 'Cameras';
-        if (isCamera && !devCats.has(catName)) {
-          const { categories } = await api<{ categories: CategoryRow[] }>(`/categories?project=${projectId}`);
-          devCats.set(catName, categories.find((c) => c.name.toLowerCase() === catName.toLowerCase())?.id ?? (await api<{ category: CategoryRow }>('/categories', { body: { project_id: projectId, name: catName } })).category.id);
-        }
-        if (isNote && noteCat === undefined) {
-          const { categories } = await api<{ categories: CategoryRow[] }>(`/categories?project=${projectId}`);
-          noteCat = categories.find((c) => c.name.toLowerCase() === 'drawing notes')?.id ?? (await api<{ category: CategoryRow }>('/categories', { body: { project_id: projectId, name: 'Drawing notes' } })).category.id;
-        }
-        const { item } = await api<{ item: ItemTypeRow }>('/items', {
-          body: {
-            project_id: projectId, code: r.code, name: (names[r.code] ?? '').trim() || (isCamera ? r.name ?? r.code : isNote ? `Drawing note ${r.code}` : r.code),
-            count_group: isCamera || isNote ? null : kindFrom(r.code),
-            category_id: isCamera ? devCats.get(catName) ?? null : isNote ? noteCat : null, marker_shape: isCamera ? r.shape ?? 'circle' : isNote ? 'diamond' : r.kind === 'short' ? 'square' : 'circle', marker_glyph: isNote ? null : isCamera ? r.glyph ?? r.code.slice(0, 2) : r.code.slice(0, 2),
-          },
-        });
-        resolved.set(r.code, item);
+        // (not in the library: not counted)
       }
       // Emergency versions: B13 -> B13E (the schedule's own convention). Use the library item if it exists, else create it.
       const emKeys = new Set<string>();
@@ -291,27 +271,15 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
         if (!base) continue;
         const emCode = emergencyCode(r.code, activeMarkers);
         // (two copies of the emergency item, one made here and one imported: the copy that has counts takes them)
-        let emItem = mainOf(emCode);
-        if (!emItem) {
-          setStatus(`Adding ${emCode} (emergency ${r.code}) to the library…`);
-          try {
-            emItem = (await api<{ item: ItemTypeRow }>('/items', {
-              body: { project_id: projectId, code: emCode, name: `${base.name}, emergency`.slice(0, 200), spec: base.spec, category_id: base.category_id, unit: base.unit, count_group: base.count_group ?? null, length_ft: base.length_ft ?? null, /* an emergency strip is as long as its normal twin, so its footage is counted too */ marker_shape: base.marker_shape, marker_glyph: base.marker_glyph },
-            })).item;
-            emCreated++;
-          } catch (e) {
-            if (!(e instanceof ApiError && e.status === 409)) throw e;
-            emItem = (await api<{ items: ItemTypeRow[] }>(`/items?project=${projectId}`)).items.find((i) => i.code.toUpperCase() === emCode.toUpperCase());
-            if (!emItem) throw e;
-          }
-        }
+        const emItem = mainOf(emCode);
+        if (!emItem) continue;   // (no emergency item in the library: these count as the fixture itself)
         resolved.set(r.code + EMERGENCY_KEY, emItem);
         emKeys.add(r.code + EMERGENCY_KEY);
       }
       // Where each count goes: its emergency item when it is marked so, then the item for its measured length.
       const route = (h: SheetScan['hits'][number]) => {
         let out = h;
-        if ((h.kind === 'tag' || h.kind === 'short') && inc.has(h.code) && splits(h.code)) out = isEmergency(h, activeMarkers) ? { ...h, code: h.code + EMERGENCY_KEY, conf: CONF_EMERGENCY } : { ...h, conf: CONF_NORMAL_SPLIT };
+        if ((h.kind === 'tag' || h.kind === 'short') && inc.has(h.code) && splits(h.code)) out = isEmergency(h, activeMarkers) && emKeys.has(h.code + EMERGENCY_KEY) ? { ...h, code: h.code + EMERGENCY_KEY, conf: CONF_EMERGENCY } : { ...h, conf: CONF_NORMAL_SPLIT };
         if ((h.kind === 'tag' || h.kind === 'short') && inc.has(h.code) && lengthSplit(h.code)) {
           // measured: the item for that length (flagged when not certain); not measured: the type itself, flagged to set by hand
           out = h.lengthFt ? { ...out, code: out.code + LENGTH_KEY + h.lengthFt, conf: h.lengthSure ? out.conf : CONF_LENGTH_CHECK } : { ...out, conf: CONF_LENGTH_CHECK };
@@ -330,19 +298,7 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
         if (!base) continue;
         const code = `${base.code} ${ft}'`.slice(0, 40);
         let item = mainOf(code);   // (of copies, the one with counts)
-        if (!item) {
-          setStatus(`Adding ${code} to the library…`);
-          try {
-            item = (await api<{ item: ItemTypeRow }>('/items', {
-              body: { project_id: projectId, code, name: `${base.name}, ${ft} ft`.slice(0, 200), spec: base.spec, category_id: base.category_id, unit: base.unit, length_ft: Number(ft), count_group: base.count_group ?? null, marker_shape: base.marker_shape, marker_glyph: base.marker_glyph },
-            })).item;
-            lenCreated++;
-          } catch (e) {
-            if (!(e instanceof ApiError && e.status === 409)) throw e;
-            item = (await api<{ items: ItemTypeRow[] }>(`/items?project=${projectId}`)).items.find((x) => x.code.toUpperCase() === code.toUpperCase());
-            if (!item) throw e;
-          }
-        }
+        if (!item) item = base;   // (no item for this length in the library: the fixture's own item)
         resolved.set(k, item);
         lenKeys.add(k);
       }
@@ -479,7 +435,7 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
                   : mergeNote}
               </div>
             )}
-            {onlyItem && rows.length === 0 ? <>No <b>{onlyItem.code}</b> tags were found on these sheets. If {onlyItem.code} is drawn as a symbol with no tag, use Find similar (F) on one of them instead. </> : onlyItem ? <>Only <b>{onlyItem.code}</b> is counted ({onlyItem.name}); its earlier automatic counts are replaced, every other item's are left as they are. </> : <>Found {plural(rows.length, 'tag type')}.</>}{libraryDriven ? ' The tags in your item library are ticked.' : ' New tags are added to your item library; you can rename them there.'} Counts stay unreviewed until you confirm them.
+            {onlyItem && rows.length === 0 ? <>No <b>{onlyItem.code}</b> tags were found on these sheets. If {onlyItem.code} is drawn as a symbol with no tag, use Find similar (F) on one of them instead. </> : onlyItem ? <>Only <b>{onlyItem.code}</b> is counted ({onlyItem.name}); its earlier automatic counts are replaced, every other item's are left as they are. </> : <>Found {plural(rows.length, 'tag type')}.</>}{items.length === 0 ? ' Your library has no items yet, so nothing will be counted: add your items first (Read schedule, or the Library).' : ` Only items in your library are counted${rows.some((r) => !inLib(r)) ? `; ${plural(rows.filter((r) => !inLib(r)).length, 'tag type')} found ${rows.filter((r) => !inLib(r)).length === 1 ? 'is' : 'are'} not in it and will not be counted` : ''}.`} Counts stay unreviewed until you confirm them.
           </div>
 
           {/* the tags to count come first and take the room */}
@@ -492,9 +448,9 @@ export default function AutoCountDialog({ projectId, sheets, items: itemsProp, o
                   const lib = symIt ? [symIt] : byCode.get(r.code.toUpperCase());
                   return (
                     <tr key={r.code}>
-                      <td><Check checked={inc.has(r.code)} disabled={phase === 'write'} onChange={(v) => setInc((cur) => { const n = new Set(cur); if (v) n.add(r.code); else n.delete(r.code); return n; })}><span className="sr-only">Count {r.code}</span></Check></td>
+                      <td><Check checked={inc.has(r.code) && inLib(r)} disabled={phase === 'write' || !inLib(r)} onChange={(v) => setInc((cur) => { const n = new Set(cur); if (v) n.add(r.code); else n.delete(r.code); return n; })}><span className="sr-only">Count {r.code}</span></Check></td>
                       <td style={{ fontWeight: 500 }}>{symIt ? <span className="row" style={{ gap: 6 }}>{symIt.symbol && <SymbolMark s={symIt.symbol} />}{symIt.code}</span> : r.code}{r.kind === 'short' && <span className="tag tag-outline" style={{ marginLeft: 8 }} title="Short letter-only codes can match ordinary text. They are flagged for review.">Short code</span>}{r.kind === 'note' && <span className="tag tag-accent" style={{ marginLeft: 8 }} title="A number or letters inside a hexagon on the plan.">Drawing note</span>}{r.kind === 'outlet' && <span className="tag tag-accent" style={{ marginLeft: 8 }} title="A triangle with its label beside it. A circle around it is the ceiling version; a hollow triangle is a different device.">Outlet</span>}{r.kind === 'camera' && <span className="tag tag-accent" style={{ marginLeft: 8 }} title="Found from the label printed beside the camera (its type over its ID). Its mounting is read from the word beside it (PM) and the mounting lines off its ring.">Camera</span>}{r.kind === 'room' && <span className="tag tag-neutral" style={{ marginLeft: 8 }} title="A room name sits just above it and it appears once. Tick it only if it is really a device.">Looks like a room number</span>}</td>
-                      <td>{lib ? <span className="muted">{lib[0].name.length > 50 ? `${lib[0].name.slice(0, 50)}…` : lib[0].name}{lib.length > 1 ? ` (+${lib.length - 1} variant${lib.length === 2 ? '' : 's'}: flagged for review)` : ''}</span> : <input className="input" style={{ minHeight: 30, padding: '3px 8px', width: '100%', minWidth: 230 }} placeholder={r.kind === 'note' ? `Drawing note ${r.code}` : 'Description (optional)'} aria-label={`Description for ${r.code}`} value={names[r.code] ?? (r.kind === 'camera' || r.kind === 'outlet' ? r.name ?? '' : '')} disabled={phase === 'write'} onChange={(e) => setNames({ ...names, [r.code]: e.target.value })} />}</td>
+                      <td>{lib ? <span className="muted">{lib[0].name.length > 50 ? `${lib[0].name.slice(0, 50)}…` : lib[0].name}{lib.length > 1 ? ` (+${lib.length - 1} variant${lib.length === 2 ? '' : 's'}: flagged for review)` : ''}</span> : <span className="dim">Not in the library: not counted</span>}</td>
                       <td>{(r.kind === 'tag' || r.kind === 'short') && (emByCode.get(r.code) ?? 0) > 0 && !/^XL/i.test(r.code) && (byCode.get(r.code.toUpperCase())?.length ?? 0) <= 1 ? (
                         <Check checked={!splitOff.has(r.code)} disabled={phase === 'write'} onChange={(v) => setSplitOff((cur) => { const n = new Set(cur); if (v) n.delete(r.code); else n.add(r.code); return n; })}>{emByCode.get(r.code)} as {emergencyCode(r.code, activeMarkers)}</Check>
                       ) : <span className="dim">{r.kind === 'tag' && /^XL/i.test(r.code) ? 'exit sign' : ''}</span>}</td>
